@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v7.34.0
-// source: notification/notification.proto
+// source: proto/notification/notification.proto
 
 package notificationpb
 
@@ -27,9 +27,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type NotificationServiceClient interface {
-	// Send an email directly via gRPC (used by api-gateway if needed)
 	SendEmail(ctx context.Context, in *SendEmailRequest, opts ...grpc.CallOption) (*SendEmailResponse, error)
-	// Get delivery status of a notification
 	GetDeliveryStatus(ctx context.Context, in *GetDeliveryStatusRequest, opts ...grpc.CallOption) (*GetDeliveryStatusResponse, error)
 }
 
@@ -65,9 +63,7 @@ func (c *notificationServiceClient) GetDeliveryStatus(ctx context.Context, in *G
 // All implementations must embed UnimplementedNotificationServiceServer
 // for forward compatibility.
 type NotificationServiceServer interface {
-	// Send an email directly via gRPC (used by api-gateway if needed)
 	SendEmail(context.Context, *SendEmailRequest) (*SendEmailResponse, error)
-	// Get delivery status of a notification
 	GetDeliveryStatus(context.Context, *GetDeliveryStatusRequest) (*GetDeliveryStatusResponse, error)
 	mustEmbedUnimplementedNotificationServiceServer()
 }
@@ -159,5 +155,5 @@ var NotificationService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "notification/notification.proto",
+	Metadata: "proto/notification/notification.proto",
 }

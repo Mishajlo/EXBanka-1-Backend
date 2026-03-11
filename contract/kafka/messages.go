@@ -28,16 +28,3 @@ type EmailSentMessage struct {
 	Success   bool      `json:"success"`
 	Error     string    `json:"error,omitempty"`
 }
-
-type SendPushMessage struct {
-	UserID    int64             `json:"user_id"`
-	Title     string            `json:"title"`
-	Body      string            `json:"body"`
-	Data      map[string]string `json:"data,omitempty"`
-}
-
-type PushSentMessage struct {
-	UserID  int64  `json:"user_id"`
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
-}
