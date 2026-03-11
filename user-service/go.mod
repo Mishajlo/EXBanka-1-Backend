@@ -1,3 +1,3 @@
 module github.com/exbanka/user-service
 
-go 1.23
+go 1.24.0
