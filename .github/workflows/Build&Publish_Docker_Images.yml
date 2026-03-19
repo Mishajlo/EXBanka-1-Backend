@@ -6,7 +6,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/raf-si-2025-exteam1
+  IMAGE_PREFIX: ghcr.io/raf-si-2025
 
 jobs:
   build-and-push:
