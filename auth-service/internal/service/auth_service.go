@@ -347,15 +347,16 @@ func (s *AuthService) Logout(ctx context.Context, refreshTokenStr string) error 
 	return s.tokenRepo.RevokeRefreshToken(refreshTokenStr)
 }
 
-func (s *AuthService) CreateActivationToken(ctx context.Context, userID int64, email, firstName string) error {
+func (s *AuthService) CreateActivationToken(ctx context.Context, userID int64, email, firstName, systemType string) error {
 	token, err := generateToken()
 	if err != nil {
 		return err
 	}
 	if err := s.tokenRepo.CreateActivationToken(&model.ActivationToken{
-		UserID:    userID,
-		Token:     token,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		UserID:     userID,
+		Token:      token,
+		ExpiresAt:  time.Now().Add(24 * time.Hour),
+		SystemType: systemType,
 	}); err != nil {
 		return err
 	}
