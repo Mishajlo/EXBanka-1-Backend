@@ -18,7 +18,6 @@ func generateJTI() string {
 type Claims struct {
 	UserID      int64    `json:"user_id"`
 	Email       string   `json:"email"`
-	Role        string   `json:"role"`
 	Roles       []string `json:"roles"`
 	Permissions []string `json:"permissions"`
 	SystemType  string   `json:"system_type"` // "employee" or "client"
@@ -38,15 +37,9 @@ func NewJWTService(secret string, accessExpiry time.Duration) *JWTService {
 }
 
 func (s *JWTService) GenerateAccessToken(userID int64, email string, roles []string, permissions []string, systemType string) (string, error) {
-	// Keep backward-compat: set Role to first role if available
-	role := ""
-	if len(roles) > 0 {
-		role = roles[0]
-	}
 	claims := &Claims{
 		UserID:      userID,
 		Email:       email,
-		Role:        role,
 		Roles:       roles,
 		Permissions: permissions,
 		SystemType:  systemType,

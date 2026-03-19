@@ -18,7 +18,6 @@ func TestGenerateAndValidateAccessToken(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), claims.UserID)
 	assert.Equal(t, "user@test.com", claims.Email)
-	assert.Equal(t, "EmployeeBasic", claims.Role)
 	assert.Equal(t, []string{"EmployeeBasic"}, claims.Roles)
 	assert.Equal(t, []string{"clients.read"}, claims.Permissions)
 	assert.Equal(t, "employee", claims.SystemType)
@@ -60,6 +59,6 @@ func TestGenerateAccessToken_ClientRole(t *testing.T) {
 	claims, err := svc.ValidateToken(token)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(42), claims.UserID)
-	assert.Equal(t, "client", claims.Role)
+	assert.Equal(t, []string{"client"}, claims.Roles)
 	assert.Equal(t, "client", claims.SystemType)
 }
