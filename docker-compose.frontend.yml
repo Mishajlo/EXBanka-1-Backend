@@ -129,7 +129,7 @@ services:
       retries: 5
 
   kafka:
-    image: confluentinc/cp-kafka:7.6.0
+    image: apache/kafka:3.7.0
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
@@ -144,7 +144,7 @@ services:
       - "9092:9092"
       - "9094:9094"
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list || exit 1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 5
@@ -165,7 +165,7 @@ services:
   # ── Backend Services (pre-built images) ─────────────────────────
 
   user-service:
-    image: ghcr.io/raf-si-2025-exteam1/user-service:${TAG:-latest}
+    image: ghcr.io/raf-si-2025/user-service:${TAG:-latest}
     environment:
       USER_DB_HOST: user-db
       USER_DB_PORT: "5432"
@@ -187,7 +187,7 @@ services:
         condition: service_healthy
 
   auth-service:
-    image: ghcr.io/raf-si-2025-exteam1/auth-service:${TAG:-latest}
+    image: ghcr.io/raf-si-2025/auth-service:${TAG:-latest}
     environment:
       AUTH_DB_HOST: auth-db
       AUTH_DB_PORT: "5432"
@@ -219,7 +219,7 @@ services:
         condition: service_healthy
 
   client-service:
-    image: ghcr.io/raf-si-2025-exteam1/client-service:${TAG:-latest}
+    image: ghcr.io/raf-si-2025/client-service:${TAG:-latest}
     environment:
       CLIENT_DB_HOST: client-db
       CLIENT_DB_PORT: "5432"
@@ -229,6 +229,7 @@ services:
       CLIENT_GRPC_ADDR: ":50054"
       KAFKA_BROKERS: kafka:9092
       REDIS_ADDR: redis:6379
+      USER_GRPC_ADDR: "user-service:50052"
     ports:
       - "50054:50054"
     depends_on:
@@ -238,9 +239,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      user-service:
+        condition: service_started
 
   account-service:
-    image: ghcr.io/raf-si-2025-exteam1/account-service:${TAG:-latest}
+    image: ghcr.io/raf-si-2025/account-service:${TAG:-latest}
     environment:
       ACCOUNT_DB_HOST: account-db
       ACCOUNT_DB_PORT: "5432"
@@ -261,7 +264,7 @@ services:
         condition: service_healthy
 
   card-service:
-    image: ghcr.io/raf-si-2025-exteam1/card-service:${TAG:-latest}
+    image: ghcr.io/raf-si-2025/card-service:${TAG:-latest}
     environment:
       CARD_DB_HOST: card-db
       CARD_DB_PORT: "5432"
@@ -285,7 +288,7 @@ services:
         condition: service_started
 
   transaction-service:
-    image: ghcr.io/raf-si-2025-exteam1/transaction-service:${TAG:-latest}
+    image: ghcr.io/raf-si-2025/transaction-service:${TAG:-latest}
     environment:
       TRANSACTION_DB_HOST: transaction-db
       TRANSACTION_DB_PORT: "5432"
@@ -309,7 +312,7 @@ services:
         condition: service_started
 
   credit-service:
-    image: ghcr.io/raf-si-2025-exteam1/credit-service:${TAG:-latest}
+    image: ghcr.io/raf-si-2025/credit-service:${TAG:-latest}
     environment:
       CREDIT_DB_HOST: credit-db
       CREDIT_DB_PORT: "5432"
@@ -336,7 +339,7 @@ services:
         condition: service_started
 
   notification-service:
-    image: ghcr.io/raf-si-2025-exteam1/notification-service:${TAG:-latest}
+    image: ghcr.io/raf-si-2025/notification-service:${TAG:-latest}
     environment:
       NOTIFICATION_GRPC_ADDR: ":50053"
       KAFKA_BROKERS: kafka:9092
@@ -352,7 +355,7 @@ services:
         condition: service_healthy
 
   api-gateway:
-    image: ghcr.io/raf-si-2025-exteam1/api-gateway:${TAG:-latest}
+    image: ghcr.io/raf-si-2025/api-gateway:${TAG:-latest}
     environment:
       GATEWAY_HTTP_ADDR: ":8080"
       AUTH_GRPC_ADDR: "auth-service:50051"
