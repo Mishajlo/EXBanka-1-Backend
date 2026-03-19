@@ -347,15 +347,16 @@ func (s *AuthService) Logout(ctx context.Context, refreshTokenStr string) error 
 	return s.tokenRepo.RevokeRefreshToken(refreshTokenStr)
 }
 
-func (s *AuthService) CreateActivationToken(ctx context.Context, userID int64, email, firstName string) error {
+func (s *AuthService) CreateActivationToken(ctx context.Context, userID int64, email, firstName, systemType string) error {
 	token, err := generateToken()
 	if err != nil {
 		return err
 	}
 	if err := s.tokenRepo.CreateActivationToken(&model.ActivationToken{
-		UserID:    userID,
-		Token:     token,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		UserID:     userID,
+		Token:      token,
+		ExpiresAt:  time.Now().Add(24 * time.Hour),
+		SystemType: systemType,
 	}); err != nil {
 		return err
 	}
@@ -372,9 +373,21 @@ func (s *AuthService) CreateActivationToken(ctx context.Context, userID int64, e
 }
 
 func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) error {
+	var userID int64
+	systemType := "employee"
+
+	// Try employee lookup first
 	user, err := s.userClient.GetUserByEmail(ctx, &userpb.GetUserByEmailRequest{Email: email})
 	if err != nil {
-		return nil // Don't reveal if email exists
+		// Try client lookup
+		client, clientErr := s.clientClient.GetClientByEmail(ctx, &clientpb.GetClientByEmailRequest{Email: email})
+		if clientErr != nil {
+			return nil // Don't reveal if email exists
+		}
+		userID = int64(client.Id)
+		systemType = "client"
+	} else {
+		userID = user.Id
 	}
 
 	token, err := generateToken()
@@ -382,9 +395,10 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) er
 		return err
 	}
 	if err := s.tokenRepo.CreatePasswordResetToken(&model.PasswordResetToken{
-		UserID:    user.Id,
-		Token:     token,
-		ExpiresAt: time.Now().Add(1 * time.Hour),
+		UserID:     userID,
+		Token:      token,
+		ExpiresAt:  time.Now().Add(1 * time.Hour),
+		SystemType: systemType,
 	}); err != nil {
 		return err
 	}
@@ -419,10 +433,18 @@ func (s *AuthService) ResetPassword(ctx context.Context, tokenStr, newPassword, 
 		return err
 	}
 
-	_, err = s.userClient.SetPassword(ctx, &userpb.SetPasswordRequest{
-		UserId:       prt.UserID,
-		PasswordHash: string(hash),
-	})
+	switch prt.SystemType {
+	case "client":
+		_, err = s.clientClient.SetPassword(ctx, &clientpb.SetClientPasswordRequest{
+			UserId:       uint64(prt.UserID),
+			PasswordHash: string(hash),
+		})
+	default:
+		_, err = s.userClient.SetPassword(ctx, &userpb.SetPasswordRequest{
+			UserId:       prt.UserID,
+			PasswordHash: string(hash),
+		})
+	}
 	if err != nil {
 		return fmt.Errorf("failed to set password: %w", err)
 	}
@@ -430,7 +452,7 @@ func (s *AuthService) ResetPassword(ctx context.Context, tokenStr, newPassword, 
 	if err := s.tokenRepo.MarkPasswordResetUsed(tokenStr); err != nil {
 		log.Printf("warn: failed to mark password reset token used (token may be replayable): %v", err)
 	}
-	if err := s.tokenRepo.RevokeAllForUser(prt.UserID); err != nil {
+	if err := s.tokenRepo.RevokeAllForUser(prt.UserID, prt.SystemType); err != nil {
 		log.Printf("warn: failed to revoke all sessions after password reset: %v", err)
 	}
 
@@ -458,10 +480,18 @@ func (s *AuthService) ActivateAccount(ctx context.Context, tokenStr, password, c
 		return err
 	}
 
-	_, err = s.userClient.SetPassword(ctx, &userpb.SetPasswordRequest{
-		UserId:       at.UserID,
-		PasswordHash: string(hash),
-	})
+	switch at.SystemType {
+	case "client":
+		_, err = s.clientClient.SetPassword(ctx, &clientpb.SetClientPasswordRequest{
+			UserId:       uint64(at.UserID),
+			PasswordHash: string(hash),
+		})
+	default:
+		_, err = s.userClient.SetPassword(ctx, &userpb.SetPasswordRequest{
+			UserId:       at.UserID,
+			PasswordHash: string(hash),
+		})
+	}
 	if err != nil {
 		return fmt.Errorf("failed to set password: %w", err)
 	}
@@ -470,12 +500,27 @@ func (s *AuthService) ActivateAccount(ctx context.Context, tokenStr, password, c
 		log.Printf("warn: failed to mark activation token used (token may be replayable): %v", err)
 	}
 
-	user, _ := s.userClient.GetEmployee(ctx, &userpb.GetEmployeeRequest{Id: at.UserID})
-	if user != nil {
+	// Send confirmation email
+	var email, firstName string
+	switch at.SystemType {
+	case "client":
+		resp, _ := s.clientClient.GetClient(ctx, &clientpb.GetClientRequest{Id: uint64(at.UserID)})
+		if resp != nil {
+			email = resp.Email
+			firstName = resp.FirstName
+		}
+	default:
+		user, _ := s.userClient.GetEmployee(ctx, &userpb.GetEmployeeRequest{Id: at.UserID})
+		if user != nil {
+			email = user.Email
+			firstName = user.FirstName
+		}
+	}
+	if email != "" {
 		_ = s.producer.SendEmail(ctx, kafkamsg.SendEmailMessage{
-			To:        user.Email,
+			To:        email,
 			EmailType: kafkamsg.EmailTypeConfirmation,
-			Data:      map[string]string{"first_name": user.FirstName},
+			Data:      map[string]string{"first_name": firstName},
 		})
 	}
 

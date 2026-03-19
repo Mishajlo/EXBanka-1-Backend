@@ -104,7 +104,7 @@ func (h *AuthGRPCHandler) Logout(ctx context.Context, req *pb.LogoutRequest) (*p
 }
 
 func (h *AuthGRPCHandler) CreateActivationToken(ctx context.Context, req *pb.CreateActivationTokenRequest) (*pb.CreateActivationTokenResponse, error) {
-	if err := h.authService.CreateActivationToken(ctx, req.UserId, req.Email, req.FirstName); err != nil {
+	if err := h.authService.CreateActivationToken(ctx, req.UserId, req.Email, req.FirstName, "employee"); err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
 	return &pb.CreateActivationTokenResponse{Success: true}, nil

@@ -53,6 +53,18 @@ func main() {
 	producer := kafkaprod.NewProducer(cfg.KafkaBrokers)
 	defer producer.Close()
 
+	// Pre-create Kafka topics before any publishing to avoid
+	// partition assignment race condition for downstream consumers.
+	kafkaprod.EnsureTopics(cfg.KafkaBrokers,
+		"transaction.payment-created",
+		"transaction.payment-completed",
+		"transaction.payment-failed",
+		"transaction.transfer-created",
+		"transaction.transfer-completed",
+		"transaction.transfer-failed",
+		"notification.send-email",
+	)
+
 	var redisCache *cache.RedisCache
 	redisCache, err = cache.NewRedisCache(cfg.RedisAddr)
 	if err != nil {
@@ -111,19 +123,15 @@ func main() {
 		log.Println("Seeded default payment fee (0.1%)")
 	}
 
-	// Fetch bank RSD account number (non-fatal if unavailable)
+	// Reuse existing account connection for BankAccountServiceClient
 	bankRSDAccountNumber := ""
-	bankAccountConn, bankErr := grpc.NewClient(cfg.AccountGRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if bankErr == nil {
-		bankClient := accountpb.NewBankAccountServiceClient(bankAccountConn)
-		defer bankAccountConn.Close()
-		bankResp, bankRSDErr := bankClient.GetBankRSDAccount(context.Background(), &accountpb.GetBankRSDAccountRequest{})
-		if bankRSDErr == nil && bankResp != nil {
-			bankRSDAccountNumber = bankResp.GetAccountNumber()
-			log.Printf("Bank RSD account: %s", bankRSDAccountNumber)
-		} else {
-			log.Printf("warn: could not fetch bank RSD account, fees will not be credited to bank: %v", bankRSDErr)
-		}
+	bankClient := accountpb.NewBankAccountServiceClient(accountConn)
+	bankResp, bankRSDErr := bankClient.GetBankRSDAccount(context.Background(), &accountpb.GetBankRSDAccountRequest{})
+	if bankRSDErr == nil && bankResp != nil {
+		bankRSDAccountNumber = bankResp.GetAccountNumber()
+		log.Printf("Bank RSD account: %s", bankRSDAccountNumber)
+	} else {
+		log.Printf("warn: could not fetch bank RSD account, fees will not be credited to bank: %v", bankRSDErr)
 	}
 
 	paymentSvc := service.NewPaymentService(paymentRepo, accountClient, feeSvc, producer, bankRSDAccountNumber)
