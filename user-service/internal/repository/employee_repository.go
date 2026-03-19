@@ -19,14 +19,18 @@ func (r *EmployeeRepository) Create(emp *model.Employee) error {
 
 func (r *EmployeeRepository) GetByID(id int64) (*model.Employee, error) {
 	var emp model.Employee
-	err := r.db.First(&emp, id).Error
-	return &emp, err
+	if err := r.db.First(&emp, id).Error; err != nil {
+		return nil, err
+	}
+	return &emp, nil
 }
 
 func (r *EmployeeRepository) GetByEmail(email string) (*model.Employee, error) {
 	var emp model.Employee
-	err := r.db.Where("email = ?", email).First(&emp).Error
-	return &emp, err
+	if err := r.db.Where("email = ?", email).First(&emp).Error; err != nil {
+		return nil, err
+	}
+	return &emp, nil
 }
 
 func (r *EmployeeRepository) Update(emp *model.Employee) error {
@@ -40,8 +44,10 @@ func (r *EmployeeRepository) SetPassword(userID int64, passwordHash string) erro
 
 func (r *EmployeeRepository) GetByJMBG(jmbg string) (*model.Employee, error) {
 	var emp model.Employee
-	err := r.db.Where("jmbg = ?", jmbg).First(&emp).Error
-	return &emp, err
+	if err := r.db.Where("jmbg = ?", jmbg).First(&emp).Error; err != nil {
+		return nil, err
+	}
+	return &emp, nil
 }
 
 func (r *EmployeeRepository) List(emailFilter, nameFilter, positionFilter string, page, pageSize int) ([]model.Employee, int64, error) {
