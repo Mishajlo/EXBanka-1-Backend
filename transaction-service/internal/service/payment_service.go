@@ -4,30 +4,61 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 
 	accountpb "github.com/exbanka/contract/accountpb"
+	kafkamsg "github.com/exbanka/contract/kafka"
 	shared "github.com/exbanka/contract/shared"
+	"github.com/exbanka/transaction-service/internal/kafka"
 	"github.com/exbanka/transaction-service/internal/model"
-	"github.com/exbanka/transaction-service/internal/repository"
 )
 
+// PaymentRepo abstracts the PaymentRepository for testing.
+type PaymentRepo interface {
+	Create(payment *model.Payment) error
+	GetByID(id uint64) (*model.Payment, error)
+	GetByIdempotencyKey(key string) (*model.Payment, error)
+	UpdateStatus(id uint64, status string) error
+	UpdateStatusWithReason(id uint64, status, reason string) error
+	ListByAccount(accountNumber, dateFrom, dateTo, statusFilter string, amountMin, amountMax float64, page, pageSize int) ([]model.Payment, int64, error)
+}
+
 type PaymentService struct {
-	paymentRepo    *repository.PaymentRepository
+	paymentRepo    PaymentRepo
 	accountClient  accountpb.AccountServiceClient
 	feeSvc         *FeeService
+	producer       *kafka.Producer
 	bankRSDAccount string // account number of bank's RSD account
 }
 
-func NewPaymentService(paymentRepo *repository.PaymentRepository, accountClient accountpb.AccountServiceClient, feeSvc *FeeService, bankRSDAccount string) *PaymentService {
+func NewPaymentService(paymentRepo PaymentRepo, accountClient accountpb.AccountServiceClient, feeSvc *FeeService, producer *kafka.Producer, bankRSDAccount string) *PaymentService {
 	return &PaymentService{
 		paymentRepo:    paymentRepo,
 		accountClient:  accountClient,
 		feeSvc:         feeSvc,
+		producer:       producer,
 		bankRSDAccount: bankRSDAccount,
+	}
+}
+
+// publishPaymentFailed publishes a payment-failed Kafka event (best-effort; errors are only logged).
+func (s *PaymentService) publishPaymentFailed(ctx context.Context, payment *model.Payment, reason string) {
+	if s.producer == nil {
+		return
+	}
+	msg := kafkamsg.PaymentFailedMessage{
+		PaymentID:         payment.ID,
+		FromAccountNumber: payment.FromAccountNumber,
+		ToAccountNumber:   payment.ToAccountNumber,
+		Amount:            payment.FinalAmount.StringFixed(4),
+		FailureReason:     reason,
+	}
+	if err := s.producer.PublishPaymentFailed(ctx, msg); err != nil {
+		log.Printf("PaymentService: failed to publish payment-failed event for payment %d: %v", payment.ID, err)
 	}
 }
 
@@ -97,6 +128,7 @@ func (s *PaymentService) CreatePayment(ctx context.Context, payment *model.Payme
 				_ = s.paymentRepo.UpdateStatusWithReason(payment.ID, "failed", reason)
 				payment.Status = "failed"
 				payment.FailureReason = reason
+				s.publishPaymentFailed(ctx, payment, reason)
 				return errors.New(reason)
 			}
 			if !monthlyLimit.IsZero() && monthlySpending.Add(totalDebit).GreaterThan(monthlyLimit) {
@@ -104,6 +136,7 @@ func (s *PaymentService) CreatePayment(ctx context.Context, payment *model.Payme
 				_ = s.paymentRepo.UpdateStatusWithReason(payment.ID, "failed", reason)
 				payment.Status = "failed"
 				payment.FailureReason = reason
+				s.publishPaymentFailed(ctx, payment, reason)
 				return errors.New(reason)
 			}
 		}
@@ -124,6 +157,7 @@ func (s *PaymentService) CreatePayment(ctx context.Context, payment *model.Payme
 			_ = s.paymentRepo.UpdateStatusWithReason(payment.ID, "failed", reason)
 			payment.Status = "failed"
 			payment.FailureReason = reason
+			s.publishPaymentFailed(ctx, payment, reason)
 			return fmt.Errorf("failed to debit sender account: %w", err)
 		}
 	}
@@ -153,6 +187,7 @@ func (s *PaymentService) CreatePayment(ctx context.Context, payment *model.Payme
 			_ = s.paymentRepo.UpdateStatusWithReason(payment.ID, "failed", reason)
 			payment.Status = "failed"
 			payment.FailureReason = reason
+			s.publishPaymentFailed(ctx, payment, reason)
 			return fmt.Errorf("failed to credit recipient account: %w", err)
 		}
 	}

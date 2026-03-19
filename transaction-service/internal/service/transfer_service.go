@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 
 	accountpb "github.com/exbanka/contract/accountpb"
+	kafkamsg "github.com/exbanka/contract/kafka"
 	shared "github.com/exbanka/contract/shared"
+	"github.com/exbanka/transaction-service/internal/kafka"
 	"github.com/exbanka/transaction-service/internal/model"
 	"github.com/exbanka/transaction-service/internal/repository"
 )
@@ -20,16 +23,35 @@ type TransferService struct {
 	exchangeSvc    *ExchangeService
 	accountClient  accountpb.AccountServiceClient
 	feeSvc         *FeeService
+	producer       *kafka.Producer
 	bankRSDAccount string // account number of bank's RSD account
 }
 
-func NewTransferService(transferRepo *repository.TransferRepository, exchangeSvc *ExchangeService, accountClient accountpb.AccountServiceClient, feeSvc *FeeService, bankRSDAccount string) *TransferService {
+func NewTransferService(transferRepo *repository.TransferRepository, exchangeSvc *ExchangeService, accountClient accountpb.AccountServiceClient, feeSvc *FeeService, producer *kafka.Producer, bankRSDAccount string) *TransferService {
 	return &TransferService{
 		transferRepo:   transferRepo,
 		exchangeSvc:    exchangeSvc,
 		accountClient:  accountClient,
 		feeSvc:         feeSvc,
+		producer:       producer,
 		bankRSDAccount: bankRSDAccount,
+	}
+}
+
+// publishTransferFailed publishes a transfer-failed Kafka event (best-effort; errors are only logged).
+func (s *TransferService) publishTransferFailed(ctx context.Context, transfer *model.Transfer, reason string) {
+	if s.producer == nil {
+		return
+	}
+	msg := kafkamsg.TransferFailedMessage{
+		TransferID:        transfer.ID,
+		FromAccountNumber: transfer.FromAccountNumber,
+		ToAccountNumber:   transfer.ToAccountNumber,
+		Amount:            transfer.InitialAmount.StringFixed(4),
+		FailureReason:     reason,
+	}
+	if err := s.producer.PublishTransferFailed(ctx, msg); err != nil {
+		log.Printf("TransferService: failed to publish transfer-failed event for transfer %d: %v", transfer.ID, err)
 	}
 }
 
@@ -106,6 +128,7 @@ func (s *TransferService) CreateTransfer(ctx context.Context, transfer *model.Tr
 			_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
 			transfer.Status = "failed"
 			transfer.FailureReason = reason
+			s.publishTransferFailed(ctx, transfer, reason)
 			return fmt.Errorf("failed to debit sender account: %w", err)
 		}
 	}
@@ -135,6 +158,7 @@ func (s *TransferService) CreateTransfer(ctx context.Context, transfer *model.Tr
 			_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
 			transfer.Status = "failed"
 			transfer.FailureReason = reason
+			s.publishTransferFailed(ctx, transfer, reason)
 			return fmt.Errorf("failed to credit recipient account: %w", err)
 		}
 	}

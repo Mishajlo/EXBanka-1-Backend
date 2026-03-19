@@ -47,8 +47,10 @@ const (
 	TopicCardStatusChanged    = "card.status-changed"
 	TopicPaymentCreated       = "transaction.payment-created"
 	TopicPaymentCompleted     = "transaction.payment-completed"
+	TopicPaymentFailed        = "transaction.payment-failed"
 	TopicTransferCreated      = "transaction.transfer-created"
 	TopicTransferCompleted    = "transaction.transfer-completed"
+	TopicTransferFailed       = "transaction.transfer-failed"
 	TopicLoanRequested        = "credit.loan-requested"
 	TopicLoanApproved         = "credit.loan-approved"
 	TopicLoanRejected         = "credit.loan-rejected"
@@ -113,6 +115,24 @@ type TransferCompletedMessage struct {
 	InitialAmount     string `json:"initial_amount"`
 	FinalAmount       string `json:"final_amount"`
 	ExchangeRate      string `json:"exchange_rate"`
+}
+
+// PaymentFailedMessage is published when a payment fails at any stage.
+type PaymentFailedMessage struct {
+	PaymentID         uint64 `json:"payment_id"`
+	FromAccountNumber string `json:"from_account_number"`
+	ToAccountNumber   string `json:"to_account_number"`
+	Amount            string `json:"amount"`
+	FailureReason     string `json:"failure_reason"`
+}
+
+// TransferFailedMessage is published when a transfer fails at any stage.
+type TransferFailedMessage struct {
+	TransferID        uint64 `json:"transfer_id"`
+	FromAccountNumber string `json:"from_account_number"`
+	ToAccountNumber   string `json:"to_account_number"`
+	Amount            string `json:"amount"`
+	FailureReason     string `json:"failure_reason"`
 }
 
 type LoanStatusMessage struct {
