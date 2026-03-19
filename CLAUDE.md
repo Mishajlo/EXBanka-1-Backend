@@ -203,6 +203,16 @@ The Notification Service has no DB; it has `internal/consumer/` for Kafka consum
 - Event topic naming convention: `<service>.<action>` (e.g., `user.employee-created`, `auth.token-activated`, `notification.email-sent`).
 - Define event payload structs in `contract/` so other services can consume them.
 
+## Docker Compose Requirement
+
+**When adding or modifying a service, `docker-compose.yml` must be updated to match.** This is a hard requirement — not optional.
+
+- If a service's `config.go` adds a new environment variable (e.g., a gRPC address to another service, a DB setting, or any external dependency), add that variable to the service's `environment:` block in `docker-compose.yml`.
+- gRPC addresses must use Docker service names, not `localhost` (e.g., `client-service:50054`, not `localhost:50054`).
+- If a service depends on another service at runtime (DB, Kafka, Redis, or another gRPC service), add a `depends_on:` entry for it.
+- When adding a new service, add its DB, its service definition, the volume, and wire it into the `api-gateway` environment and `depends_on`.
+- `docker-compose.yml` must be committed alongside service changes.
+
 ## Implementation Plans
 
 Before starting any feature or bug fix, read the existing implementation plans in `docs/superpowers/plans/`. These plans contain context, decisions, and scope that must inform your work. Plans are Markdown files named by date and feature (e.g., `2026-03-12-feature-name.md`).

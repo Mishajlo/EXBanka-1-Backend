@@ -13,8 +13,8 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	pb "github.com/exbanka/contract/userpb"
 	shared "github.com/exbanka/contract/shared"
+	pb "github.com/exbanka/contract/userpb"
 	"github.com/exbanka/user-service/internal/cache"
 	"github.com/exbanka/user-service/internal/config"
 	"github.com/exbanka/user-service/internal/handler"

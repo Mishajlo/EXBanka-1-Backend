@@ -89,12 +89,14 @@ services:
       AUTH_DB_NAME: auth_db
       AUTH_GRPC_ADDR: ":50051"
       USER_GRPC_ADDR: "user-service:50052"
+      CLIENT_GRPC_ADDR: "client-service:50054"
       KAFKA_BROKERS: kafka:9092
       JWT_SECRET: docker-test-secret-change-me
       JWT_ACCESS_EXPIRY: 15m
       JWT_REFRESH_EXPIRY: 168h
       REDIS_ADDR: redis:6379
       AUTH_DB_SSLMODE: disable
+      FRONTEND_BASE_URL: "http://localhost:5173"
     ports:
       - "50051:50051"
     depends_on:
@@ -103,6 +105,8 @@ services:
       kafka:
         condition: service_healthy
       user-service:
+        condition: service_started
+      client-service:
         condition: service_started
       redis:
         condition: service_healthy
@@ -115,12 +119,27 @@ services:
       GATEWAY_HTTP_ADDR: ":8080"
       AUTH_GRPC_ADDR: "auth-service:50051"
       USER_GRPC_ADDR: "user-service:50052"
+      CLIENT_GRPC_ADDR: "client-service:50054"
+      ACCOUNT_GRPC_ADDR: "account-service:50055"
+      CARD_GRPC_ADDR: "card-service:50056"
+      TRANSACTION_GRPC_ADDR: "transaction-service:50057"
+      CREDIT_GRPC_ADDR: "credit-service:50058"
     ports:
       - "8080:8080"
     depends_on:
       auth-service:
         condition: service_started
       user-service:
+        condition: service_started
+      client-service:
+        condition: service_started
+      account-service:
+        condition: service_started
+      card-service:
+        condition: service_started
+      transaction-service:
+        condition: service_started
+      credit-service:
         condition: service_started
 
   redis:
@@ -144,9 +163,9 @@ services:
       KAFKA_BROKERS: kafka:9092
       SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
       SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USER: ${SMTP_USER}
-      SMTP_PASSWORD: ${SMTP_PASSWORD}
-      SMTP_FROM: ${SMTP_FROM}
+      SMTP_USER: ${SMTP_USER:-thebiggestdouchebagaround@gmail.com}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-eebu yksy isfx nanl}
+      SMTP_FROM: ${SMTP_FROM:-thebiggestdouchebagaround@gmail.com}
     ports:
       - "50053:50053"
     depends_on:
@@ -316,6 +335,7 @@ services:
       TRANSACTION_DB_PASSWORD: postgres
       TRANSACTION_DB_NAME: transactiondb
       TRANSACTION_GRPC_ADDR: ":50057"
+      ACCOUNT_GRPC_ADDR: "account-service:50055"
       KAFKA_BROKERS: kafka:9092
       REDIS_ADDR: redis:6379
     ports:
@@ -327,6 +347,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      account-service:
+        condition: service_started
 
   credit-service:
     build:
