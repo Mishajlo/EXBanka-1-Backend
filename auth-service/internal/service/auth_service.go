@@ -373,9 +373,21 @@ func (s *AuthService) CreateActivationToken(ctx context.Context, userID int64, e
 }
 
 func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) error {
+	var userID int64
+	systemType := "employee"
+
+	// Try employee lookup first
 	user, err := s.userClient.GetUserByEmail(ctx, &userpb.GetUserByEmailRequest{Email: email})
 	if err != nil {
-		return nil // Don't reveal if email exists
+		// Try client lookup
+		client, clientErr := s.clientClient.GetClientByEmail(ctx, &clientpb.GetClientByEmailRequest{Email: email})
+		if clientErr != nil {
+			return nil // Don't reveal if email exists
+		}
+		userID = int64(client.Id)
+		systemType = "client"
+	} else {
+		userID = user.Id
 	}
 
 	token, err := generateToken()
@@ -383,9 +395,10 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) er
 		return err
 	}
 	if err := s.tokenRepo.CreatePasswordResetToken(&model.PasswordResetToken{
-		UserID:    user.Id,
-		Token:     token,
-		ExpiresAt: time.Now().Add(1 * time.Hour),
+		UserID:     userID,
+		Token:      token,
+		ExpiresAt:  time.Now().Add(1 * time.Hour),
+		SystemType: systemType,
 	}); err != nil {
 		return err
 	}
