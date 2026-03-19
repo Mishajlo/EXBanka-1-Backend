@@ -84,7 +84,14 @@ func main() {
 	}
 	defer clientLimitConn.Close()
 
-	r := router.Setup(authClient, userClient, clientClient, accountClient, cardClient, txClient, creditClient, empLimitClient, clientLimitClient)
+	// Virtual card service reuses the card-service connection
+	virtualCardClient, virtualCardConn, err := grpcclients.NewVirtualCardClient(cfg.CardGRPCAddr)
+	if err != nil {
+		log.Fatalf("failed to connect to virtual card service: %v", err)
+	}
+	defer virtualCardConn.Close()
+
+	r := router.Setup(authClient, userClient, clientClient, accountClient, cardClient, txClient, creditClient, empLimitClient, clientLimitClient, virtualCardClient)
 
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,

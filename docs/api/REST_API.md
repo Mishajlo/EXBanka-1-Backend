@@ -1059,6 +1059,186 @@ Create an authorized person who can also hold a card linked to an existing accou
 
 ---
 
+### POST /api/cards/virtual
+
+Create a virtual card for a client account. Virtual cards can be single-use or multi-use and expire after 1-3 months.
+
+**Authentication:** Client JWT
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `account_number` | string | Yes | Account to link the virtual card to |
+| `owner_id` | uint64 | Yes | Client ID of the card owner |
+| `card_brand` | string | Yes | `"visa"`, `"mastercard"`, `"dinacard"`, or `"amex"` |
+| `usage_type` | string | Yes | `"single_use"` or `"multi_use"` |
+| `max_uses` | int32 | No | Max uses (required for `multi_use`, must be >= 2; ignored for `single_use`) |
+| `expiry_months` | int32 | Yes | Expiry duration in months: 1, 2, or 3 |
+| `card_limit` | string | Yes | Card spending limit as decimal string (e.g. `"100000.0000"`) |
+
+**Example Request:**
+```json
+{
+  "account_number": "265-0000000001-00",
+  "owner_id": 1,
+  "card_brand": "visa",
+  "usage_type": "multi_use",
+  "max_uses": 5,
+  "expiry_months": 1,
+  "card_limit": "5000.0000"
+}
+```
+
+**Response 201:**
+```json
+{
+  "id": 10,
+  "card_number": "**** **** **** 9876",
+  "card_number_full": "4111111111119876",
+  "card_type": "debit",
+  "card_brand": "visa",
+  "account_number": "265-0000000001-00",
+  "cvv": "456",
+  "card_limit": "5000.0000",
+  "status": "active",
+  "owner_type": "client",
+  "owner_id": 1,
+  "expires_at": "2026-04-19T00:00:00Z",
+  "created_at": "2026-03-19T10:00:00Z"
+}
+```
+
+| Status | Description |
+|---|---|
+| 201 | Virtual card created |
+| 400 | Invalid input (bad usage_type, expiry_months, max_uses, or card_limit) |
+| 401 | Unauthorized |
+
+---
+
+### POST /api/cards/:id/pin
+
+Set the 4-digit PIN for a card.
+
+**Authentication:** Client JWT
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | int | Card ID |
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `pin` | string | Yes | Exactly 4 numeric digits |
+
+**Example Request:**
+```json
+{
+  "pin": "1234"
+}
+```
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "message": "PIN set successfully"
+}
+```
+
+| Status | Description |
+|---|---|
+| 200 | PIN set |
+| 400 | Invalid PIN format (must be exactly 4 digits) |
+| 401 | Unauthorized |
+| 500 | Internal error |
+
+---
+
+### POST /api/cards/:id/verify-pin
+
+Verify the 4-digit PIN for a card. The card is permanently blocked after 3 consecutive failed attempts.
+
+**Authentication:** Client JWT
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | int | Card ID |
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `pin` | string | Yes | 4-digit PIN to verify |
+
+**Example Request:**
+```json
+{
+  "pin": "1234"
+}
+```
+
+**Response 200:**
+```json
+{
+  "valid": true,
+  "message": "PIN verified"
+}
+```
+
+| Status | Description |
+|---|---|
+| 200 | Verification result (check `valid` field) |
+| 400 | Invalid input |
+| 401 | Unauthorized |
+| 500 | Internal error |
+
+---
+
+### POST /api/cards/:id/temporary-block
+
+Temporarily block a card for a specified duration in hours. The card is automatically unblocked by a background job when the duration expires.
+
+**Authentication:** Client JWT
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | int | Card ID |
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `duration_hours` | int32 | Yes | Block duration in hours (1–720) |
+| `reason` | string | No | Reason for blocking (e.g. "Lost card") |
+
+**Example Request:**
+```json
+{
+  "duration_hours": 24,
+  "reason": "Suspicious activity"
+}
+```
+
+**Response 200:** Updated card object with `"status": "blocked"`
+
+| Status | Description |
+|---|---|
+| 200 | Card temporarily blocked |
+| 400 | Invalid input or card not found |
+| 401 | Unauthorized |
+| 404 | Card not found |
+
+---
+
 ## 6. Payments
 
 Payments are domestic/foreign transfers from one account to another with optional payment metadata.

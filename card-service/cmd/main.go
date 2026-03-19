@@ -30,7 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Card{}, &model.AuthorizedPerson{}); err != nil {
+	if err := db.AutoMigrate(&model.Card{}, &model.AuthorizedPerson{}, &model.CardBlock{}); err != nil {
 		log.Fatalf("failed to migrate: %v", err)
 	}
 
@@ -47,9 +47,13 @@ func main() {
 	}
 
 	cardRepo := repository.NewCardRepository(db)
+	blockRepo := repository.NewCardBlockRepository(db)
 	authRepo := repository.NewAuthorizedPersonRepository(db)
-	cardService := service.NewCardService(cardRepo, authRepo, redisCache)
+	cardService := service.NewCardService(cardRepo, blockRepo, authRepo, producer, redisCache)
 	grpcHandler := handler.NewCardGRPCHandler(cardService, producer)
+	virtualCardHandler := handler.NewVirtualCardGRPCHandler(cardService)
+
+	service.StartCardCron(cardRepo, blockRepo)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -58,6 +62,7 @@ func main() {
 
 	s := grpc.NewServer()
 	pb.RegisterCardServiceServer(s, grpcHandler)
+	pb.RegisterVirtualCardServiceServer(s, virtualCardHandler)
 	shared.RegisterHealthCheck(s, "card-service")
 
 	// Start gRPC server in goroutine

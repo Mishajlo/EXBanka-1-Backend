@@ -37,6 +37,8 @@ const (
 
 // New topic constants
 const (
+	TopicCardTemporaryBlocked = "card.temporary-blocked"
+	TopicVirtualCardCreated   = "card.virtual-card-created"
 	TopicClientCreated        = "client.created"
 	TopicClientUpdated        = "client.updated"
 	TopicAccountCreated       = "account.created"
@@ -166,4 +168,17 @@ type ClientLimitsUpdatedMessage struct {
 	ClientID      int64  `json:"client_id"`
 	SetByEmployee int64  `json:"set_by_employee"`
 	Action        string `json:"action"` // "set"
+}
+
+type CardTemporaryBlockedMessage struct {
+	CardID    uint64 `json:"card_id"`
+	ExpiresAt string `json:"expires_at"`
+	Reason    string `json:"reason"`
+}
+
+type VirtualCardCreatedMessage struct {
+	CardID        uint64 `json:"card_id"`
+	AccountNumber string `json:"account_number"`
+	UsageType     string `json:"usage_type"`
+	MaxUses       int    `json:"max_uses"`
 }

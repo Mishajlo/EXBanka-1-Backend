@@ -27,6 +27,7 @@ func Setup(
 	creditClient creditpb.CreditServiceClient,
 	empLimitClient userpb.EmployeeLimitServiceClient,
 	clientLimitClient clientpb.ClientLimitServiceClient,
+	virtualCardClient cardpb.VirtualCardServiceClient,
 ) *gin.Engine {
 	r := gin.Default()
 	r.Use(cors.New(cors.Config{
@@ -43,7 +44,7 @@ func Setup(
 	limitHandler := handler.NewLimitHandler(empLimitClient, clientLimitClient)
 	clientHandler := handler.NewClientHandler(clientClient)
 	accountHandler := handler.NewAccountHandler(accountClient)
-	cardHandler := handler.NewCardHandler(cardClient)
+	cardHandler := handler.NewCardHandler(cardClient, virtualCardClient)
 	txHandler := handler.NewTransactionHandler(txClient)
 	exchangeHandler := handler.NewExchangeHandler(txClient)
 	creditHandler := handler.NewCreditHandler(creditClient)
@@ -197,6 +198,12 @@ func Setup(
 
 			// Loans (client write)
 			clientProtected.POST("/loans/requests", creditHandler.CreateLoanRequest)
+
+			// Virtual cards (client)
+			clientProtected.POST("/cards/virtual", cardHandler.CreateVirtualCard)
+			clientProtected.POST("/cards/:id/pin", cardHandler.SetCardPin)
+			clientProtected.POST("/cards/:id/verify-pin", cardHandler.VerifyCardPin)
+			clientProtected.POST("/cards/:id/temporary-block", cardHandler.TemporaryBlockCard)
 		}
 
 		// Routes accessible by both employee and client tokens

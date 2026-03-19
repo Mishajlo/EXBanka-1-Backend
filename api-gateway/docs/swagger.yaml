@@ -300,6 +300,37 @@ definitions:
     - transaction_id
     - transaction_type
     type: object
+  handler.createVirtualCardBody:
+    properties:
+      account_number:
+        example: 265-0000000001-00
+        type: string
+      card_brand:
+        example: visa
+        type: string
+      card_limit:
+        example: "100000.0000"
+        type: string
+      expiry_months:
+        example: 1
+        type: integer
+      max_uses:
+        example: 1
+        type: integer
+      owner_id:
+        example: 1
+        type: integer
+      usage_type:
+        example: single_use
+        type: string
+    required:
+    - account_number
+    - card_brand
+    - card_limit
+    - expiry_months
+    - owner_id
+    - usage_type
+    type: object
   handler.loginRequest:
     properties:
       email:
@@ -343,6 +374,14 @@ definitions:
     - confirm_password
     - new_password
     - token
+    type: object
+  handler.setCardPinBody:
+    properties:
+      pin:
+        example: "1234"
+        type: string
+    required:
+    - pin
     type: object
   handler.setClientLimitsBody:
     properties:
@@ -405,6 +444,17 @@ definitions:
     required:
     - password_hash
     - user_id
+    type: object
+  handler.temporaryBlockCardBody:
+    properties:
+      duration_hours:
+        example: 24
+        type: integer
+      reason:
+        example: Lost card
+        type: string
+    required:
+    - duration_hours
     type: object
   handler.updateAccountLimitsRequest:
     properties:
@@ -495,6 +545,14 @@ definitions:
     - client_id
     - code
     - transaction_id
+    type: object
+  handler.verifyCardPinBody:
+    properties:
+      pin:
+        example: "1234"
+        type: string
+    required:
+    - pin
     type: object
 host: localhost:8080
 info:
@@ -1128,6 +1186,109 @@ paths:
       summary: Deactivate a card
       tags:
       - cards
+  /api/cards/{id}/pin:
+    post:
+      consumes:
+      - application/json
+      description: Sets the 4-digit PIN for a card
+      parameters:
+      - description: Card ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: PIN
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handler.setCardPinBody'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: PIN set
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid input
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ClientBearerAuth: []
+      summary: Set card PIN
+      tags:
+      - cards
+  /api/cards/{id}/temporary-block:
+    post:
+      consumes:
+      - application/json
+      description: Blocks a card temporarily for a specified duration in hours (1-720).
+        Card is automatically unblocked when the duration expires.
+      parameters:
+      - description: Card ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Block duration and reason
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handler.temporaryBlockCardBody'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: blocked card
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid input
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: card not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ClientBearerAuth: []
+      summary: Temporarily block card
+      tags:
+      - cards
   /api/cards/{id}/unblock:
     put:
       parameters:
@@ -1151,6 +1312,55 @@ paths:
               type: string
             type: object
       summary: Unblock a card
+      tags:
+      - cards
+  /api/cards/{id}/verify-pin:
+    post:
+      consumes:
+      - application/json
+      description: Verifies the 4-digit PIN for a card. Card is blocked after 3 failed
+        attempts.
+      parameters:
+      - description: Card ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: PIN
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handler.verifyCardPinBody'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: verification result
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid input
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ClientBearerAuth: []
+      summary: Verify card PIN
       tags:
       - cards
   /api/cards/account/{account_number}:
@@ -1241,6 +1451,50 @@ paths:
               type: string
             type: object
       summary: List cards by client
+      tags:
+      - cards
+  /api/cards/virtual:
+    post:
+      consumes:
+      - application/json
+      description: Creates a virtual card for a client (single_use or multi_use, 1-3
+        month expiry)
+      parameters:
+      - description: Virtual card details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handler.createVirtualCardBody'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: created virtual card
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid input
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ClientBearerAuth: []
+      summary: Create virtual card
       tags:
       - cards
   /api/clients:

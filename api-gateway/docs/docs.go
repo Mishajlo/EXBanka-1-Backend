@@ -985,6 +985,73 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/cards/virtual": {
+            "post": {
+                "security": [
+                    {
+                        "ClientBearerAuth": []
+                    }
+                ],
+                "description": "Creates a virtual card for a client (single_use or multi_use, 1-3 month expiry)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cards"
+                ],
+                "summary": "Create virtual card",
+                "parameters": [
+                    {
+                        "description": "Virtual card details",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.createVirtualCardBody"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "created virtual card",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid input",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/cards/{id}": {
             "get": {
                 "produces": [
@@ -1099,6 +1166,163 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/cards/{id}/pin": {
+            "post": {
+                "security": [
+                    {
+                        "ClientBearerAuth": []
+                    }
+                ],
+                "description": "Sets the 4-digit PIN for a card",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cards"
+                ],
+                "summary": "Set card PIN",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Card ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "PIN",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.setCardPinBody"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "PIN set",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid input",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/cards/{id}/temporary-block": {
+            "post": {
+                "security": [
+                    {
+                        "ClientBearerAuth": []
+                    }
+                ],
+                "description": "Blocks a card temporarily for a specified duration in hours (1-720). Card is automatically unblocked when the duration expires.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cards"
+                ],
+                "summary": "Temporarily block card",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Card ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Block duration and reason",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.temporaryBlockCardBody"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "blocked card",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid input",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "card not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/cards/{id}/unblock": {
             "put": {
                 "produces": [
@@ -1127,6 +1351,80 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/cards/{id}/verify-pin": {
+            "post": {
+                "security": [
+                    {
+                        "ClientBearerAuth": []
+                    }
+                ],
+                "description": "Verifies the 4-digit PIN for a card. Card is blocked after 3 failed attempts.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cards"
+                ],
+                "summary": "Verify card PIN",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Card ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "PIN",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.verifyCardPinBody"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "verification result",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid input",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -4304,6 +4602,47 @@ const docTemplate = `{
                 }
             }
         },
+        "handler.createVirtualCardBody": {
+            "type": "object",
+            "required": [
+                "account_number",
+                "card_brand",
+                "card_limit",
+                "expiry_months",
+                "owner_id",
+                "usage_type"
+            ],
+            "properties": {
+                "account_number": {
+                    "type": "string",
+                    "example": "265-0000000001-00"
+                },
+                "card_brand": {
+                    "type": "string",
+                    "example": "visa"
+                },
+                "card_limit": {
+                    "type": "string",
+                    "example": "100000.0000"
+                },
+                "expiry_months": {
+                    "type": "integer",
+                    "example": 1
+                },
+                "max_uses": {
+                    "type": "integer",
+                    "example": 1
+                },
+                "owner_id": {
+                    "type": "integer",
+                    "example": 1
+                },
+                "usage_type": {
+                    "type": "string",
+                    "example": "single_use"
+                }
+            }
+        },
         "handler.loginRequest": {
             "type": "object",
             "required": [
@@ -4368,6 +4707,18 @@ const docTemplate = `{
                 },
                 "token": {
                     "type": "string"
+                }
+            }
+        },
+        "handler.setCardPinBody": {
+            "type": "object",
+            "required": [
+                "pin"
+            ],
+            "properties": {
+                "pin": {
+                    "type": "string",
+                    "example": "1234"
                 }
             }
         },
@@ -4458,6 +4809,22 @@ const docTemplate = `{
                 },
                 "user_id": {
                     "type": "integer"
+                }
+            }
+        },
+        "handler.temporaryBlockCardBody": {
+            "type": "object",
+            "required": [
+                "duration_hours"
+            ],
+            "properties": {
+                "duration_hours": {
+                    "type": "integer",
+                    "example": 24
+                },
+                "reason": {
+                    "type": "string",
+                    "example": "Lost card"
                 }
             }
         },
@@ -4596,6 +4963,18 @@ const docTemplate = `{
                 },
                 "transaction_id": {
                     "type": "integer"
+                }
+            }
+        },
+        "handler.verifyCardPinBody": {
+            "type": "object",
+            "required": [
+                "pin"
+            ],
+            "properties": {
+                "pin": {
+                    "type": "string",
+                    "example": "1234"
                 }
             }
         }
