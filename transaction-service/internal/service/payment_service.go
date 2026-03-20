@@ -62,15 +62,6 @@ func (s *PaymentService) publishPaymentFailed(ctx context.Context, payment *mode
 	}
 }
 
-// CalculatePaymentCommission returns 0.1% commission for amounts >= 1000, else 0.
-func CalculatePaymentCommission(amount decimal.Decimal) decimal.Decimal {
-	threshold := decimal.NewFromInt(1000)
-	if amount.GreaterThanOrEqual(threshold) {
-		return amount.Mul(decimal.NewFromFloat(0.001)) // 0.1%
-	}
-	return decimal.Zero
-}
-
 func (s *PaymentService) CreatePayment(ctx context.Context, payment *model.Payment) error {
 	// 1. Idempotency check: return existing payment if key already used
 	if payment.IdempotencyKey != "" {
