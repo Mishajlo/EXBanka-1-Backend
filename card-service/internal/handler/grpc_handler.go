@@ -169,6 +169,27 @@ func (h *CardGRPCHandler) UnblockCard(ctx context.Context, req *pb.UnblockCardRe
 		NewStatus:     card.Status,
 	})
 
+	// Send email notification to card owner
+	if h.clientClient != nil && h.producer != nil {
+		clientResp, clientErr := h.clientClient.GetClient(ctx, &clientpb.GetClientRequest{Id: card.OwnerID})
+		if clientErr == nil {
+			emailErr := h.producer.SendEmail(ctx, kafkamsg.SendEmailMessage{
+				To:        clientResp.Email,
+				EmailType: kafkamsg.EmailTypeCardStatusChanged,
+				Data: map[string]string{
+					"card_last_four": maskCardNumber(card.CardNumber),
+					"new_status":     card.Status,
+					"account_number": card.AccountNumber,
+				},
+			})
+			if emailErr != nil {
+				log.Printf("CardGRPCHandler: failed to send unblock card email for card %d: %v", card.ID, emailErr)
+			}
+		} else {
+			log.Printf("CardGRPCHandler: failed to fetch client for card %d: %v", card.ID, clientErr)
+		}
+	}
+
 	return toCardResponse(card), nil
 }
 
@@ -186,6 +207,27 @@ func (h *CardGRPCHandler) DeactivateCard(ctx context.Context, req *pb.Deactivate
 		AccountNumber: card.AccountNumber,
 		NewStatus:     card.Status,
 	})
+
+	// Send email notification to card owner
+	if h.clientClient != nil && h.producer != nil {
+		clientResp, clientErr := h.clientClient.GetClient(ctx, &clientpb.GetClientRequest{Id: card.OwnerID})
+		if clientErr == nil {
+			emailErr := h.producer.SendEmail(ctx, kafkamsg.SendEmailMessage{
+				To:        clientResp.Email,
+				EmailType: kafkamsg.EmailTypeCardStatusChanged,
+				Data: map[string]string{
+					"card_last_four": maskCardNumber(card.CardNumber),
+					"new_status":     card.Status,
+					"account_number": card.AccountNumber,
+				},
+			})
+			if emailErr != nil {
+				log.Printf("CardGRPCHandler: failed to send deactivate card email for card %d: %v", card.ID, emailErr)
+			}
+		} else {
+			log.Printf("CardGRPCHandler: failed to fetch client for card %d: %v", card.ID, clientErr)
+		}
+	}
 
 	return toCardResponse(card), nil
 }
