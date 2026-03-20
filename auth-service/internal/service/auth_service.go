@@ -135,7 +135,10 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (string
 			return "", "", fmt.Errorf("account locked after %d failed attempts, try again in 30 minutes", maxFailedAttempts)
 		}
 		remaining := int(maxFailedAttempts - (failedCount + 1))
-		return "", "", fmt.Errorf("invalid credentials (%d attempts remaining before lockout)", remaining)
+		if err != nil {
+			return "", "", fmt.Errorf("no account found with email %s (%d attempts remaining before lockout)", email, remaining)
+		}
+		return "", "", fmt.Errorf("incorrect password for %s (%d attempts remaining before lockout)", email, remaining)
 	}
 
 	_ = s.loginAttemptRepo.RecordAttempt(email, "", true)
@@ -198,7 +201,7 @@ func (s *AuthService) ClientLogin(ctx context.Context, email, password string) (
 			return "", "", fmt.Errorf("account locked after %d failed attempts, try again in 30 minutes", maxFailedAttempts)
 		}
 		remaining := int(maxFailedAttempts - (failedCount + 1))
-		return "", "", fmt.Errorf("invalid credentials (%d attempts remaining before lockout)", remaining)
+		return "", "", fmt.Errorf("no account found with email %s or incorrect password (%d attempts remaining before lockout)", email, remaining)
 	}
 
 	_ = s.loginAttemptRepo.RecordAttempt(email, "", true)
@@ -236,7 +239,7 @@ func (s *AuthService) ValidateToken(tokenString string) (*Claims, error) {
 			if cached.ID != "" {
 				blacklisted, _ := s.cache.Exists(context.Background(), "blacklist:"+cached.ID)
 				if blacklisted {
-					return nil, fmt.Errorf("token has been revoked")
+					return nil, fmt.Errorf("access token has been revoked; please log in again")
 				}
 			}
 			return &cached, nil
@@ -252,7 +255,7 @@ func (s *AuthService) ValidateToken(tokenString string) (*Claims, error) {
 	if claims.ID != "" && s.cache != nil {
 		blacklisted, _ := s.cache.Exists(context.Background(), "blacklist:"+claims.ID)
 		if blacklisted {
-			return nil, fmt.Errorf("token has been revoked")
+			return nil, fmt.Errorf("access token has been revoked; please log in again")
 		}
 	}
 
@@ -283,10 +286,10 @@ func hashToken(token string) string {
 func (s *AuthService) RefreshToken(ctx context.Context, refreshTokenStr string) (string, string, error) {
 	rt, err := s.tokenRepo.GetRefreshToken(refreshTokenStr)
 	if err != nil {
-		return "", "", errors.New("invalid refresh token")
+		return "", "", errors.New("refresh token has been revoked")
 	}
 	if time.Now().After(rt.ExpiresAt) {
-		return "", "", errors.New("refresh token expired")
+		return "", "", errors.New("refresh token expired; please log in again")
 	}
 
 	if err := s.tokenRepo.RevokeRefreshToken(refreshTokenStr); err != nil {
@@ -414,7 +417,7 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) er
 
 func (s *AuthService) ResetPassword(ctx context.Context, tokenStr, newPassword, confirmPassword string) error {
 	if newPassword != confirmPassword {
-		return errors.New("passwords do not match")
+		return errors.New("password and confirmation do not match")
 	}
 	if err := validatePassword(newPassword); err != nil {
 		return err
@@ -422,10 +425,10 @@ func (s *AuthService) ResetPassword(ctx context.Context, tokenStr, newPassword, 
 
 	prt, err := s.tokenRepo.GetPasswordResetToken(tokenStr)
 	if err != nil {
-		return errors.New("invalid or expired token")
+		return errors.New("invalid or expired password reset token; request a new password reset")
 	}
 	if time.Now().After(prt.ExpiresAt) {
-		return errors.New("token expired")
+		return errors.New("password reset token expired; request a new password reset")
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
