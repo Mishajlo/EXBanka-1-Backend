@@ -155,6 +155,12 @@ func (r *AccountRepository) ResetMonthlySpending() error {
 		Update("monthly_spending", 0).Error
 }
 
+func (r *AccountRepository) ListActiveAccountsWithMaintenanceFee() ([]model.Account, error) {
+	var accounts []model.Account
+	err := r.db.Where("status = ? AND maintenance_fee > 0 AND is_bank_account = ?", "active", false).Find(&accounts).Error
+	return accounts, err
+}
+
 func (r *AccountRepository) UpdateBalance(accountNumber string, amount decimal.Decimal, updateAvailable bool) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		updates := map[string]interface{}{
