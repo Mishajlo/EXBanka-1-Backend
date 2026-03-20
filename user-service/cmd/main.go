@@ -85,6 +85,9 @@ func main() {
 		log.Fatalf("failed to seed default limit templates: %v", err)
 	}
 
+	limitCron := service.NewLimitCronService(employeeLimitRepo)
+	limitCron.Start()
+
 	if err := seedAdminUser(repo, roleSvc); err != nil {
 		log.Printf("warn: seed admin user: %v", err)
 	}

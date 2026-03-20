@@ -44,6 +44,7 @@ type EmployeeLimitRepo interface {
 	Update(limit *model.EmployeeLimit) error
 	Delete(employeeID int64) error
 	Upsert(limit *model.EmployeeLimit) error
+	ResetDailyUsedLimits() error
 }
 
 type LimitTemplateRepo interface {
