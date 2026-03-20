@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"time"
 
@@ -100,10 +101,14 @@ func (s *VerificationService) ValidateVerificationCode(clientID, transactionID u
 
 // cancelTransaction sets the associated transaction's status to "rejected".
 func (s *VerificationService) cancelTransaction(transactionID uint64, txType string) {
+	var err error
 	switch txType {
 	case "payment":
-		_ = s.paymentRepo.UpdateStatus(transactionID, "rejected")
+		err = s.paymentRepo.UpdateStatus(transactionID, "rejected")
 	case "transfer":
-		_ = s.transferRepo.UpdateStatus(transactionID, "rejected")
+		err = s.transferRepo.UpdateStatus(transactionID, "rejected")
+	}
+	if err != nil {
+		log.Printf("warn: failed to cancel %s transaction %d after max verification attempts: %v", txType, transactionID, err)
 	}
 }
