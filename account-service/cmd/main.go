@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/shopspring/decimal"
 	"google.golang.org/grpc"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -95,6 +97,43 @@ func main() {
 			log.Printf("warn: failed to seed bank %s account: %v", c.Code, err)
 		} else {
 			log.Printf("Seeded bank %s account", c.Code)
+		}
+	}
+
+	// Seed State (Government) entity - one RSD account for tax collection (idempotent)
+	if _, err := companyService.GetByOwnerID(service.StateOwnerID); err != nil {
+		stateCompany := &model.Company{
+			CompanyName:        "Republika Srbija",
+			RegistrationNumber: "00000001",
+			TaxNumber:          "000000001",
+			ActivityCode:       "84.11",
+			Address:            "Beograd, Srbija",
+			OwnerID:            service.StateOwnerID,
+		}
+		if err := companyService.Create(stateCompany); err != nil {
+			log.Printf("warn: failed to seed state company: %v", err)
+		} else {
+			log.Println("Seeded state company: Republika Srbija")
+
+			stateAccount := &model.Account{
+				AccountName:    "Državni račun za poreze",
+				OwnerID:        service.StateOwnerID,
+				OwnerName:      "Republika Srbija",
+				CurrencyCode:   "RSD",
+				Status:         "active",
+				AccountKind:    "current",
+				AccountType:    "standard",
+				IsBankAccount:  false,
+				AccountNumber:  service.GenerateAccountNumber("current"),
+				ExpiresAt:      time.Now().AddDate(50, 0, 0),
+				MaintenanceFee: decimal.Zero,
+				CompanyID:      &stateCompany.ID,
+			}
+			if err := accountRepo.Create(stateAccount); err != nil {
+				log.Printf("warn: failed to seed state RSD account: %v", err)
+			} else {
+				log.Println("Seeded state RSD account")
+			}
 		}
 	}
 

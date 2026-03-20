@@ -14,6 +14,9 @@ import (
 // BankOwnerID is the well-known owner ID for bank-owned accounts.
 const BankOwnerID uint64 = 1_000_000_000
 
+// StateOwnerID is the well-known owner ID for the state (government) entity.
+const StateOwnerID uint64 = 2_000_000_000
+
 type AccountService struct {
 	repo *repository.AccountRepository
 }
@@ -73,7 +76,7 @@ func (s *AccountService) CreateAccount(account *model.Account) error {
 		}
 	}
 
-	account.AccountNumber = GenerateAccountNumber()
+	account.AccountNumber = GenerateAccountNumber(account.AccountKind)
 	account.ExpiresAt = time.Now().AddDate(5, 0, 0)
 	account.Status = "active"
 	account.MaintenanceFee = maintenanceFeeByType(account.AccountType)
@@ -207,7 +210,7 @@ func (s *AccountService) CreateBankAccount(currencyCode, accountKind, accountNam
 		AccountType:   "bank",
 		IsBankAccount: true,
 	}
-	account.AccountNumber = GenerateAccountNumber()
+	account.AccountNumber = GenerateAccountNumber(account.AccountKind)
 	account.ExpiresAt = time.Now().AddDate(50, 0, 0) // 50-year expiry for bank accounts
 	account.Status = "active"
 	account.MaintenanceFee = decimal.Zero
