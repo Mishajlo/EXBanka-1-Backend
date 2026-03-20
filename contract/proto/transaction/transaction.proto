@@ -4,10 +4,12 @@ option go_package = "github.com/exbanka/contract/transactionpb;transactionpb";
 
 service TransactionService {
   rpc CreatePayment(CreatePaymentRequest) returns (PaymentResponse);
+  rpc ExecutePayment(ExecutePaymentRequest) returns (PaymentResponse);
   rpc GetPayment(GetPaymentRequest) returns (PaymentResponse);
   rpc ListPaymentsByAccount(ListPaymentsByAccountRequest) returns (ListPaymentsResponse);
 
   rpc CreateTransfer(CreateTransferRequest) returns (TransferResponse);
+  rpc ExecuteTransfer(ExecuteTransferRequest) returns (TransferResponse);
   rpc GetTransfer(GetTransferRequest) returns (TransferResponse);
   rpc ListTransfersByClient(ListTransfersByClientRequest) returns (ListTransfersResponse);
 
@@ -167,4 +169,16 @@ message ValidateVerificationCodeRequest {
 message ValidateVerificationCodeResponse {
   bool valid = 1;
   int32 remaining_attempts = 2;
+}
+
+message ExecutePaymentRequest {
+  uint64 payment_id = 1;
+  uint64 client_id = 2;
+  string verification_code = 3;
+}
+
+message ExecuteTransferRequest {
+  uint64 transfer_id = 1;
+  uint64 client_id = 2;
+  string verification_code = 3;
 }

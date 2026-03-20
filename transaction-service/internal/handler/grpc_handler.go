@@ -100,7 +100,43 @@ func (h *TransactionGRPCHandler) CreatePayment(ctx context.Context, req *pb.Crea
 		return nil, status.Errorf(mapServiceError(err), "create payment: %v", err)
 	}
 
-	// Publish Kafka events only for successful payments
+	// Publish payment-created Kafka event
+	msg := kafkamsg.PaymentCompletedMessage{
+		PaymentID:         payment.ID,
+		FromAccountNumber: payment.FromAccountNumber,
+		ToAccountNumber:   payment.ToAccountNumber,
+		Amount:            payment.InitialAmount.StringFixed(4),
+		Status:            payment.Status,
+	}
+	if err := h.producer.PublishPaymentCreated(ctx, msg); err != nil {
+		log.Printf("warn: failed to publish payment-created event: %v", err)
+	}
+
+	return paymentToProto(payment), nil
+}
+
+func (h *TransactionGRPCHandler) ExecutePayment(ctx context.Context, req *pb.ExecutePaymentRequest) (*pb.PaymentResponse, error) {
+	// 1. Validate verification code
+	valid, _, err := h.verificationSvc.ValidateVerificationCode(req.GetClientId(), req.GetPaymentId(), "payment", req.GetVerificationCode())
+	if err != nil {
+		return nil, status.Errorf(mapServiceError(err), "verify: %v", err)
+	}
+	if !valid {
+		return nil, status.Errorf(codes.FailedPrecondition, "invalid verification code")
+	}
+
+	// 2. Execute the payment (balance changes)
+	if err := h.paymentSvc.ExecutePayment(ctx, req.GetPaymentId()); err != nil {
+		return nil, status.Errorf(mapServiceError(err), "execute payment: %v", err)
+	}
+
+	// 3. Get updated payment and return
+	payment, err := h.paymentSvc.GetPayment(req.GetPaymentId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch executed payment: %v", err)
+	}
+
+	// 4. Publish Kafka events for completed payment
 	if payment.Status == "completed" {
 		msg := kafkamsg.PaymentCompletedMessage{
 			PaymentID:         payment.ID,
@@ -108,9 +144,6 @@ func (h *TransactionGRPCHandler) CreatePayment(ctx context.Context, req *pb.Crea
 			ToAccountNumber:   payment.ToAccountNumber,
 			Amount:            payment.InitialAmount.StringFixed(4),
 			Status:            payment.Status,
-		}
-		if err := h.producer.PublishPaymentCreated(ctx, msg); err != nil {
-			log.Printf("warn: failed to publish payment-created event: %v", err)
 		}
 		if err := h.producer.PublishPaymentCompleted(ctx, msg); err != nil {
 			log.Printf("warn: failed to publish payment-completed event: %v", err)
@@ -171,7 +204,44 @@ func (h *TransactionGRPCHandler) CreateTransfer(ctx context.Context, req *pb.Cre
 		return nil, status.Errorf(mapServiceError(err), "create transfer: %v", err)
 	}
 
-	// Publish Kafka events only for successful transfers
+	// Publish transfer-created Kafka event
+	msg := kafkamsg.TransferCompletedMessage{
+		TransferID:        transfer.ID,
+		FromAccountNumber: transfer.FromAccountNumber,
+		ToAccountNumber:   transfer.ToAccountNumber,
+		InitialAmount:     transfer.InitialAmount.StringFixed(4),
+		FinalAmount:       transfer.FinalAmount.StringFixed(4),
+		ExchangeRate:      transfer.ExchangeRate.StringFixed(4),
+	}
+	if err := h.producer.PublishTransferCreated(ctx, msg); err != nil {
+		log.Printf("warn: failed to publish transfer-created event: %v", err)
+	}
+
+	return transferToProto(transfer), nil
+}
+
+func (h *TransactionGRPCHandler) ExecuteTransfer(ctx context.Context, req *pb.ExecuteTransferRequest) (*pb.TransferResponse, error) {
+	// 1. Validate verification code
+	valid, _, err := h.verificationSvc.ValidateVerificationCode(req.GetClientId(), req.GetTransferId(), "transfer", req.GetVerificationCode())
+	if err != nil {
+		return nil, status.Errorf(mapServiceError(err), "verify: %v", err)
+	}
+	if !valid {
+		return nil, status.Errorf(codes.FailedPrecondition, "invalid verification code")
+	}
+
+	// 2. Execute the transfer (balance changes)
+	if err := h.transferSvc.ExecuteTransfer(ctx, req.GetTransferId()); err != nil {
+		return nil, status.Errorf(mapServiceError(err), "execute transfer: %v", err)
+	}
+
+	// 3. Get updated transfer and return
+	transfer, err := h.transferSvc.GetTransfer(req.GetTransferId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch executed transfer: %v", err)
+	}
+
+	// 4. Publish Kafka events for completed transfer
 	if transfer.Status == "completed" {
 		msg := kafkamsg.TransferCompletedMessage{
 			TransferID:        transfer.ID,
@@ -180,9 +250,6 @@ func (h *TransactionGRPCHandler) CreateTransfer(ctx context.Context, req *pb.Cre
 			InitialAmount:     transfer.InitialAmount.StringFixed(4),
 			FinalAmount:       transfer.FinalAmount.StringFixed(4),
 			ExchangeRate:      transfer.ExchangeRate.StringFixed(4),
-		}
-		if err := h.producer.PublishTransferCreated(ctx, msg); err != nil {
-			log.Printf("warn: failed to publish transfer-created event: %v", err)
 		}
 		if err := h.producer.PublishTransferCompleted(ctx, msg); err != nil {
 			log.Printf("warn: failed to publish transfer-completed event: %v", err)

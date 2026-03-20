@@ -220,9 +220,11 @@ func Setup(
 
 			// Payments (client write)
 			clientProtected.POST("/payments", txHandler.CreatePayment)
+			clientProtected.POST("/payments/:id/execute", txHandler.ExecutePayment)
 
 			// Transfers (client write)
 			clientProtected.POST("/transfers", txHandler.CreateTransfer)
+			clientProtected.POST("/transfers/:id/execute", txHandler.ExecuteTransfer)
 
 			// Payment recipients (client)
 			clientProtected.POST("/payment-recipients", txHandler.CreatePaymentRecipient)

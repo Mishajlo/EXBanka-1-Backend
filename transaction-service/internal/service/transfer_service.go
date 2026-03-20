@@ -84,9 +84,8 @@ func (s *TransferService) CreateTransfer(ctx context.Context, transfer *model.Tr
 	}
 
 	// Validate that both accounts belong to the same client (transfers are intra-client only)
-	var fromAccount *accountpb.AccountResponse
 	if s.accountClient != nil {
-		var toAccount *accountpb.AccountResponse
+		var fromAccount, toAccount *accountpb.AccountResponse
 		if err := shared.Retry(ctx, shared.DefaultRetryConfig, func() error {
 			var e error
 			fromAccount, e = s.accountClient.GetAccountByNumber(ctx, &accountpb.GetAccountByNumberRequest{
@@ -106,15 +105,29 @@ func (s *TransferService) CreateTransfer(ctx context.Context, transfer *model.Tr
 			return fmt.Errorf("failed to fetch recipient account %s: %w", transfer.ToAccountNumber, err)
 		}
 		if fromAccount.OwnerId != toAccount.OwnerId {
-			transfer.Status = "rejected"
 			return fmt.Errorf("transfers must be between accounts of the same client; use payments for different-client transactions")
+		}
+
+		// Spending limit pre-check
+		totalDebit := transfer.InitialAmount.Add(transfer.Commission)
+		dailyLimit, _ := decimal.NewFromString(fromAccount.GetDailyLimit())
+		monthlyLimit, _ := decimal.NewFromString(fromAccount.GetMonthlyLimit())
+		dailySpending, _ := decimal.NewFromString(fromAccount.GetDailySpending())
+		monthlySpending, _ := decimal.NewFromString(fromAccount.GetMonthlySpending())
+
+		if !dailyLimit.IsZero() && dailySpending.Add(totalDebit).GreaterThan(dailyLimit) {
+			return fmt.Errorf("limit_exceeded: daily spending limit would be exceeded on account %s: current daily spending %s, attempted %s, daily limit %s",
+				transfer.FromAccountNumber, dailySpending.StringFixed(4), totalDebit.StringFixed(4), dailyLimit.StringFixed(4))
+		}
+		if !monthlyLimit.IsZero() && monthlySpending.Add(totalDebit).GreaterThan(monthlyLimit) {
+			return fmt.Errorf("limit_exceeded: monthly spending limit would be exceeded on account %s: current monthly spending %s, attempted %s, monthly limit %s",
+				transfer.FromAccountNumber, monthlySpending.StringFixed(4), totalDebit.StringFixed(4), monthlyLimit.StringFixed(4))
 		}
 	}
 
 	transfer.Timestamp = time.Now()
 
 	// Same-currency, same-client = "Prenos" (zero fee, no exchange)
-	// Ownership validation above already confirmed same-client.
 	if transfer.FromCurrency == transfer.ToCurrency || (transfer.FromCurrency == "" && transfer.ToCurrency == "") {
 		transfer.ExchangeRate = decimal.NewFromInt(1)
 		transfer.FinalAmount = transfer.InitialAmount
@@ -138,50 +151,80 @@ func (s *TransferService) CreateTransfer(ctx context.Context, transfer *model.Tr
 		}
 		convertedAmount, effectiveRate, err := s.exchangeSvc.ConvertViaRSD(transfer.FromCurrency, transfer.ToCurrency, transfer.InitialAmount)
 		if err != nil {
-			transfer.Status = "failed"
 			return fmt.Errorf("currency conversion failed: %w", err)
 		}
 		transfer.FinalAmount = convertedAmount
 		transfer.ExchangeRate = effectiveRate
 	}
 
-	convertedAmount := transfer.FinalAmount
-
-	transfer.Status = "processing"
+	// Save transfer in pending_verification status (no balance changes yet)
+	transfer.Status = "pending_verification"
 	if err := s.transferRepo.Create(transfer); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+// ExecuteTransfer performs the actual balance changes for a transfer that has been verified.
+// The transfer must be in "pending_verification" status.
+func (s *TransferService) ExecuteTransfer(ctx context.Context, transferID uint64) error {
+	transfer, err := s.transferRepo.GetByID(transferID)
+	if err != nil {
+		return fmt.Errorf("transfer not found: %w", err)
+	}
+
+	// Idempotency: if already completed, nothing to do
+	if transfer.Status == "completed" {
+		return nil
+	}
+
+	if transfer.Status != "pending_verification" {
+		return fmt.Errorf("transfer %d is in status %q, expected pending_verification", transferID, transfer.Status)
+	}
+
+	// Mark as processing
+	if err := s.transferRepo.UpdateStatus(transfer.ID, "processing"); err != nil {
+		return fmt.Errorf("failed to mark transfer %d as processing: %w", transfer.ID, err)
+	}
+	transfer.Status = "processing"
+
+	convertedAmount := transfer.FinalAmount
 	totalDebit := transfer.InitialAmount.Add(transfer.Commission)
 
-	// Spending limit enforcement
-	if fromAccount != nil {
-		dailyLimit, _ := decimal.NewFromString(fromAccount.GetDailyLimit())
-		monthlyLimit, _ := decimal.NewFromString(fromAccount.GetMonthlyLimit())
-		dailySpending, _ := decimal.NewFromString(fromAccount.GetDailySpending())
-		monthlySpending, _ := decimal.NewFromString(fromAccount.GetMonthlySpending())
+	// Re-check spending limits at execution time
+	if s.accountClient != nil {
+		var fromAccount *accountpb.AccountResponse
+		if err := shared.Retry(ctx, shared.DefaultRetryConfig, func() error {
+			var e error
+			fromAccount, e = s.accountClient.GetAccountByNumber(ctx, &accountpb.GetAccountByNumberRequest{
+				AccountNumber: transfer.FromAccountNumber,
+			})
+			return e
+		}); err == nil && fromAccount != nil {
+			dailyLimit, _ := decimal.NewFromString(fromAccount.GetDailyLimit())
+			monthlyLimit, _ := decimal.NewFromString(fromAccount.GetMonthlyLimit())
+			dailySpending, _ := decimal.NewFromString(fromAccount.GetDailySpending())
+			monthlySpending, _ := decimal.NewFromString(fromAccount.GetMonthlySpending())
 
-		if !dailyLimit.IsZero() && dailySpending.Add(totalDebit).GreaterThan(dailyLimit) {
-			reason := fmt.Sprintf("limit_exceeded: daily spending limit would be exceeded on account %s: current daily spending %s, attempted %s, daily limit %s",
-				transfer.FromAccountNumber, dailySpending.StringFixed(4), totalDebit.StringFixed(4), dailyLimit.StringFixed(4))
-			_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
-			transfer.Status = "failed"
-			transfer.FailureReason = reason
-			s.publishTransferFailed(ctx, transfer, reason)
-			return errors.New(reason)
-		}
-		if !monthlyLimit.IsZero() && monthlySpending.Add(totalDebit).GreaterThan(monthlyLimit) {
-			reason := fmt.Sprintf("limit_exceeded: monthly spending limit would be exceeded on account %s: current monthly spending %s, attempted %s, monthly limit %s",
-				transfer.FromAccountNumber, monthlySpending.StringFixed(4), totalDebit.StringFixed(4), monthlyLimit.StringFixed(4))
-			_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
-			transfer.Status = "failed"
-			transfer.FailureReason = reason
-			s.publishTransferFailed(ctx, transfer, reason)
-			return errors.New(reason)
+			if !dailyLimit.IsZero() && dailySpending.Add(totalDebit).GreaterThan(dailyLimit) {
+				reason := fmt.Sprintf("limit_exceeded: daily spending limit would be exceeded on account %s: current daily spending %s, attempted %s, daily limit %s",
+					transfer.FromAccountNumber, dailySpending.StringFixed(4), totalDebit.StringFixed(4), dailyLimit.StringFixed(4))
+				_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
+				s.publishTransferFailed(ctx, transfer, reason)
+				return errors.New(reason)
+			}
+			if !monthlyLimit.IsZero() && monthlySpending.Add(totalDebit).GreaterThan(monthlyLimit) {
+				reason := fmt.Sprintf("limit_exceeded: monthly spending limit would be exceeded on account %s: current monthly spending %s, attempted %s, monthly limit %s",
+					transfer.FromAccountNumber, monthlySpending.StringFixed(4), totalDebit.StringFixed(4), monthlyLimit.StringFixed(4))
+				_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
+				s.publishTransferFailed(ctx, transfer, reason)
+				return errors.New(reason)
+			}
 		}
 	}
 
-	// 3. Debit sender account (in from-currency)
+	// Debit sender account (in from-currency)
 	if s.accountClient != nil {
 		debitAmt := totalDebit.Neg().StringFixed(4)
 		if err := shared.Retry(ctx, shared.DefaultRetryConfig, func() error {
@@ -194,14 +237,12 @@ func (s *TransferService) CreateTransfer(ctx context.Context, transfer *model.Tr
 		}); err != nil {
 			reason := fmt.Sprintf("debit failed: %v", err)
 			_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
-			transfer.Status = "failed"
-			transfer.FailureReason = reason
 			s.publishTransferFailed(ctx, transfer, reason)
 			return fmt.Errorf("failed to debit sender account: %w", err)
 		}
 	}
 
-	// 4. Credit recipient account (in to-currency, converted amount)
+	// Credit recipient account (in to-currency, converted amount)
 	if s.accountClient != nil {
 		creditAmt := convertedAmount.StringFixed(4)
 		if err := shared.Retry(ctx, shared.DefaultRetryConfig, func() error {
@@ -224,14 +265,12 @@ func (s *TransferService) CreateTransfer(ctx context.Context, transfer *model.Tr
 			})
 			reason := fmt.Sprintf("credit failed (debit reversed): %v", err)
 			_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
-			transfer.Status = "failed"
-			transfer.FailureReason = reason
 			s.publishTransferFailed(ctx, transfer, reason)
 			return fmt.Errorf("failed to credit recipient account: %w", err)
 		}
 	}
 
-	// 5. Credit commission to bank's own RSD account (best-effort)
+	// Credit commission to bank's own RSD account (best-effort)
 	if s.bankRSDAccount != "" && transfer.Commission.IsPositive() {
 		commissionAmt := transfer.Commission.StringFixed(4)
 		_ = shared.Retry(ctx, shared.DefaultRetryConfig, func() error {
@@ -244,7 +283,7 @@ func (s *TransferService) CreateTransfer(ctx context.Context, transfer *model.Tr
 		})
 	}
 
-	// 6. Mark transfer completed
+	// Mark transfer completed
 	now := time.Now()
 	transfer.CompletedAt = &now
 	if err := s.transferRepo.UpdateStatus(transfer.ID, "completed"); err != nil {
