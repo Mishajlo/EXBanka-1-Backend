@@ -84,8 +84,9 @@ func (s *TransferService) CreateTransfer(ctx context.Context, transfer *model.Tr
 	}
 
 	// Validate that both accounts belong to the same client (transfers are intra-client only)
+	var fromAccount *accountpb.AccountResponse
 	if s.accountClient != nil {
-		var fromAccount, toAccount *accountpb.AccountResponse
+		var toAccount *accountpb.AccountResponse
 		if err := shared.Retry(ctx, shared.DefaultRetryConfig, func() error {
 			var e error
 			fromAccount, e = s.accountClient.GetAccountByNumber(ctx, &accountpb.GetAccountByNumberRequest{
@@ -152,6 +153,33 @@ func (s *TransferService) CreateTransfer(ctx context.Context, transfer *model.Tr
 	}
 
 	totalDebit := transfer.InitialAmount.Add(transfer.Commission)
+
+	// Spending limit enforcement
+	if fromAccount != nil {
+		dailyLimit, _ := decimal.NewFromString(fromAccount.GetDailyLimit())
+		monthlyLimit, _ := decimal.NewFromString(fromAccount.GetMonthlyLimit())
+		dailySpending, _ := decimal.NewFromString(fromAccount.GetDailySpending())
+		monthlySpending, _ := decimal.NewFromString(fromAccount.GetMonthlySpending())
+
+		if !dailyLimit.IsZero() && dailySpending.Add(totalDebit).GreaterThan(dailyLimit) {
+			reason := fmt.Sprintf("limit_exceeded: daily spending limit would be exceeded on account %s: current daily spending %s, attempted %s, daily limit %s",
+				transfer.FromAccountNumber, dailySpending.StringFixed(4), totalDebit.StringFixed(4), dailyLimit.StringFixed(4))
+			_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
+			transfer.Status = "failed"
+			transfer.FailureReason = reason
+			s.publishTransferFailed(ctx, transfer, reason)
+			return errors.New(reason)
+		}
+		if !monthlyLimit.IsZero() && monthlySpending.Add(totalDebit).GreaterThan(monthlyLimit) {
+			reason := fmt.Sprintf("limit_exceeded: monthly spending limit would be exceeded on account %s: current monthly spending %s, attempted %s, monthly limit %s",
+				transfer.FromAccountNumber, monthlySpending.StringFixed(4), totalDebit.StringFixed(4), monthlyLimit.StringFixed(4))
+			_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
+			transfer.Status = "failed"
+			transfer.FailureReason = reason
+			s.publishTransferFailed(ctx, transfer, reason)
+			return errors.New(reason)
+		}
+	}
 
 	// 3. Debit sender account (in from-currency)
 	if s.accountClient != nil {
