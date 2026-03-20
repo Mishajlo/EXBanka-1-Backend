@@ -614,10 +614,13 @@ definitions:
         type: string
       transaction_id:
         type: integer
+      transaction_type:
+        type: string
     required:
     - client_id
     - code
     - transaction_id
+    - transaction_type
     type: object
   handler.verifyCardPinBody:
     properties:

@@ -1366,6 +1366,7 @@ type CreateVerificationCodeRequest struct {
 	ClientId        uint64                 `protobuf:"varint,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
 	TransactionId   uint64                 `protobuf:"varint,2,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
 	TransactionType string                 `protobuf:"bytes,3,opt,name=transaction_type,json=transactionType,proto3" json:"transaction_type,omitempty"`
+	ClientEmail     string                 `protobuf:"bytes,4,opt,name=client_email,json=clientEmail,proto3" json:"client_email,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1417,6 +1418,13 @@ func (x *CreateVerificationCodeRequest) GetTransactionId() uint64 {
 func (x *CreateVerificationCodeRequest) GetTransactionType() string {
 	if x != nil {
 		return x.TransactionType
+	}
+	return ""
+}
+
+func (x *CreateVerificationCodeRequest) GetClientEmail() string {
+	if x != nil {
+		return x.ClientEmail
 	}
 	return ""
 }
@@ -1474,12 +1482,13 @@ func (x *CreateVerificationCodeResponse) GetExpiresAt() int64 {
 }
 
 type ValidateVerificationCodeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ClientId      uint64                 `protobuf:"varint,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
-	TransactionId uint64                 `protobuf:"varint,2,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
-	Code          string                 `protobuf:"bytes,3,opt,name=code,proto3" json:"code,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ClientId        uint64                 `protobuf:"varint,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	TransactionId   uint64                 `protobuf:"varint,2,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
+	Code            string                 `protobuf:"bytes,3,opt,name=code,proto3" json:"code,omitempty"`
+	TransactionType string                 `protobuf:"bytes,4,opt,name=transaction_type,json=transactionType,proto3" json:"transaction_type,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ValidateVerificationCodeRequest) Reset() {
@@ -1529,6 +1538,13 @@ func (x *ValidateVerificationCodeRequest) GetTransactionId() uint64 {
 func (x *ValidateVerificationCodeRequest) GetCode() string {
 	if x != nil {
 		return x.Code
+	}
+	return ""
+}
+
+func (x *ValidateVerificationCodeRequest) GetTransactionType() string {
+	if x != nil {
+		return x.TransactionType
 	}
 	return ""
 }
@@ -1699,19 +1715,21 @@ const file_transaction_transaction_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\x05 \x01(\tR\tupdatedAt\"T\n" +
 	"\x19ListExchangeRatesResponse\x127\n" +
-	"\x05rates\x18\x01 \x03(\v2!.transaction.ExchangeRateResponseR\x05rates\"\x8e\x01\n" +
+	"\x05rates\x18\x01 \x03(\v2!.transaction.ExchangeRateResponseR\x05rates\"\xb1\x01\n" +
 	"\x1dCreateVerificationCodeRequest\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\x04R\bclientId\x12%\n" +
 	"\x0etransaction_id\x18\x02 \x01(\x04R\rtransactionId\x12)\n" +
-	"\x10transaction_type\x18\x03 \x01(\tR\x0ftransactionType\"S\n" +
+	"\x10transaction_type\x18\x03 \x01(\tR\x0ftransactionType\x12!\n" +
+	"\fclient_email\x18\x04 \x01(\tR\vclientEmail\"S\n" +
 	"\x1eCreateVerificationCodeResponse\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x1d\n" +
 	"\n" +
-	"expires_at\x18\x02 \x01(\x03R\texpiresAt\"y\n" +
+	"expires_at\x18\x02 \x01(\x03R\texpiresAt\"\xa4\x01\n" +
 	"\x1fValidateVerificationCodeRequest\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\x04R\bclientId\x12%\n" +
 	"\x0etransaction_id\x18\x02 \x01(\x04R\rtransactionId\x12\x12\n" +
-	"\x04code\x18\x03 \x01(\tR\x04code\"g\n" +
+	"\x04code\x18\x03 \x01(\tR\x04code\x12)\n" +
+	"\x10transaction_type\x18\x04 \x01(\tR\x0ftransactionType\"g\n" +
 	" ValidateVerificationCodeResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12-\n" +
 	"\x12remaining_attempts\x18\x02 \x01(\x05R\x11remainingAttempts2\x8d\v\n" +

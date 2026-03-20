@@ -6169,7 +6169,8 @@ const docTemplate = `{
             "required": [
                 "client_id",
                 "code",
-                "transaction_id"
+                "transaction_id",
+                "transaction_type"
             ],
             "properties": {
                 "client_id": {
@@ -6180,6 +6181,9 @@ const docTemplate = `{
                 },
                 "transaction_id": {
                     "type": "integer"
+                },
+                "transaction_type": {
+                    "type": "string"
                 }
             }
         },

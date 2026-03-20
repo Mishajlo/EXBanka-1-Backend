@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc/status"
 )
 
 // oneOf checks that value (lowercased) is one of the allowed values.
@@ -60,6 +61,15 @@ func notEqual(field1, val1, field2, val2 string) error {
 		return fmt.Errorf("%s and %s must be different", field1, field2)
 	}
 	return nil
+}
+
+// grpcMessage extracts the human-readable message from a gRPC error,
+// stripping the "rpc error: code = ... desc = ..." wrapper.
+func grpcMessage(err error) string {
+	if s, ok := status.FromError(err); ok {
+		return s.Message()
+	}
+	return err.Error()
 }
 
 // enforceClientSelf checks that a client can only access their own resources.

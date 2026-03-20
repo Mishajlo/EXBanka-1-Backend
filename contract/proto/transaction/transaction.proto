@@ -149,6 +149,7 @@ message CreateVerificationCodeRequest {
   uint64 client_id = 1;
   uint64 transaction_id = 2;
   string transaction_type = 3;
+  string client_email = 4;
 }
 
 message CreateVerificationCodeResponse {
@@ -160,6 +161,7 @@ message ValidateVerificationCodeRequest {
   uint64 client_id = 1;
   uint64 transaction_id = 2;
   string code = 3;
+  string transaction_type = 4;
 }
 
 message ValidateVerificationCodeResponse {

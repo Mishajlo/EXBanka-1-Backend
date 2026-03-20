@@ -257,10 +257,23 @@ func (h *TransactionGRPCHandler) ListExchangeRates(ctx context.Context, req *pb.
 // ---- Verification Code RPCs ----
 
 func (h *TransactionGRPCHandler) CreateVerificationCode(ctx context.Context, req *pb.CreateVerificationCodeRequest) (*pb.CreateVerificationCodeResponse, error) {
-	vc, _, err := h.verificationSvc.CreateVerificationCode(ctx, req.GetClientId(), req.GetTransactionId(), req.GetTransactionType())
+	vc, code, err := h.verificationSvc.CreateVerificationCode(ctx, req.GetClientId(), req.GetTransactionId(), req.GetTransactionType())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "create verification code: %v", err)
 	}
+
+	// Send verification code via email
+	if email := req.GetClientEmail(); email != "" {
+		_ = h.producer.SendEmail(ctx, kafkamsg.SendEmailMessage{
+			To:        email,
+			EmailType: kafkamsg.EmailTypeConfirmation,
+			Data: map[string]string{
+				"code":             code,
+				"transaction_type": req.GetTransactionType(),
+			},
+		})
+	}
+
 	return &pb.CreateVerificationCodeResponse{
 		Code:      vc.Code,
 		ExpiresAt: vc.ExpiresAt.Unix(),
@@ -268,7 +281,7 @@ func (h *TransactionGRPCHandler) CreateVerificationCode(ctx context.Context, req
 }
 
 func (h *TransactionGRPCHandler) ValidateVerificationCode(ctx context.Context, req *pb.ValidateVerificationCodeRequest) (*pb.ValidateVerificationCodeResponse, error) {
-	valid, remaining, err := h.verificationSvc.ValidateVerificationCode(req.GetClientId(), req.GetTransactionId(), req.GetCode())
+	valid, remaining, err := h.verificationSvc.ValidateVerificationCode(req.GetClientId(), req.GetTransactionId(), req.GetTransactionType(), req.GetCode())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "validate verification code: %v", err)
 	}

@@ -48,9 +48,9 @@ func (s *VerificationService) CreateVerificationCode(ctx context.Context, client
 
 // ValidateVerificationCode checks expiry, max attempts, and correctness.
 // Returns (valid, remainingAttempts, error).
-func (s *VerificationService) ValidateVerificationCode(clientID, transactionID uint64, code string) (bool, int, error) {
-	// Find the most recent unused code for this client+transaction
-	vc, err := s.repo.GetByClientAndTransaction(clientID, transactionID, "")
+func (s *VerificationService) ValidateVerificationCode(clientID, transactionID uint64, txType, code string) (bool, int, error) {
+	// Find the most recent unused code for this client+transaction+type
+	vc, err := s.repo.GetByClientAndTransaction(clientID, transactionID, txType)
 	if err != nil {
 		return false, 0, err
 	}
