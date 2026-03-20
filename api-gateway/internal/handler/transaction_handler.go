@@ -74,6 +74,13 @@ func (h *TransactionHandler) CreatePayment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if req.PaymentCode == "" {
+		req.PaymentCode = "289"
+	}
+	if err := validatePaymentCode(req.PaymentCode); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	resp, err := h.txClient.CreatePayment(c.Request.Context(), &transactionpb.CreatePaymentRequest{
 		FromAccountNumber: req.FromAccountNumber,
 		ToAccountNumber:   req.ToAccountNumber,

@@ -21,6 +21,8 @@ func oneOf(field, value string, allowed ...string) (string, error) {
 	return "", fmt.Errorf("%s must be one of: %s", field, strings.Join(allowed, ", "))
 }
 
+var paymentCodeRegex = regexp.MustCompile(`^2\d{2}$`)
+
 var pinRegex = regexp.MustCompile(`^\d{4}$`)
 
 var activityCodeRegex = regexp.MustCompile(`^\d{2}\.\d{1,2}$`)
@@ -29,6 +31,14 @@ var activityCodeRegex = regexp.MustCompile(`^\d{2}\.\d{1,2}$`)
 func validateActivityCode(code string) error {
 	if !activityCodeRegex.MatchString(code) {
 		return fmt.Errorf("activity code must be in format xx.xx (e.g., 10.1, 84.11)")
+	}
+	return nil
+}
+
+// validatePaymentCode checks that payment_code is a 3-digit code starting with 2.
+func validatePaymentCode(code string) error {
+	if !paymentCodeRegex.MatchString(code) {
+		return fmt.Errorf("payment_code must be a 3-digit code starting with 2 (e.g., 289)")
 	}
 	return nil
 }
