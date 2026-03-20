@@ -336,6 +336,7 @@ func (x *ListLoanRequestsResponse) GetTotal() int64 {
 type ApproveLoanRequestReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RequestId     uint64                 `protobuf:"varint,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	EmployeeId    uint64                 `protobuf:"varint,2,opt,name=employee_id,json=employeeId,proto3" json:"employee_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -373,6 +374,13 @@ func (*ApproveLoanRequestReq) Descriptor() ([]byte, []int) {
 func (x *ApproveLoanRequestReq) GetRequestId() uint64 {
 	if x != nil {
 		return x.RequestId
+	}
+	return 0
+}
+
+func (x *ApproveLoanRequestReq) GetEmployeeId() uint64 {
+	if x != nil {
+		return x.EmployeeId
 	}
 	return 0
 }
@@ -1199,10 +1207,12 @@ const file_credit_credit_proto_rawDesc = "" +
 	"\x10client_id_filter\x18\x06 \x01(\x04R\x0eclientIdFilter\"i\n" +
 	"\x18ListLoanRequestsResponse\x127\n" +
 	"\brequests\x18\x01 \x03(\v2\x1b.credit.LoanRequestResponseR\brequests\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x03R\x05total\"6\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\"W\n" +
 	"\x15ApproveLoanRequestReq\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x01 \x01(\x04R\trequestId\"5\n" +
+	"request_id\x18\x01 \x01(\x04R\trequestId\x12\x1f\n" +
+	"\vemployee_id\x18\x02 \x01(\x04R\n" +
+	"employeeId\"5\n" +
 	"\x14RejectLoanRequestReq\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\x04R\trequestId\"\xfb\x03\n" +

@@ -47,7 +47,10 @@ message ListLoanRequestsResponse {
   int64 total = 2;
 }
 
-message ApproveLoanRequestReq { uint64 request_id = 1; }
+message ApproveLoanRequestReq {
+  uint64 request_id = 1;
+  uint64 employee_id = 2;
+}
 message RejectLoanRequestReq { uint64 request_id = 1; }
 
 message LoanRequestResponse {

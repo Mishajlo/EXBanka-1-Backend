@@ -169,7 +169,14 @@ func (h *CreditHandler) ApproveLoanRequest(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.creditClient.ApproveLoanRequest(c.Request.Context(), &creditpb.ApproveLoanRequestReq{RequestId: id})
+	// Get employee ID from JWT context for limit enforcement
+	uid, _ := c.Get("user_id")
+	employeeID := uid.(int64)
+
+	resp, err := h.creditClient.ApproveLoanRequest(c.Request.Context(), &creditpb.ApproveLoanRequestReq{
+		RequestId:  id,
+		EmployeeId: uint64(employeeID),
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

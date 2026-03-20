@@ -18,6 +18,7 @@ import (
 	clientpb "github.com/exbanka/contract/clientpb"
 	pb "github.com/exbanka/contract/creditpb"
 	shared "github.com/exbanka/contract/shared"
+	userpb "github.com/exbanka/contract/userpb"
 	"github.com/exbanka/credit-service/internal/cache"
 	"github.com/exbanka/credit-service/internal/config"
 	"github.com/exbanka/credit-service/internal/handler"
@@ -78,6 +79,14 @@ func main() {
 	defer clientConn.Close()
 	clientClient := clientpb.NewClientServiceClient(clientConn)
 
+	// Connect to user-service for employee limit checks
+	userConn, err := grpc.NewClient(cfg.UserGRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("failed to connect to user service: %v", err)
+	}
+	defer userConn.Close()
+	limitClient := userpb.NewEmployeeLimitServiceClient(userConn)
+
 	// Fetch the bank's RSD account number at startup (non-fatal if unavailable)
 	var bankRSDAccount string
 	bankRSDResp, bankRSDErr := bankAccountClient.GetBankRSDAccount(context.Background(), &accountpb.GetBankRSDAccountRequest{})
@@ -92,7 +101,7 @@ func main() {
 	loanRepo := repository.NewLoanRepository(db)
 	installmentRepo := repository.NewInstallmentRepository(db)
 
-	loanRequestSvc := service.NewLoanRequestService(loanRequestRepo, loanRepo, installmentRepo)
+	loanRequestSvc := service.NewLoanRequestService(loanRequestRepo, loanRepo, installmentRepo, limitClient)
 	loanSvc := service.NewLoanService(loanRepo)
 	installmentSvc := service.NewInstallmentService(installmentRepo)
 	cronSvc := service.NewCronService(installmentSvc, loanSvc, accountClient, bankAccountClient, clientClient, producer, bankRSDAccount)

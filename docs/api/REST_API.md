@@ -1991,6 +1991,15 @@ Approve a loan request. Creates a loan and sends an approval email to the client
 }
 ```
 
+**Response 500 (limit exceeded):**
+```json
+{
+  "error": "loan amount 500000.00 exceeds your approval limit of 100000.00"
+}
+```
+
+> **Note:** The approving employee's `MaxLoanApprovalAmount` limit is enforced. If the loan request amount exceeds the employee's configured limit, the approval is rejected.
+
 ---
 
 ### PUT /api/loans/requests/:id/reject

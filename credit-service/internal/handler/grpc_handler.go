@@ -99,7 +99,7 @@ func (h *CreditGRPCHandler) ListLoanRequests(ctx context.Context, req *pb.ListLo
 }
 
 func (h *CreditGRPCHandler) ApproveLoanRequest(ctx context.Context, req *pb.ApproveLoanRequestReq) (*pb.LoanResponse, error) {
-	loan, err := h.loanRequestService.ApproveLoanRequest(req.RequestId)
+	loan, err := h.loanRequestService.ApproveLoanRequest(req.RequestId, req.EmployeeId)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, status.Errorf(codes.NotFound, "loan request not found")

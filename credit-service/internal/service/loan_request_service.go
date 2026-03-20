@@ -1,12 +1,15 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
 
+	userpb "github.com/exbanka/contract/userpb"
 	"github.com/exbanka/credit-service/internal/model"
 	"github.com/exbanka/credit-service/internal/repository"
+	"github.com/shopspring/decimal"
 )
 
 var validLoanTypes = map[string]bool{
@@ -21,14 +24,16 @@ type LoanRequestService struct {
 	repo        *repository.LoanRequestRepository
 	loanRepo    *repository.LoanRepository
 	installRepo *repository.InstallmentRepository
+	limitClient userpb.EmployeeLimitServiceClient
 }
 
 func NewLoanRequestService(
 	repo *repository.LoanRequestRepository,
 	loanRepo *repository.LoanRepository,
 	installRepo *repository.InstallmentRepository,
+	limitClient userpb.EmployeeLimitServiceClient,
 ) *LoanRequestService {
-	return &LoanRequestService{repo: repo, loanRepo: loanRepo, installRepo: installRepo}
+	return &LoanRequestService{repo: repo, loanRepo: loanRepo, installRepo: installRepo, limitClient: limitClient}
 }
 
 func (s *LoanRequestService) CreateLoanRequest(req *model.LoanRequest) error {
@@ -55,13 +60,25 @@ func (s *LoanRequestService) ListLoanRequests(loanTypeFilter, accountFilter, sta
 	return s.repo.List(loanTypeFilter, accountFilter, statusFilter, clientID, page, pageSize)
 }
 
-func (s *LoanRequestService) ApproveLoanRequest(requestID uint64) (*model.Loan, error) {
+func (s *LoanRequestService) ApproveLoanRequest(requestID uint64, employeeID uint64) (*model.Loan, error) {
 	req, err := s.repo.GetByID(requestID)
 	if err != nil {
 		return nil, err
 	}
 	if req.Status != "pending" {
 		return nil, fmt.Errorf("loan request is not in pending state: %s", req.Status)
+	}
+
+	// Check employee MaxLoanApprovalAmount limit
+	if employeeID > 0 && s.limitClient != nil {
+		limits, limErr := s.limitClient.GetEmployeeLimits(context.Background(), &userpb.EmployeeLimitRequest{EmployeeId: int64(employeeID)})
+		if limErr == nil && limits.MaxLoanApprovalAmount != "" && limits.MaxLoanApprovalAmount != "0" {
+			maxAmount, parseErr := decimal.NewFromString(limits.MaxLoanApprovalAmount)
+			if parseErr == nil && maxAmount.IsPositive() && req.Amount.GreaterThan(maxAmount) {
+				return nil, fmt.Errorf("loan amount %s exceeds your approval limit of %s",
+					req.Amount.StringFixed(2), maxAmount.StringFixed(2))
+			}
+		}
 	}
 
 	nominalRate := GetNominalInterestRate(req.LoanType, req.InterestType)

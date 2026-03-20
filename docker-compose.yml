@@ -366,6 +366,7 @@ services:
       CREDIT_GRPC_ADDR: ":50058"
       ACCOUNT_GRPC_ADDR: "account-service:50055"
       CLIENT_GRPC_ADDR: "client-service:50054"
+      USER_GRPC_ADDR: "user-service:50052"
       KAFKA_BROKERS: kafka:9092
       REDIS_ADDR: redis:6379
     ports:
@@ -380,6 +381,8 @@ services:
       account-service:
         condition: service_started
       client-service:
+        condition: service_started
+      user-service:
         condition: service_started
 
 volumes:
