@@ -131,16 +131,17 @@ func (s *TransferService) CreateTransfer(ctx context.Context, transfer *model.Tr
 		}
 		transfer.Commission = commission
 
-		// Determine exchange rate for cross-currency transfers
+		// Determine exchange rate for cross-currency transfers (via RSD intermediate)
 		if s.exchangeSvc == nil {
 			return fmt.Errorf("cross-currency transfers require exchange service")
 		}
-		rate, err := s.exchangeSvc.GetExchangeRate(transfer.FromCurrency, transfer.ToCurrency)
+		convertedAmount, effectiveRate, err := s.exchangeSvc.ConvertViaRSD(transfer.FromCurrency, transfer.ToCurrency, transfer.InitialAmount)
 		if err != nil {
-			return fmt.Errorf("exchange rate lookup failed for %s→%s: %w", transfer.FromCurrency, transfer.ToCurrency, err)
+			transfer.Status = "failed"
+			return fmt.Errorf("currency conversion failed: %w", err)
 		}
-		transfer.ExchangeRate = rate.SellRate
-		transfer.FinalAmount = ConvertAmount(transfer.InitialAmount, rate.SellRate)
+		transfer.FinalAmount = convertedAmount
+		transfer.ExchangeRate = effectiveRate
 	}
 
 	convertedAmount := transfer.FinalAmount
