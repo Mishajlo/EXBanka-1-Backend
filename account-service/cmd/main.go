@@ -49,6 +49,10 @@ func main() {
 	kafkaprod.EnsureTopics(cfg.KafkaBrokers,
 		"account.created",
 		"account.status-changed",
+		"account.name-updated",
+		"account.limits-updated",
+		"account.maintenance-charged",
+		"account.spending-reset",
 		"notification.send-email",
 	)
 

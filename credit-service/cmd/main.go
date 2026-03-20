@@ -50,6 +50,8 @@ func main() {
 		"credit.loan-rejected",
 		"credit.installment-collected",
 		"credit.installment-failed",
+		"credit.variable-rate-adjusted",
+		"credit.late-penalty-applied",
 		"notification.send-email",
 	)
 
