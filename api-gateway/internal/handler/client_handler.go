@@ -6,15 +6,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	authpb "github.com/exbanka/contract/authpb"
 	clientpb "github.com/exbanka/contract/clientpb"
 )
 
 type ClientHandler struct {
 	clientClient clientpb.ClientServiceClient
+	authClient   authpb.AuthServiceClient
 }
 
-func NewClientHandler(clientClient clientpb.ClientServiceClient) *ClientHandler {
-	return &ClientHandler{clientClient: clientClient}
+func NewClientHandler(clientClient clientpb.ClientServiceClient, authClient authpb.AuthServiceClient) *ClientHandler {
+	return &ClientHandler{clientClient: clientClient, authClient: authClient}
 }
 
 type createClientRequest struct {
@@ -60,7 +62,7 @@ func (h *ClientHandler) CreateClient(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusCreated, clientToJSON(resp))
+	c.JSON(http.StatusCreated, clientToJSONWithActive(resp, false))
 }
 
 // @Summary      List clients
@@ -90,9 +92,25 @@ func (h *ClientHandler) ListClients(c *gin.Context) {
 		return
 	}
 
+	ids := make([]int64, 0, len(resp.Clients))
+	for _, cl := range resp.Clients {
+		ids = append(ids, int64(cl.Id))
+	}
+	statusMap := make(map[int64]bool)
+	if len(ids) > 0 {
+		if batchResp, err := h.authClient.GetAccountStatusBatch(c.Request.Context(), &authpb.GetAccountStatusBatchRequest{
+			PrincipalType: "client",
+			PrincipalIds:  ids,
+		}); err == nil {
+			for _, entry := range batchResp.Entries {
+				statusMap[entry.PrincipalId] = entry.Active
+			}
+		}
+	}
+
 	clients := make([]gin.H, 0, len(resp.Clients))
 	for _, cl := range resp.Clients {
-		clients = append(clients, clientToJSON(cl))
+		clients = append(clients, clientToJSONWithActive(cl, statusMap[int64(cl.Id)]))
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"clients": clients,
@@ -121,7 +139,15 @@ func (h *ClientHandler) GetClient(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "client not found"})
 		return
 	}
-	c.JSON(http.StatusOK, clientToJSON(resp))
+
+	active := false
+	if statusResp, err := h.authClient.GetAccountStatus(c.Request.Context(), &authpb.GetAccountStatusRequest{
+		PrincipalType: "client",
+		PrincipalId:   int64(id),
+	}); err == nil {
+		active = statusResp.Active
+	}
+	c.JSON(http.StatusOK, clientToJSONWithActive(resp, active))
 }
 
 type updateClientRequest struct {
@@ -132,6 +158,7 @@ type updateClientRequest struct {
 	Email       *string `json:"email"`
 	Phone       *string `json:"phone"`
 	Address     *string `json:"address"`
+	Active      *bool   `json:"active"`
 }
 
 // @Summary      Update client
@@ -173,7 +200,28 @@ func (h *ClientHandler) UpdateClient(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, clientToJSON(resp))
+
+	if req.Active != nil {
+		_, authErr := h.authClient.SetAccountStatus(c.Request.Context(), &authpb.SetAccountStatusRequest{
+			PrincipalType: "client",
+			PrincipalId:   int64(id),
+			Active:        *req.Active,
+		})
+		if authErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update account status"})
+			return
+		}
+	}
+
+	// Re-fetch active status to return accurate value
+	active := false
+	if statusResp, err := h.authClient.GetAccountStatus(c.Request.Context(), &authpb.GetAccountStatusRequest{
+		PrincipalType: "client",
+		PrincipalId:   int64(id),
+	}); err == nil {
+		active = statusResp.Active
+	}
+	c.JSON(http.StatusOK, clientToJSONWithActive(resp, active))
 }
 
 // @Summary      Get current client (me)
@@ -212,44 +260,18 @@ func (h *ClientHandler) GetCurrentClient(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "client not found"})
 		return
 	}
-	c.JSON(http.StatusOK, clientToJSON(resp))
-}
 
-type setPasswordRequest struct {
-	UserID       uint64 `json:"user_id" binding:"required"`
-	PasswordHash string `json:"password_hash" binding:"required"`
-}
-
-// @Summary      Set client password hash
-// @Tags         clients
-// @Accept       json
-// @Produce      json
-// @Param        body  body  setPasswordRequest  true  "Password hash data"
-// @Security     BearerAuth
-// @Success      200   {object}  map[string]interface{}
-// @Failure      400   {object}  map[string]string
-// @Failure      401   {object}  map[string]string
-// @Failure      500   {object}  map[string]string
-// @Router       /api/clients/set-password [post]
-func (h *ClientHandler) SetPassword(c *gin.Context) {
-	var req setPasswordRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+	active := false
+	if statusResp, err := h.authClient.GetAccountStatus(c.Request.Context(), &authpb.GetAccountStatusRequest{
+		PrincipalType: "client",
+		PrincipalId:   int64(id),
+	}); err == nil {
+		active = statusResp.Active
 	}
-
-	_, err := h.clientClient.SetPassword(c.Request.Context(), &clientpb.SetClientPasswordRequest{
-		UserId:       req.UserID,
-		PasswordHash: req.PasswordHash,
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"success": true})
+	c.JSON(http.StatusOK, clientToJSONWithActive(resp, active))
 }
 
-func clientToJSON(cl *clientpb.ClientResponse) gin.H {
+func clientToJSONWithActive(cl *clientpb.ClientResponse, active bool) gin.H {
 	return gin.H{
 		"id":            cl.Id,
 		"first_name":    cl.FirstName,
@@ -260,7 +282,7 @@ func clientToJSON(cl *clientpb.ClientResponse) gin.H {
 		"phone":         cl.Phone,
 		"address":       cl.Address,
 		"jmbg":          cl.Jmbg,
-		"active":        cl.Active,
+		"active":        active,
 		"created_at":    cl.CreatedAt,
 	}
 }

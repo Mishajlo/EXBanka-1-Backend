@@ -41,10 +41,10 @@ func Setup(
 	}))
 
 	authHandler := handler.NewAuthHandler(authClient)
-	empHandler := handler.NewEmployeeHandler(userClient)
+	empHandler := handler.NewEmployeeHandler(userClient, authClient)
 	roleHandler := handler.NewRoleHandler(userClient)
 	limitHandler := handler.NewLimitHandler(empLimitClient, clientLimitClient)
-	clientHandler := handler.NewClientHandler(clientClient)
+	clientHandler := handler.NewClientHandler(clientClient, authClient)
 	accountHandler := handler.NewAccountHandler(accountClient, bankAccountClient, cardClient, txClient)
 	cardHandler := handler.NewCardHandler(cardClient, virtualCardClient)
 	txHandler := handler.NewTransactionHandler(txClient, feeClient, accountClient)
@@ -57,7 +57,6 @@ func Setup(
 		auth := api.Group("/auth")
 		{
 			auth.POST("/login", authHandler.Login)
-			auth.POST("/client-login", authHandler.ClientLogin)
 			auth.POST("/refresh", authHandler.RefreshToken)
 			auth.POST("/logout", authHandler.Logout)
 			auth.POST("/password/reset-request", authHandler.RequestPasswordReset)
@@ -145,7 +144,6 @@ func Setup(
 				clientsEmployee.GET("", clientHandler.ListClients)
 				clientsEmployee.GET("/:id", clientHandler.GetClient)
 				clientsEmployee.PUT("/:id", clientHandler.UpdateClient)
-				clientsEmployee.POST("/set-password", clientHandler.SetPassword)
 			}
 
 			// Account management (EmployeeBasic)
