@@ -259,3 +259,13 @@ type LatePenaltyAppliedMessage struct {
 	NewRate string `json:"new_rate"`
 	Penalty string `json:"penalty"`
 }
+
+const (
+	TopicAuthAccountStatusChanged = "auth.account-status-changed"
+)
+
+type AuthAccountStatusChangedMessage struct {
+	PrincipalType string `json:"principal_type"`
+	PrincipalID   int64  `json:"principal_id"`
+	Status        string `json:"status"`
+}
