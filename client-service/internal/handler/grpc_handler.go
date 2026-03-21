@@ -162,26 +162,6 @@ func (h *ClientGRPCHandler) UpdateClient(ctx context.Context, req *pb.UpdateClie
 	return toClientResponse(client), nil
 }
 
-func (h *ClientGRPCHandler) ValidateCredentials(ctx context.Context, req *pb.ValidateClientCredentialsRequest) (*pb.ValidateClientCredentialsResponse, error) {
-	client, valid := h.clientService.ValidateCredentials(req.Email, req.Password)
-	if !valid {
-		return &pb.ValidateClientCredentialsResponse{}, nil
-	}
-	return &pb.ValidateClientCredentialsResponse{
-		Id:        client.ID,
-		Email:     client.Email,
-		FirstName: client.FirstName,
-		LastName:  client.LastName,
-	}, nil
-}
-
-func (h *ClientGRPCHandler) SetPassword(ctx context.Context, req *pb.SetClientPasswordRequest) (*pb.SetClientPasswordResponse, error) {
-	if err := h.clientService.SetPassword(req.UserId, req.PasswordHash); err != nil {
-		return nil, status.Errorf(mapServiceError(err), "failed to set password: %v", err)
-	}
-	return &pb.SetClientPasswordResponse{Success: true}, nil
-}
-
 func toClientResponse(c *model.Client) *pb.ClientResponse {
 	return &pb.ClientResponse{
 		Id:          c.ID,
@@ -192,8 +172,7 @@ func toClientResponse(c *model.Client) *pb.ClientResponse {
 		Email:       c.Email,
 		Phone:       c.Phone,
 		Address:     c.Address,
-		Jmbg:        c.JMBG,
-		Active:      c.Active,
-		CreatedAt:   c.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		Jmbg:      c.JMBG,
+		CreatedAt: c.CreatedAt.Format("2006-01-02T15:04:05Z"),
 	}
 }
