@@ -58,17 +58,6 @@ func (h *AuthGRPCHandler) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 	}, nil
 }
 
-func (h *AuthGRPCHandler) ClientLogin(ctx context.Context, req *pb.LoginRequest) (*pb.LoginResponse, error) {
-	access, refresh, err := h.authService.ClientLogin(ctx, req.Email, req.Password)
-	if err != nil {
-		return nil, status.Errorf(codes.Unauthenticated, "invalid credentials")
-	}
-	return &pb.LoginResponse{
-		AccessToken:  access,
-		RefreshToken: refresh,
-	}, nil
-}
-
 func (h *AuthGRPCHandler) ValidateToken(ctx context.Context, req *pb.ValidateTokenRequest) (*pb.ValidateTokenResponse, error) {
 	claims, err := h.authService.ValidateToken(req.Token)
 	if err != nil {
@@ -130,9 +119,33 @@ func (h *AuthGRPCHandler) Logout(ctx context.Context, req *pb.LogoutRequest) (*p
 	return &pb.LogoutResponse{Success: true}, nil
 }
 
-func (h *AuthGRPCHandler) CreateActivationToken(ctx context.Context, req *pb.CreateActivationTokenRequest) (*pb.CreateActivationTokenResponse, error) {
-	if err := h.authService.CreateActivationToken(ctx, req.UserId, req.Email, req.FirstName, "employee"); err != nil {
-		return nil, status.Errorf(mapServiceError(err), "%v", err)
+func (h *AuthGRPCHandler) SetAccountStatus(ctx context.Context, req *pb.SetAccountStatusRequest) (*pb.SetAccountStatusResponse, error) {
+	if err := h.authService.SetAccountStatus(ctx, req.PrincipalType, req.PrincipalId, req.Active); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to set account status: %v", err)
 	}
-	return &pb.CreateActivationTokenResponse{Success: true}, nil
+	return &pb.SetAccountStatusResponse{Success: true}, nil
+}
+
+func (h *AuthGRPCHandler) GetAccountStatus(ctx context.Context, req *pb.GetAccountStatusRequest) (*pb.GetAccountStatusResponse, error) {
+	st, active, err := h.authService.GetAccountStatus(ctx, req.PrincipalType, req.PrincipalId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "account not found")
+	}
+	return &pb.GetAccountStatusResponse{Status: st, Active: active}, nil
+}
+
+func (h *AuthGRPCHandler) GetAccountStatusBatch(ctx context.Context, req *pb.GetAccountStatusBatchRequest) (*pb.GetAccountStatusBatchResponse, error) {
+	accounts, err := h.authService.GetAccountStatusBatch(ctx, req.PrincipalType, req.PrincipalIds)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get account statuses: %v", err)
+	}
+	var entries []*pb.AccountStatusEntry
+	for pid, acct := range accounts {
+		entries = append(entries, &pb.AccountStatusEntry{
+			PrincipalId: pid,
+			Status:      acct.Status,
+			Active:      acct.Status == "active",
+		})
+	}
+	return &pb.GetAccountStatusBatchResponse{Entries: entries}, nil
 }

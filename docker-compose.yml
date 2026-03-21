@@ -89,7 +89,6 @@ services:
       AUTH_DB_NAME: auth_db
       AUTH_GRPC_ADDR: ":50051"
       USER_GRPC_ADDR: "user-service:50052"
-      CLIENT_GRPC_ADDR: "client-service:50054"
       KAFKA_BROKERS: kafka:9092
       JWT_SECRET: docker-test-secret-change-me
       JWT_ACCESS_EXPIRY: 15m
@@ -105,8 +104,6 @@ services:
       kafka:
         condition: service_healthy
       user-service:
-        condition: service_started
-      client-service:
         condition: service_started
       redis:
         condition: service_healthy
