@@ -12,6 +12,13 @@ import (
 )
 
 // ClientConsumer listens for client.created events and creates activation tokens.
+//
+// Contract: consumes topic "client.created" (TopicClientCreated).
+// Message type: ClientCreatedMessage{ClientID uint64, Email, FirstName, LastName string}.
+// Note: ClientID is uint64 in the message; cast to int64 for CreateAccountAndActivationToken.
+// Action: calls CreateAccountAndActivationToken(ctx, int64(ClientID), Email, FirstName, "client")
+// which creates an Account (status=pending) and an ActivationToken, then publishes
+// a notification.send-email event (type=ACTIVATION) for the notification-service to deliver.
 type ClientConsumer struct {
 	reader  *kafka.Reader
 	authSvc *service.AuthService

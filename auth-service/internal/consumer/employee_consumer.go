@@ -12,6 +12,12 @@ import (
 )
 
 // EmployeeConsumer listens for user.employee-created events and creates activation tokens.
+//
+// Contract: consumes topic "user.employee-created" (TopicEmployeeCreated).
+// Message type: EmployeeCreatedMessage{EmployeeID int64, Email, FirstName, LastName string, Roles []string}.
+// Action: calls CreateAccountAndActivationToken(ctx, EmployeeID, Email, FirstName, "employee")
+// which creates an Account (status=pending) and an ActivationToken, then publishes
+// a notification.send-email event (type=ACTIVATION) for the notification-service to deliver.
 type EmployeeConsumer struct {
 	reader  *kafka.Reader
 	authSvc *service.AuthService
