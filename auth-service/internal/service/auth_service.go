@@ -512,7 +512,18 @@ func (s *AuthService) SetAccountStatus(ctx context.Context, principalType string
 		}
 	}
 
-	return s.accountRepo.SetStatusByPrincipal(principalType, principalID, status)
+	if err := s.accountRepo.SetStatusByPrincipal(principalType, principalID, status); err != nil {
+		return err
+	}
+
+	if err := s.producer.Publish(ctx, kafkamsg.TopicAuthAccountStatusChanged, kafkamsg.AuthAccountStatusChangedMessage{
+		PrincipalType: principalType,
+		PrincipalID:   principalID,
+		Status:        string(status),
+	}); err != nil {
+		log.Printf("warn: failed to publish account status changed event for %s/%d: %v", principalType, principalID, err)
+	}
+	return nil
 }
 
 // GetAccountStatus returns the status string and active bool for a given principal.
