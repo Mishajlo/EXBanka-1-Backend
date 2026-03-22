@@ -92,6 +92,7 @@ func main() {
 		"client.created",
 		"notification.send-email",
 		kafkamsg.TopicAuthAccountStatusChanged,
+		kafkamsg.TopicAuthDeadLetter,
 	)
 
 	// Start Kafka consumer for employee-created events
