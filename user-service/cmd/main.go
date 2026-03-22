@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -88,7 +89,7 @@ func main() {
 	limitCron := service.NewLimitCronService(employeeLimitRepo)
 	limitCron.Start()
 
-	if err := seedAdminUser(repo, roleSvc); err != nil {
+	if err := seedAdminUser(empService); err != nil {
 		log.Printf("warn: seed admin user: %v", err)
 	}
 
@@ -123,8 +124,8 @@ func main() {
 	log.Println("Server stopped")
 }
 
-func seedAdminUser(repo *repository.EmployeeRepository, roleSvc *service.RoleService) error {
-	existing, _ := repo.GetByEmail("admin@exbanka.com")
+func seedAdminUser(empSvc *service.EmployeeService) error {
+	existing, _ := empSvc.GetEmployeeByEmail("admin@exbanka.com")
 	if existing != nil {
 		log.Println("Admin user already exists, skipping seed")
 		return nil
@@ -135,7 +136,7 @@ func seedAdminUser(repo *repository.EmployeeRepository, roleSvc *service.RoleSer
 		LastName:    "Admin",
 		DateOfBirth: time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC),
 		Gender:      "other",
-		Email:       "admin@exbanka.com",
+		Email:       "vlupsic11723rn@raf.rs",
 		Phone:       "+381000000000",
 		Address:     "System Account",
 		JMBG:        "0101990000000",
@@ -144,17 +145,5 @@ func seedAdminUser(repo *repository.EmployeeRepository, roleSvc *service.RoleSer
 		Department:  "IT",
 		Role:        "EmployeeAdmin",
 	}
-	if err := repo.Create(admin); err != nil {
-		return err
-	}
-
-	// Associate admin role using the many2many relationship
-	if roleSvc != nil {
-		roles, err2 := roleSvc.GetRolesByNames([]string{"EmployeeAdmin"})
-		if err2 == nil && len(roles) > 0 {
-			_ = repo.SetEmployeeRoles(admin.ID, roles)
-		}
-	}
-
-	return nil
+	return empSvc.CreateEmployee(context.Background(), admin)
 }
