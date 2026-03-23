@@ -62,7 +62,6 @@ func (h *UserGRPCHandler) CreateEmployee(ctx context.Context, req *pb.CreateEmpl
 		Username:    req.Username,
 		Position:    req.Position,
 		Department:  req.Department,
-		Role:        req.Role,
 		JMBG:        req.Jmbg,
 	}
 
@@ -115,9 +114,6 @@ func (h *UserGRPCHandler) UpdateEmployee(ctx context.Context, req *pb.UpdateEmpl
 	}
 	if req.Department != nil {
 		updates["department"] = *req.Department
-	}
-	if req.Role != nil {
-		updates["role"] = *req.Role
 	}
 	if req.Jmbg != nil {
 		updates["jmbg"] = *req.Jmbg
@@ -221,19 +217,17 @@ func (h *UserGRPCHandler) SetEmployeeAdditionalPermissions(ctx context.Context, 
 func toEmployeeResponse(emp *model.Employee, empSvc *service.EmployeeService) *pb.EmployeeResponse {
 	permissions := empSvc.ResolvePermissions(emp)
 	roleNames := extractRoleNames(emp.Roles)
-	// Fall back to legacy Role field if multi-role not yet populated
-	if len(roleNames) == 0 && emp.Role != "" {
-		roleNames = []string{emp.Role}
-	}
-	legacyRole := emp.Role
-	if len(roleNames) > 0 {
-		legacyRole = roleNames[0]
-	}
 
 	// Collect additional permission codes
 	additionalPerms := make([]string, 0, len(emp.AdditionalPermissions))
 	for _, p := range emp.AdditionalPermissions {
 		additionalPerms = append(additionalPerms, p.Code)
+	}
+
+	// Populate legacy Role field from first role for backward compat with API consumers
+	legacyRole := ""
+	if len(roleNames) > 0 {
+		legacyRole = roleNames[0]
 	}
 
 	return &pb.EmployeeResponse{

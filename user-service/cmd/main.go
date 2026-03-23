@@ -166,7 +166,6 @@ func seedAdminUser(empSvc *service.EmployeeService, authClient authpb.AuthServic
 		Username:    "admin",
 		Position:    "System Administrator",
 		Department:  "IT",
-		Role:        "EmployeeAdmin",
 	}
 	if err := empSvc.CreateEmployee(context.Background(), admin); err != nil {
 		return err

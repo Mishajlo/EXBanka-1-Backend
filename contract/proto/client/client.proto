@@ -62,7 +62,6 @@ message ClientResponse {
   string phone = 7;
   string address = 8;
   string jmbg = 9;
-  reserved 10;
   string created_at = 11;
 }
 
