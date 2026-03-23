@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -151,19 +150,8 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-// buildTaggedEmail inserts a +tag before the @ in an email address.
-// e.g. buildTaggedEmail("exbankatest@gmail.com", "admin") → "exbankatest+admin@gmail.com"
-func buildTaggedEmail(base, tag string) string {
-	at := strings.Index(base, "@")
-	if at < 0 {
-		return base
-	}
-	return base[:at] + "+" + tag + base[at:]
-}
-
 func seedAdminUser(empSvc *service.EmployeeService, authClient authpb.AuthServiceClient) error {
-	baseEmail := getEnv("TEST_EMAIL", "admin@exbanka.com")
-	adminEmail := buildTaggedEmail(baseEmail, "admin")
+	adminEmail := getEnv("ADMIN_EMAIL", "admin@exbanka.com")
 
 	existing, _ := empSvc.GetEmployeeByEmail(adminEmail)
 	if existing != nil {

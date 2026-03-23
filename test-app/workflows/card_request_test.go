@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -155,4 +156,135 @@ func TestCardRequest_EmployeeApproveAndRejectFlow(t *testing.T) {
 
 	// Account number was created successfully — log it for debugging
 	t.Logf("created account number: %s", acctNum)
+}
+
+// TestCardRequest_FullLifecycle tests the complete card request lifecycle:
+// client submits a request, employee approves it, and a card is created.
+func TestCardRequest_FullLifecycle(t *testing.T) {
+	adminClient := loginAsAdmin(t)
+
+	// Create client with funded RSD account and activate them
+	_, accountNumber, clientC := setupActivatedClient(t, adminClient)
+
+	// Client lists their requests before — should be empty or have prior requests
+	listBefore, err := clientC.GET("/api/cards/requests/me")
+	if err != nil {
+		t.Fatalf("list card requests before error: %v", err)
+	}
+	helpers.RequireStatus(t, listBefore, 200)
+
+	var requestsBefore int
+	if requests, ok := listBefore.Body["requests"]; ok {
+		raw, _ := json.Marshal(requests)
+		var arr []interface{}
+		if json.Unmarshal(raw, &arr) == nil {
+			requestsBefore = len(arr)
+		}
+	}
+
+	// Client submits a card request for their account (visa brand)
+	cardReqResp, err := clientC.POST("/api/cards/requests", map[string]interface{}{
+		"account_number": accountNumber,
+		"card_brand":     "visa",
+	})
+	if err != nil {
+		t.Fatalf("create card request error: %v", err)
+	}
+	helpers.RequireStatus(t, cardReqResp, 201)
+	cardReqID := int(helpers.GetNumberField(t, cardReqResp, "id"))
+	t.Logf("card request id: %d", cardReqID)
+
+	// Client lists their requests — verify pending request appears
+	listAfter, err := clientC.GET("/api/cards/requests/me")
+	if err != nil {
+		t.Fatalf("list card requests after error: %v", err)
+	}
+	helpers.RequireStatus(t, listAfter, 200)
+
+	var requestsAfter int
+	var foundPending bool
+	if requests, ok := listAfter.Body["requests"]; ok {
+		raw, _ := json.Marshal(requests)
+		var arr []interface{}
+		if json.Unmarshal(raw, &arr) == nil {
+			requestsAfter = len(arr)
+			for _, r := range arr {
+				if reqMap, ok := r.(map[string]interface{}); ok {
+					if id, ok := reqMap["id"].(float64); ok && int(id) == cardReqID {
+						foundPending = true
+						statusVal, _ := reqMap["status"].(string)
+						if statusVal != "pending" {
+							t.Fatalf("expected card request status pending, got %q", statusVal)
+						}
+					}
+				}
+			}
+		}
+	}
+	if requestsAfter <= requestsBefore {
+		t.Fatalf("expected more card requests after submitting one: before=%d after=%d", requestsBefore, requestsAfter)
+	}
+	if !foundPending {
+		t.Fatalf("card request %d not found in client's request list", cardReqID)
+	}
+
+	// Employee lists all requests — verify it appears
+	empListResp, err := adminClient.GET("/api/cards/requests?status=pending")
+	if err != nil {
+		t.Fatalf("employee list card requests error: %v", err)
+	}
+	helpers.RequireStatus(t, empListResp, 200)
+	helpers.RequireField(t, empListResp, "requests")
+
+	var foundInEmployeeList bool
+	if requests, ok := empListResp.Body["requests"]; ok {
+		raw, _ := json.Marshal(requests)
+		var arr []interface{}
+		if json.Unmarshal(raw, &arr) == nil {
+			for _, r := range arr {
+				if reqMap, ok := r.(map[string]interface{}); ok {
+					if id, ok := reqMap["id"].(float64); ok && int(id) == cardReqID {
+						foundInEmployeeList = true
+					}
+				}
+			}
+		}
+	}
+	if !foundInEmployeeList {
+		t.Fatalf("card request %d not found in employee's pending list", cardReqID)
+	}
+
+	// Employee approves the request
+	approveResp, err := adminClient.PUT(fmt.Sprintf("/api/cards/requests/%d/approve", cardReqID), nil)
+	if err != nil {
+		t.Fatalf("approve card request error: %v", err)
+	}
+	helpers.RequireStatus(t, approveResp, 200)
+
+	// Verify card request status is "approved"
+	status := helpers.GetStringField(t, approveResp, "status")
+	if status != "approved" {
+		t.Fatalf("expected card request status approved, got %q", status)
+	}
+
+	// Verify an actual card now exists for that account
+	cardsResp, err := adminClient.GET(fmt.Sprintf("/api/cards/account/%s", accountNumber))
+	if err != nil {
+		t.Fatalf("get cards by account error: %v", err)
+	}
+	helpers.RequireStatus(t, cardsResp, 200)
+	helpers.RequireField(t, cardsResp, "cards")
+
+	var cardCount int
+	if cards, ok := cardsResp.Body["cards"]; ok {
+		raw, _ := json.Marshal(cards)
+		var arr []interface{}
+		if json.Unmarshal(raw, &arr) == nil {
+			cardCount = len(arr)
+		}
+	}
+	if cardCount == 0 {
+		t.Fatal("expected at least one card after approving card request, got 0")
+	}
+	t.Logf("card request %d approved: %d card(s) now exist for account %s", cardReqID, cardCount, accountNumber)
 }
