@@ -68,14 +68,6 @@ func (s *AccountService) CreateAccount(account *model.Account) error {
 		}
 	}
 
-	// Check for duplicate account (same client, same kind, same currency).
-	existing, _, _ := s.repo.ListByClient(account.OwnerID, 1, 1000)
-	for _, a := range existing {
-		if a.AccountKind == account.AccountKind && a.CurrencyCode == account.CurrencyCode {
-			return fmt.Errorf("client %d already has a %s account in %s", account.OwnerID, account.AccountKind, account.CurrencyCode)
-		}
-	}
-
 	account.AccountNumber = GenerateAccountNumber(account.AccountKind)
 	account.ExpiresAt = time.Now().AddDate(5, 0, 0)
 	account.Status = "active"
