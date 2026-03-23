@@ -172,7 +172,19 @@ func (s *AccountService) UpdateBalance(accountNumber string, amount decimal.Deci
 			accountNumber, account.AvailableBalance.StringFixed(4), amount.Abs().StringFixed(4))
 	}
 
-	return s.repo.UpdateBalance(accountNumber, amount, updateAvailable)
+	if err := s.repo.UpdateBalance(accountNumber, amount, updateAvailable); err != nil {
+		return err
+	}
+
+	// Track spending for debit operations on client (non-bank) accounts.
+	if amount.IsNegative() && !account.IsBankAccount {
+		if err := s.repo.UpdateSpending(accountNumber, amount.Abs()); err != nil {
+			// Non-fatal: log but do not fail the balance update.
+			_ = err
+		}
+	}
+
+	return nil
 }
 
 func (s *AccountService) CreateBankAccount(currencyCode, accountKind, accountName string) (*model.Account, error) {
@@ -252,4 +264,9 @@ func (s *AccountService) GetBankRSDAccount() (*model.Account, error) {
 		return nil, errors.New("no bank RSD account found")
 	}
 	return &accounts[0], nil
+}
+
+// UpdateSpending increments daily_spending and monthly_spending by amount on client accounts.
+func (s *AccountService) UpdateSpending(accountNumber string, amount decimal.Decimal) error {
+	return s.repo.UpdateSpending(accountNumber, amount)
 }

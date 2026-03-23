@@ -16,9 +16,12 @@ type RateProvider interface {
 	FetchRates() (map[string][2]decimal.Decimal, error)
 }
 
-// nbsURL is the NBS exchange rate XML endpoint.
+// nbsURL is the primary NBS exchange rate XML endpoint.
 // Format: GET request returns XML with KursnaListaModWorker structure.
-const nbsURL = "https://nbs.rs/kursnaListaModworker/na498.exchange.rate.worker/exchangeRateListXml"
+const nbsURL = "https://nbs.rs/kursnaListaModWorker/na498.exchange.rate.worker/exchangeRateListXml"
+
+// nbsURLFallback is an alternative URL tried if the primary fails.
+const nbsURLFallback = "https://www.nbs.rs/kursnaListaModWorker/na498.exchange.rate.worker/exchangeRateListXml"
 
 // ExchangeRateItem maps one currency row from NBS XML.
 type ExchangeRateItem struct {
@@ -45,16 +48,38 @@ func NewClient() *Client {
 }
 
 // FetchRates returns a map of currency_code -> [buyRate, sellRate] per 1 unit in RSD.
+// It tries the primary URL first and falls back to the alternative on failure.
 func (c *Client) FetchRates() (map[string][2]decimal.Decimal, error) {
-	resp, err := c.httpClient.Get(nbsURL)
+	rates, primaryErr := c.fetchFromURL(nbsURL)
+	if primaryErr == nil && len(rates) > 0 {
+		return rates, nil
+	}
+	// Primary URL failed or returned empty; try fallback.
+	rates, fallbackErr := c.fetchFromURL(nbsURLFallback)
+	if fallbackErr != nil {
+		return nil, fmt.Errorf("NBS primary error: %v; fallback error: %w", primaryErr, fallbackErr)
+	}
+	if len(rates) == 0 {
+		return nil, fmt.Errorf("NBS returned empty exchange rate list (primary error: %v)", primaryErr)
+	}
+	return rates, nil
+}
+
+// fetchFromURL performs a single GET request to url and parses the XML response.
+func (c *Client) fetchFromURL(url string) (map[string][2]decimal.Decimal, error) {
+	resp, err := c.httpClient.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("NBS request failed: %w", err)
+		return nil, fmt.Errorf("NBS request to %s failed: %w", url, err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("NBS returned HTTP %d for %s", resp.StatusCode, url)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading NBS response: %w", err)
+		return nil, fmt.Errorf("reading NBS response from %s: %w", url, err)
 	}
 
 	return ParseRatesXML(body)
