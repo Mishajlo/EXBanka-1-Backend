@@ -95,6 +95,10 @@ func (s *EmployeeService) CreateEmployee(ctx context.Context, emp *model.Employe
 	return nil
 }
 
+func (s *EmployeeService) GetEmployeeByEmail(email string) (*model.Employee, error) {
+	return s.repo.GetByEmail(email)
+}
+
 func (s *EmployeeService) GetEmployee(id int64) (*model.Employee, error) {
 	cacheKey := "employee:id:" + strconv.FormatInt(id, 10)
 	if s.cache != nil {
