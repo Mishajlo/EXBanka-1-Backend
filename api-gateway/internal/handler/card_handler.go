@@ -239,7 +239,7 @@ func (h *CardHandler) ClientBlockCard(c *gin.Context) {
 
 	resp, err := h.cardClient.BlockCard(c.Request.Context(), &cardpb.BlockCardRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, cardToJSON(resp))
@@ -263,7 +263,7 @@ func (h *CardHandler) UnblockCard(c *gin.Context) {
 
 	resp, err := h.cardClient.UnblockCard(c.Request.Context(), &cardpb.UnblockCardRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, cardToJSON(resp))
@@ -287,7 +287,7 @@ func (h *CardHandler) DeactivateCard(c *gin.Context) {
 
 	resp, err := h.cardClient.DeactivateCard(c.Request.Context(), &cardpb.DeactivateCardRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, cardToJSON(resp))
@@ -333,7 +333,7 @@ func (h *CardHandler) CreateAuthorizedPerson(c *gin.Context) {
 		AccountId:   req.AccountID,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{
@@ -436,7 +436,7 @@ func (h *CardHandler) SetCardPin(c *gin.Context) {
 		Pin: body.Pin,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -476,7 +476,7 @@ func (h *CardHandler) VerifyCardPin(c *gin.Context) {
 		Pin: body.Pin,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)

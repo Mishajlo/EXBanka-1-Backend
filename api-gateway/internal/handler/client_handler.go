@@ -60,7 +60,7 @@ func (h *ClientHandler) CreateClient(c *gin.Context) {
 		Jmbg:        req.JMBG,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, clientToJSONWithActive(resp, false))
@@ -89,7 +89,7 @@ func (h *ClientHandler) ListClients(c *gin.Context) {
 		PageSize:    int32(pageSize),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -139,7 +139,7 @@ func (h *ClientHandler) GetClient(c *gin.Context) {
 
 	resp, err := h.clientClient.GetClient(c.Request.Context(), &clientpb.GetClientRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "client not found"})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -202,7 +202,7 @@ func (h *ClientHandler) UpdateClient(c *gin.Context) {
 
 	resp, err := h.clientClient.UpdateClient(c.Request.Context(), pbReq)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -213,7 +213,7 @@ func (h *ClientHandler) UpdateClient(c *gin.Context) {
 			Active:        *req.Active,
 		})
 		if authErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update account status"})
+			handleGRPCError(c, authErr)
 			return
 		}
 	}
@@ -266,7 +266,7 @@ func (h *ClientHandler) GetCurrentClient(c *gin.Context) {
 
 	resp, err := h.clientClient.GetClient(c.Request.Context(), &clientpb.GetClientRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "client not found"})
+		handleGRPCError(c, err)
 		return
 	}
 

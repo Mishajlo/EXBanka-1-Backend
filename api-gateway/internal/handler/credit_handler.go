@@ -100,7 +100,7 @@ func (h *CreditHandler) CreateLoanRequest(c *gin.Context) {
 		AccountNumber:    req.AccountNumber,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, loanRequestToJSON(resp))
@@ -124,7 +124,7 @@ func (h *CreditHandler) GetLoanRequest(c *gin.Context) {
 
 	resp, err := h.creditClient.GetLoanRequest(c.Request.Context(), &creditpb.GetLoanRequestReq{Id: id})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "loan request not found"})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, loanRequestToJSON(resp))
@@ -155,7 +155,7 @@ func (h *CreditHandler) ListLoanRequests(c *gin.Context) {
 		PageSize:            int32(pageSize),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -194,7 +194,7 @@ func (h *CreditHandler) ApproveLoanRequest(c *gin.Context) {
 		EmployeeId: uint64(employeeID),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, loanToJSON(resp))
@@ -218,7 +218,7 @@ func (h *CreditHandler) RejectLoanRequest(c *gin.Context) {
 
 	resp, err := h.creditClient.RejectLoanRequest(c.Request.Context(), &creditpb.RejectLoanRequestReq{RequestId: id})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, loanRequestToJSON(resp))
@@ -242,7 +242,7 @@ func (h *CreditHandler) GetLoan(c *gin.Context) {
 
 	resp, err := h.creditClient.GetLoan(c.Request.Context(), &creditpb.GetLoanReq{Id: id})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "loan not found"})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, loanToJSON(resp))
@@ -278,7 +278,7 @@ func (h *CreditHandler) ListLoansByClient(c *gin.Context) {
 		PageSize: int32(pageSize),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -317,7 +317,7 @@ func (h *CreditHandler) ListAllLoans(c *gin.Context) {
 		PageSize:            int32(pageSize),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -350,7 +350,7 @@ func (h *CreditHandler) GetInstallmentsByLoan(c *gin.Context) {
 
 	resp, err := h.creditClient.GetInstallmentsByLoan(c.Request.Context(), &creditpb.GetInstallmentsByLoanReq{LoanId: loanID})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -401,7 +401,7 @@ func (h *CreditHandler) ListLoanRequestsByClient(c *gin.Context) {
 		PageSize:       int32(pageSize),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 

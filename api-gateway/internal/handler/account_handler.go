@@ -93,7 +93,7 @@ func (h *AccountHandler) CreateAccount(c *gin.Context) {
 
 	resp, err := h.accountClient.CreateAccount(c.Request.Context(), pbReq)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -152,7 +152,7 @@ func (h *AccountHandler) ListAllAccounts(c *gin.Context) {
 		PageSize:            int32(pageSize),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -184,7 +184,7 @@ func (h *AccountHandler) GetAccount(c *gin.Context) {
 
 	resp, err := h.accountClient.GetAccount(c.Request.Context(), &accountpb.GetAccountRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, accountToJSON(resp))
@@ -205,7 +205,7 @@ func (h *AccountHandler) GetAccountByNumber(c *gin.Context) {
 		AccountNumber: accountNumber,
 	})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, accountToJSON(resp))
@@ -241,7 +241,7 @@ func (h *AccountHandler) ListAccountsByClient(c *gin.Context) {
 		PageSize: int32(pageSize),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -291,7 +291,7 @@ func (h *AccountHandler) UpdateAccountName(c *gin.Context) {
 		NewName:  req.NewName,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, accountToJSON(resp))
@@ -375,7 +375,7 @@ func (h *AccountHandler) UpdateAccountLimits(c *gin.Context) {
 	}
 	resp, err := h.accountClient.UpdateAccountLimits(c.Request.Context(), pbLimitsReq)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, accountToJSON(resp))
@@ -420,7 +420,7 @@ func (h *AccountHandler) UpdateAccountStatus(c *gin.Context) {
 		Status: status,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, accountToJSON(resp))
@@ -437,7 +437,7 @@ func (h *AccountHandler) UpdateAccountStatus(c *gin.Context) {
 func (h *AccountHandler) ListCurrencies(c *gin.Context) {
 	resp, err := h.accountClient.ListCurrencies(c.Request.Context(), &accountpb.ListCurrenciesRequest{})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -495,7 +495,7 @@ func (h *AccountHandler) CreateCompany(c *gin.Context) {
 		OwnerId:            req.OwnerID,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{
@@ -522,7 +522,7 @@ func (h *AccountHandler) CreateCompany(c *gin.Context) {
 func (h *AccountHandler) ListBankAccounts(c *gin.Context) {
 	resp, err := h.bankAccountClient.ListBankAccounts(c.Request.Context(), &accountpb.ListBankAccountsRequest{})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -558,7 +558,7 @@ func (h *AccountHandler) CreateBankAccount(c *gin.Context) {
 		AccountName:  body.AccountName,
 	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, resp)
@@ -585,7 +585,7 @@ func (h *AccountHandler) DeleteBankAccount(c *gin.Context) {
 	}
 	resp, err := h.bankAccountClient.DeleteBankAccount(c.Request.Context(), &accountpb.DeleteBankAccountRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)

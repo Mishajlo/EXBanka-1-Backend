@@ -44,7 +44,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		Password: req.Password,
 	})
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -79,7 +79,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		RefreshToken: req.RefreshToken,
 	})
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid refresh token"})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -144,7 +144,7 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		ConfirmPassword: req.ConfirmPassword,
 	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "password reset successfully"})
@@ -179,7 +179,7 @@ func (h *AuthHandler) ActivateAccount(c *gin.Context) {
 		ConfirmPassword: req.ConfirmPassword,
 	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "account activated successfully"})
