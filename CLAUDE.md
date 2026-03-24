@@ -193,6 +193,47 @@ The Notification Service has no DB; it has `internal/consumer/` for Kafka consum
   - `loan_type`: `cash`, `housing`, `auto`, `refinancing`, `student`
   - `interest_type`: `fixed`, `variable`
 
+## REST API Conventions
+
+**Route structure:**
+- `/api/me/*` — authenticated user's own resources. Ownership derived from JWT `user_id`, never from URL params. Protected by `AnyAuthMiddleware`.
+- `/api/<resource>` — general/admin/employee routes. Protected by `AuthMiddleware` + `RequirePermission`.
+- Collection filtering uses query params (`?client_id=X`, `?account_number=X`), not path segments (`/client/:id`).
+- When multiple filter params are provided on the same endpoint, return 400 — only one filter at a time.
+
+**HTTP verbs:**
+- `POST` for all state-change actions (approve, reject, block, unblock, deactivate, execute, temporary-block).
+- `PUT` only for idempotent full replacements (update employee, set permissions, set limits, update name).
+- `GET` for reads, `DELETE` for deletes.
+
+**Error handling:**
+- All error responses use the `apiError()` helper in `validation.go` — never raw `gin.H{"error": "string"}`.
+- Response format: `{"error": {"code": "...", "message": "...", "details": {...}}}` where `details` is optional.
+- HTTP status code must always match the error semantics — a 403 body never arrives with a 500 status.
+- gRPC error mapping (in `validation.go`):
+  - `InvalidArgument` → 400 `validation_error`
+  - `Unauthenticated` → 401 `unauthorized`
+  - `PermissionDenied` → 403 `forbidden`
+  - `NotFound` → 404 `not_found`
+  - `AlreadyExists` → 409 `conflict`
+  - `FailedPrecondition` → 409 `business_rule_violation`
+  - `ResourceExhausted` → 429 `rate_limited`
+  - Default → 500 `internal_error`
+- Middleware uses `abortWithError()` (local to middleware package) with the same JSON shape.
+
+**Middleware assignment:**
+- `AnyAuthMiddleware` for `/api/me/*` routes (accepts both client and employee tokens).
+- `AuthMiddleware` + `RequirePermission("...")` for employee/admin routes.
+- `ClientAuthMiddleware` is no longer routed but kept in codebase (may be useful for future client-only restrictions).
+- Public routes (auth, exchange rates) need no middleware.
+
+**When adding a new endpoint:**
+- If it's "user accesses their own resource" → add under `/api/me/*` with `AnyAuthMiddleware`.
+- If it's an employee/admin operation or general data → add under `/api/<resource>` with `AuthMiddleware`.
+- Use `apiError()` for all error responses, `handleGRPCError()` for gRPC errors.
+- Update swagger annotations, `docs/api/REST_API.md`, and `test-app` integration tests.
+- For `/api/me` handlers: create a `ListMy<Resource>` wrapper that extracts `user_id` from JWT context.
+
 ## Swagger Documentation Requirement
 
 **Every route added or changed in `api-gateway` must have up-to-date Swagger annotations.** This is a hard requirement — not optional.
