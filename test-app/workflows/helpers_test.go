@@ -103,6 +103,62 @@ func scanKafkaForActivationToken(t *testing.T, email string) string {
 	return latestToken
 }
 
+// setupActivatedClient creates a new bank client, creates a funded RSD account for them,
+// activates their account via the Kafka activation token, and returns the client's ID,
+// their account number, and an authenticated APIClient ready for use in tests.
+//
+// Uses a random email per call so repeated test runs don't collide on uniqueness constraints.
+// The account is funded with 100 000 RSD initial balance.
+func setupActivatedClient(t *testing.T, adminC *client.APIClient) (clientID int, accountNumber string, clientC *client.APIClient) {
+	t.Helper()
+
+	email := helpers.RandomEmail()
+	password := helpers.RandomPassword()
+
+	// Create client
+	createResp, err := adminC.POST("/api/clients", map[string]interface{}{
+		"first_name":    helpers.RandomName("Cli"),
+		"last_name":     helpers.RandomName("User"),
+		"date_of_birth": helpers.DateOfBirthUnix(),
+		"gender":        "other",
+		"email":         email,
+		"phone":         helpers.RandomPhone(),
+		"address":       "Helper Test St",
+		"jmbg":          helpers.RandomJMBG(),
+	})
+	if err != nil {
+		t.Fatalf("setupActivatedClient: create client: %v", err)
+	}
+	helpers.RequireStatus(t, createResp, 201)
+	clientID = int(helpers.GetNumberField(t, createResp, "id"))
+
+	// Create funded RSD account
+	acctResp, err := adminC.POST("/api/accounts", map[string]interface{}{
+		"owner_id":        clientID,
+		"account_kind":    "current",
+		"account_type":    "personal",
+		"currency_code":   "RSD",
+		"initial_balance": 100000,
+	})
+	if err != nil {
+		t.Fatalf("setupActivatedClient: create account: %v", err)
+	}
+	helpers.RequireStatus(t, acctResp, 201)
+	accountNumber = helpers.GetStringField(t, acctResp, "account_number")
+
+	// Activate via Kafka token
+	token := scanKafkaForActivationToken(t, email)
+	activateResp, err := newClient().ActivateAccount(token, password)
+	if err != nil {
+		t.Fatalf("setupActivatedClient: activate account: %v", err)
+	}
+	helpers.RequireStatus(t, activateResp, 200)
+
+	// Login as the new client
+	clientC = loginAsClient(t, email, password)
+	return clientID, accountNumber, clientC
+}
+
 // parseJSONBalance extracts a balance field that may be a JSON number (float64) or
 // a JSON string (e.g., "50000.0000" from the decimal serialisation). Returns float64.
 func parseJSONBalance(t *testing.T, m map[string]interface{}, field string) float64 {

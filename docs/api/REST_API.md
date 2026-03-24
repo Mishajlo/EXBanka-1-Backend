@@ -45,6 +45,7 @@ Access tokens expire after 15 minutes. Use the refresh token to obtain a new pai
 15. [Transfer Fees](#15-transfer-fees)
 16. [Interest Rate Tiers](#16-interest-rate-tiers)
 17. [Bank Margins](#17-bank-margins)
+18. [Card Requests](#18-card-requests)
 
 ---
 
@@ -697,23 +698,6 @@ Partially update a client record.
 | `address` | string | Residential address |
 
 **Response 200:** Updated client object
-
----
-
-### POST /api/clients/set-password
-
-Set a client's password hash (used internally during client activation flow).
-
-**Authentication:** Employee JWT + `clients.read` permission
-
-**Request Body:**
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `user_id` | uint64 | Yes | Client ID |
-| `password_hash` | string | Yes | Bcrypt password hash |
-
-**Response 200:** `{"success": true}`
 
 ---
 
@@ -3157,7 +3141,7 @@ Update the margin for a specific loan type.
 
 ---
 
-## Card Requests
+## 18. Card Requests
 
 Card requests allow clients to request a card for one of their accounts. Employees with `cards.approve` permission can approve or reject these requests.
 
