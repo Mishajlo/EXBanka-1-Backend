@@ -105,18 +105,25 @@ func (s *RoleService) SeedRolesAndPermissions() error {
 		}
 	}
 	for roleName, permCodes := range DefaultRolePermissions {
-		_, err := s.roleRepo.GetByName(roleName)
+		perms, err := s.permRepo.ListByCodes(permCodes)
 		if err != nil {
-			perms, err2 := s.permRepo.ListByCodes(permCodes)
-			if err2 != nil {
-				return err2
-			}
-			if err3 := s.roleRepo.Create(&model.Role{
+			return err
+		}
+		existing, err := s.roleRepo.GetByName(roleName)
+		if err != nil {
+			// Role doesn't exist yet — create it.
+			if err2 := s.roleRepo.Create(&model.Role{
 				Name:        roleName,
 				Description: roleName + " default role",
 				Permissions: perms,
-			}); err3 != nil {
-				return err3
+			}); err2 != nil {
+				return err2
+			}
+		} else {
+			// Role already exists — sync its permissions so new permissions
+			// added to DefaultRolePermissions take effect on restart.
+			if err2 := s.roleRepo.SetPermissions(existing.ID, perms); err2 != nil {
+				return err2
 			}
 		}
 	}

@@ -312,6 +312,7 @@ func employeeToJSONWithActive(emp *userpb.EmployeeResponse, active bool) gin.H {
 		"department":    emp.Department,
 		"active":        active,
 		"role":          emp.Role,
+		"roles":         emp.Roles,
 		"permissions":   emp.Permissions,
 	}
 }

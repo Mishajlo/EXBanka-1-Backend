@@ -68,6 +68,18 @@ func (h *UserGRPCHandler) CreateEmployee(ctx context.Context, req *pb.CreateEmpl
 	if err := h.empService.CreateEmployee(ctx, emp); err != nil {
 		return nil, status.Errorf(mapServiceError(err), "failed to create employee: %v", err)
 	}
+
+	if req.Role != "" {
+		if err := h.empService.SetEmployeeRoles(ctx, emp.ID, []string{req.Role}); err != nil {
+			return nil, status.Errorf(mapServiceError(err), "failed to assign role: %v", err)
+		}
+		// Reload employee so the response includes the assigned role/permissions.
+		updated, err := h.empService.GetEmployee(emp.ID)
+		if err == nil {
+			emp = updated
+		}
+	}
+
 	return toEmployeeResponse(emp, h.empService), nil
 }
 
