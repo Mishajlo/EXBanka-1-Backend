@@ -1,9 +1,12 @@
 package model
 
 import (
+	"errors"
+	"log"
 	"time"
 
 	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
 )
 
 // ExchangeRate stores a directional currency-pair rate.
@@ -45,12 +48,18 @@ func SeedDefaultRates(repo interface {
 		{"RSD", "AUD", 0.01420, 0.01470},
 	}
 	for _, d := range defaults {
-		if _, err := repo.GetByPair(d.from, d.to); err != nil {
-			// Record does not exist — seed it.
-			_ = repo.Upsert(d.from, d.to,
-				decimal.NewFromFloat(d.buy),
-				decimal.NewFromFloat(d.sell),
-			)
+		_, err := repo.GetByPair(d.from, d.to)
+		if err == nil {
+			continue // already exists
 		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Printf("exchange seed: skipping %s/%s — DB error: %v", d.from, d.to, err)
+			continue
+		}
+		// Record does not exist — seed it.
+		_ = repo.Upsert(d.from, d.to,
+			decimal.NewFromFloat(d.buy),
+			decimal.NewFromFloat(d.sell),
+		)
 	}
 }

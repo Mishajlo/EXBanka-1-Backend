@@ -21,16 +21,19 @@ func NewExchangeRateRepository(db *gorm.DB) *ExchangeRateRepository {
 
 func (r *ExchangeRateRepository) List() ([]model.ExchangeRate, error) {
 	var rates []model.ExchangeRate
-	return rates, r.db.Find(&rates).Error
+	if err := r.db.Find(&rates).Error; err != nil {
+		return nil, err
+	}
+	return rates, nil
 }
 
 func (r *ExchangeRateRepository) GetByPair(from, to string) (*model.ExchangeRate, error) {
 	var rate model.ExchangeRate
 	err := r.db.Where("from_currency = ? AND to_currency = ?", from, to).First(&rate).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if err != nil {
 		return nil, err
 	}
-	return &rate, err
+	return &rate, nil
 }
 
 // Upsert inserts or updates a rate pair. Version is incremented on update.
