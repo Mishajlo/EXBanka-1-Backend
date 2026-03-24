@@ -104,8 +104,8 @@ func TestFees_CreateWithMissingName(t *testing.T) {
 func TestFees_CreateWithMissingFeeValue(t *testing.T) {
 	c := loginAsAdmin(t)
 	resp, err := c.POST("/api/fees", map[string]interface{}{
-		"name":             "MissingValue",
-		"fee_type":         "percentage",
+		"name":     "MissingValue",
+		"fee_type": "percentage",
 		// "fee_value" intentionally omitted — binding:"required"
 		"transaction_type": "all",
 	})
