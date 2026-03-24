@@ -22,6 +22,7 @@ func createTestAccountForCards(t *testing.T, c *client.APIClient) (int, string) 
 	resp, err := c.POST("/api/accounts", map[string]interface{}{
 		"owner_id":      clientID,
 		"account_kind":  "current",
+		"account_type":  "personal",
 		"currency_code": "RSD",
 	})
 	if err != nil {
