@@ -64,7 +64,9 @@ func TestPayment_VerificationCodeRequired(t *testing.T) {
 }
 
 func TestPayment_KafkaEventsOnPayment(t *testing.T) {
-	t.Parallel()
+	// Not parallel: EventListener uses a fixed GroupID per topic. Running concurrently
+	// with other tests that use EventListener would cause Kafka partition rebalancing,
+	// potentially starving other listeners (e.g. TestPayment_EndToEnd's WaitForEvent).
 	// This test just verifies the Kafka listener can monitor payment topics.
 	// Full payment flow requires an authenticated client with funded accounts.
 	el := kafka.NewEventListener(cfg.KafkaBrokers)
