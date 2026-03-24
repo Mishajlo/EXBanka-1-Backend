@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,24 @@ import (
 	"github.com/exbanka/test-app/internal/client"
 	"github.com/exbanka/test-app/internal/helpers"
 )
+
+// clientEmailCounter is a package-level counter used to generate unique tagged
+// client emails of the form base+clientN@domain. Using atomic.Int32 ensures
+// parallel sub-tests do not collide on email uniqueness constraints.
+var clientEmailCounter atomic.Int32
+
+func init() {
+	// Start counter at 9 so nextClientEmail() returns +client10, +client11, etc.
+	// Slots 1–9 are reserved for hardcoded uses in payment_test.go and transfer_test.go.
+	clientEmailCounter.Store(9)
+}
+
+// nextClientEmail returns cfg.ClientEmail(n) where n is a monotonically
+// increasing integer. Each call increments the counter.
+func nextClientEmail() string {
+	n := int(clientEmailCounter.Add(1))
+	return cfg.ClientEmail(n)
+}
 
 // getAccountBalance fetches the available_balance for a single account by account number.
 // Uses GET /api/accounts/by-number/:account_number (anyAuth — employee or client token).

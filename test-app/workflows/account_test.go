@@ -22,7 +22,7 @@ func createTestClient(t *testing.T, c *client.APIClient) int {
 		"last_name":     helpers.RandomName("Client"),
 		"date_of_birth": helpers.DateOfBirthUnix(),
 		"gender":        "male",
-		"email":         helpers.RandomEmail(),
+		"email":         nextClientEmail(),
 		"phone":         helpers.RandomPhone(),
 		"address":       "Account Test St",
 		"jmbg":          helpers.RandomJMBG(),
