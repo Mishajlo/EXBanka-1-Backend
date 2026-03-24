@@ -58,6 +58,17 @@ const (
 	TopicInstallmentFailed    = "credit.installment-failed"
 )
 
+// Exchange service topics
+const (
+	TopicExchangeRatesUpdated = "exchange.rates-updated"
+)
+
+// ExchangeRatesUpdatedMessage is published after a successful rate sync.
+// Other services can consume this to invalidate caches or trigger alerts.
+type ExchangeRatesUpdatedMessage struct {
+	CurrenciesUpdated []string `json:"currencies_updated"`
+}
+
 // New email type constants
 const (
 	EmailTypeAccountCreated      = EmailType("ACCOUNT_CREATED")
