@@ -50,7 +50,7 @@ func TestTransfer_SameCurrency_EndToEnd(t *testing.T) {
 	adminClient := loginAsAdmin(t)
 
 	// Create client 1 with known email for activation
-	email1 := helpers.RandomEmail()
+	email1 := cfg.ClientEmail(3)
 	password1 := helpers.RandomPassword()
 
 	createResp1, err := adminClient.POST("/api/clients", map[string]interface{}{
@@ -69,9 +69,6 @@ func TestTransfer_SameCurrency_EndToEnd(t *testing.T) {
 	helpers.RequireStatus(t, createResp1, 201)
 	client1ID := int(helpers.GetNumberField(t, createResp1, "id"))
 
-	// Create client 2 (destination)
-	client2ID := createTestClient(t, adminClient)
-
 	// Create RSD account for client 1 with 100000 RSD
 	acct1Resp, err := adminClient.POST("/api/accounts", map[string]interface{}{
 		"owner_id":        client1ID,
@@ -86,9 +83,9 @@ func TestTransfer_SameCurrency_EndToEnd(t *testing.T) {
 	helpers.RequireStatus(t, acct1Resp, 201)
 	acctNum1 := helpers.GetStringField(t, acct1Resp, "account_number")
 
-	// Create RSD account for client 2 with 100000 RSD
+	// Create second RSD account for client 1 (transfers are same-client only)
 	acct2Resp, err := adminClient.POST("/api/accounts", map[string]interface{}{
-		"owner_id":        client2ID,
+		"owner_id":        client1ID,
 		"account_kind":    "current",
 		"account_type":    "personal",
 		"currency_code":   "RSD",
@@ -162,8 +159,8 @@ func TestTransfer_SameCurrency_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse commission %q: %v", commissionStr, err)
 	}
-	if commission <= 0 {
-		t.Fatalf("expected non-zero commission for 5000 RSD transfer, got %f", commission)
+	if commission != 0 {
+		t.Fatalf("expected zero commission for same-currency same-client transfer, got %f", commission)
 	}
 	t.Logf("transfer commission for 5000 RSD: %f", commission)
 

@@ -4305,6 +4305,55 @@ paths:
       summary: List payments by account
       tags:
       - payments
+  /api/payments/client/{client_id}:
+    get:
+      description: Returns all payments (sent or received) for all accounts belonging
+        to a client. Clients can only view their own payments.
+      parameters:
+      - description: Client ID
+        in: path
+        name: client_id
+        required: true
+        type: integer
+      - description: Page number (default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Items per page (default 20)
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List payments by client
+      tags:
+      - payments
   /api/permissions:
     get:
       description: Returns all permission codes with descriptions and categories.

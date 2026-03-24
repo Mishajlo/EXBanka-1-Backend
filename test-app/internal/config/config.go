@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 )
@@ -9,7 +10,7 @@ import (
 type Config struct {
 	GatewayURL   string
 	KafkaBrokers string
-	testEmail    string
+	BaseEmail    string // base email used to derive tagged addresses
 	Password     string
 }
 
@@ -18,24 +19,26 @@ func Load() *Config {
 	return &Config{
 		GatewayURL:   getEnv("TEST_GATEWAY_URL", "http://localhost:8080"),
 		KafkaBrokers: getEnv("TEST_KAFKA_BROKERS", "localhost:9092"),
-		testEmail:    "lsavic12123rn@raf.rs",
+		BaseEmail:    getEnv("TEST_BASE_EMAIL", "vlupsic11723rn@raf.rs"),
 		Password:     "AdminAdmin2026.!",
 	}
 }
 
-// AdminEmail returns the test email with +admin tag inserted before the @.
-// e.g. exbankatest@gmail.com → exbankatest+admin@gmail.com
+// AdminEmail returns the base email with the +admin tag.
+// e.g. vlupsic11723rn@raf.rs → vlupsic11723rn+admin@raf.rs
+// This is the address used by the seeded admin employee account.
 func (c *Config) AdminEmail() string {
-	return buildTaggedEmail(c.testEmail, "admin")
+	return buildTaggedEmail(c.BaseEmail, "admin")
 }
 
-// ClientEmail returns the test email with +client tag inserted before the @.
-// e.g. exbankatest@gmail.com → exbankatest+client@gmail.com
-func (c *Config) ClientEmail() string {
-	return buildTaggedEmail(c.testEmail, "client")
+// ClientEmail returns the base email with a numbered +clientN tag.
+// e.g. vlupsic11723rn@raf.rs + n=1 → vlupsic11723rn+client1@raf.rs
+// Use sequential numbers across tests to avoid email collisions.
+func (c *Config) ClientEmail(n int) string {
+	return buildTaggedEmail(c.BaseEmail, fmt.Sprintf("client%d", n))
 }
 
-// buildTaggedEmail inserts a +tag before the @ in an email address.
+// buildTaggedEmail inserts +tag before the @ in an email address.
 func buildTaggedEmail(base, tag string) string {
 	at := strings.Index(base, "@")
 	if at < 0 {

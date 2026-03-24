@@ -82,7 +82,7 @@ func TestPayment_EndToEnd(t *testing.T) {
 
 	// Get activation email for client A
 	// We need the client's email — re-create with known email
-	emailA := helpers.RandomEmail()
+	emailA := cfg.ClientEmail(1)
 	passwordA := helpers.RandomPassword()
 
 	createRespA, err := adminClient.POST("/api/clients", map[string]interface{}{
@@ -222,7 +222,7 @@ func TestPayment_EndToEnd(t *testing.T) {
 func TestPayment_WithFee(t *testing.T) {
 	adminClient := loginAsAdmin(t)
 
-	emailA := helpers.RandomEmail()
+	emailA := cfg.ClientEmail(2)
 	passwordA := helpers.RandomPassword()
 
 	createRespA, err := adminClient.POST("/api/clients", map[string]interface{}{

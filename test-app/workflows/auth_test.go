@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"testing"
 	"time"
@@ -72,8 +73,9 @@ func ensureAdminActivated() {
 	}
 
 	if latestToken == "" {
-		fmt.Println("[test-app] Warning: no activation token found for admin. Tests requiring admin login will fail.")
-		return
+		log.Fatalf("[test-app] FATAL: no ACTIVATION token found in Kafka for admin email %q. "+
+			"Ensure the user-service ADMIN_EMAIL env var matches cfg.AdminEmail() (%q) and "+
+			"the service has been restarted so a fresh activation token was published.", adminEmail, adminEmail)
 	}
 
 	resp, err := c.ActivateAccount(latestToken, adminPassword)

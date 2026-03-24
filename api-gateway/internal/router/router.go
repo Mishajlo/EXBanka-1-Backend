@@ -304,6 +304,7 @@ func Setup(
 			// Payments (read)
 			anyAuth.GET("/payments/:id", txHandler.GetPayment)
 			anyAuth.GET("/payments/account/:account_number", txHandler.ListPaymentsByAccount)
+			anyAuth.GET("/payments/client/:client_id", txHandler.ListPaymentsByClient)
 
 			// Transfers (read)
 			anyAuth.GET("/transfers/:id", txHandler.GetTransfer)

@@ -1570,6 +1570,62 @@ Execute a pending payment after verification. The payment must have been created
 
 ---
 
+### GET /api/payments/client/:client_id
+
+Returns all payments where any of the client's accounts appears as sender or recipient.
+Equivalent to `GET /api/transfers/client/:client_id` but for payments.
+
+**Authentication:** Required (employee or client; clients may only query their own `client_id`)
+
+**Path parameters:**
+
+| Parameter   | Type    | Description |
+|-------------|---------|-------------|
+| `client_id` | integer | Client ID   |
+
+**Query parameters:**
+
+| Parameter   | Type    | Default | Description             |
+|-------------|---------|---------|-------------------------|
+| `page`      | integer | 1       | Page number             |
+| `page_size` | integer | 20      | Items per page          |
+
+**Example request:**
+```
+GET /api/payments/client/42?page=1&page_size=20
+Authorization: Bearer <token>
+```
+
+**Response 200:**
+```json
+{
+  "payments": [
+    {
+      "id": 7,
+      "from_account_number": "115-0001234567-10",
+      "to_account_number": "115-0009876543-10",
+      "initial_amount": "500.0000",
+      "final_amount": "500.0000",
+      "commission": "0.0000",
+      "recipient_name": "John Doe",
+      "payment_code": "289",
+      "reference_number": "",
+      "payment_purpose": "Test",
+      "status": "completed",
+      "timestamp": "2026-03-24 10:30:00 +0000 UTC"
+    }
+  ],
+  "total": 1
+}
+```
+
+**Response 400:** `{ "error": "invalid client_id" }`
+**Response 401:** `{ "error": "not authenticated" }`
+**Response 403:** `{ "error": "forbidden" }` (client accessing another client's data)
+**Response 500:** `{ "error": "..." }`
+
+---
+
 ## 8. Transfers
 
 Transfers are inter-account currency exchanges (can be same currency or cross-currency).
@@ -1609,7 +1665,8 @@ Initiate a currency transfer between accounts.
   "final_amount": 8.53,
   "exchange_rate": 117.23,
   "commission": 0.50,
-  "timestamp": "2026-03-13T10:00:00Z"
+  "timestamp": "2026-03-13T10:00:00Z",
+  "status": "pending_verification"
 }
 ```
 
@@ -1698,7 +1755,8 @@ Execute a pending transfer after verification. The transfer must have been creat
   "final_amount": 8.53,
   "exchange_rate": 117.23,
   "commission": 0.50,
-  "timestamp": "2026-03-13T10:00:00Z"
+  "timestamp": "2026-03-13T10:00:00Z",
+  "status": "completed"
 }
 ```
 
