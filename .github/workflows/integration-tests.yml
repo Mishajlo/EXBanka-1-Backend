@@ -41,14 +41,12 @@ jobs:
             --format standard-verbose \
             -- -tags integration ./workflows/ -count=1 -timeout=20m
 
-      - name: Publish test results
-        uses: dorny/test-reporter@v1
+      - name: Upload test results artifact
+        uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: Integration Test Results
+          name: test-results
           path: test-app/test-results.xml
-          reporter: java-junit
-          fail-on-error: false
 
       - name: Stop services
         if: always()
