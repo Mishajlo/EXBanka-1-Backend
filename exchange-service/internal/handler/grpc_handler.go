@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"google.golang.org/grpc/codes"
@@ -81,6 +82,12 @@ func (h *ExchangeGRPCHandler) Convert(ctx context.Context, req *pb.ConvertReques
 	if err != nil || amount.IsNegative() || amount.IsZero() {
 		return nil, status.Errorf(codes.InvalidArgument, "amount must be a positive number, got %q", req.GetAmount())
 	}
+	if err := validateCurrency(req.GetFromCurrency()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "from_currency: %v", err)
+	}
+	if err := validateCurrency(req.GetToCurrency()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "to_currency: %v", err)
+	}
 	converted, effRate, err := h.svc.Convert(ctx, req.GetFromCurrency(), req.GetToCurrency(), amount)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -100,7 +107,7 @@ func rateToProto(r *model.ExchangeRate) *pb.RateResponse {
 		ToCurrency:   r.ToCurrency,
 		BuyRate:      r.BuyRate.StringFixed(6),
 		SellRate:     r.SellRate.StringFixed(6),
-		UpdatedAt:    r.UpdatedAt.String(),
+		UpdatedAt:    r.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
