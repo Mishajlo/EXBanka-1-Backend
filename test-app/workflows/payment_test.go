@@ -396,12 +396,12 @@ func TestPayment_ExternalPayment(t *testing.T) {
 	}
 	// External account does not exist in our system. Payment creation may be rejected (400/404/422)
 	// or may succeed if the service supports external routing (201).
-	if payResp.StatusCode != 201 && payResp.StatusCode < 400 {
-		t.Fatalf("unexpected status for external payment creation: %d: %s", payResp.StatusCode, string(payResp.RawBody))
-	}
 	if payResp.StatusCode >= 400 {
 		t.Logf("external payment rejected at creation (expected): status=%d", payResp.StatusCode)
-		return // nothing more to test
+		return
+	}
+	if payResp.StatusCode != 201 {
+		t.Fatalf("unexpected status for external payment creation: %d: %s", payResp.StatusCode, string(payResp.RawBody))
 	}
 	paymentID := int(helpers.GetNumberField(t, payResp, "id"))
 
