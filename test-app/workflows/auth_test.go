@@ -24,10 +24,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// ensureAdminActivated auto-activates the seeded admin account if it is still pending.
-// It scans the notification.send-email Kafka topic from the beginning for an ACTIVATION
-// message sent to cfg.AdminEmail(), then calls POST /api/auth/activate with the token.
-// This is safe to call on every test run — if the admin is already active, it returns immediately.
+// ensureAdminActivated bootstraps and activates the admin account if needed.
+//
+// Flow:
+//  1. Try login — if the admin is already active, return immediately.
+//  2. Call POST /api/bootstrap (with retry) to create the admin employee and trigger
+//     an ACTIVATION email onto the notification.send-email Kafka topic.
+//  3. Scan that topic (from offset 0) for the token and activate the account.
 func ensureAdminActivated() {
 	adminEmail := cfg.AdminEmail()
 	adminPassword := cfg.Password
@@ -37,7 +40,37 @@ func ensureAdminActivated() {
 		return // already active
 	}
 
-	fmt.Println("[test-app] Admin account not active — scanning Kafka for activation token...")
+	fmt.Println("[test-app] Admin not active — calling bootstrap endpoint...")
+
+	// Retry bootstrap until the API gateway and upstream services are ready.
+	deadline := time.Now().Add(3 * time.Minute)
+	bootstrapped := false
+	for time.Now().Before(deadline) {
+		resp, err := c.POST("/api/bootstrap", map[string]string{
+			"secret": cfg.BootstrapSecret,
+			"email":  adminEmail,
+		})
+		if err == nil && resp.StatusCode == 200 {
+			bootstrapped = true
+			break
+		}
+		if err == nil && resp.StatusCode == 404 {
+			log.Fatalf("[test-app] FATAL: bootstrap endpoint returned 404. " +
+				"Ensure BOOTSTRAP_SECRET is set in the api-gateway environment and " +
+				"matches the BOOTSTRAP_SECRET used by test-app (default: dev-bootstrap-secret).")
+		}
+		statusCode := 0
+		if resp != nil {
+			statusCode = resp.StatusCode
+		}
+		fmt.Printf("[test-app] bootstrap not ready yet (status=%d, err=%v), retrying in 3s...\n", statusCode, err)
+		time.Sleep(3 * time.Second)
+	}
+	if !bootstrapped {
+		log.Fatalf("[test-app] FATAL: bootstrap endpoint did not return 200 within timeout.")
+	}
+
+	fmt.Println("[test-app] Bootstrap succeeded — scanning Kafka for activation token...")
 
 	r := kafkalib.NewReader(kafkalib.ReaderConfig{
 		Brokers:     []string{cfg.KafkaBrokers},
@@ -74,8 +107,8 @@ func ensureAdminActivated() {
 
 	if latestToken == "" {
 		log.Fatalf("[test-app] FATAL: no ACTIVATION token found in Kafka for admin email %q. "+
-			"Ensure the user-service ADMIN_EMAIL env var matches cfg.AdminEmail() (%q) and "+
-			"the service has been restarted so a fresh activation token was published.", adminEmail, adminEmail)
+			"Check that auth-service received the bootstrap call and published to notification.send-email.",
+			adminEmail)
 	}
 
 	resp, err := c.ActivateAccount(latestToken, adminPassword)

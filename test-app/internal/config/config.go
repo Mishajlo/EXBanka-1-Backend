@@ -8,19 +8,21 @@ import (
 
 // Config holds test environment configuration.
 type Config struct {
-	GatewayURL   string
-	KafkaBrokers string
-	BaseEmail    string // base email used to derive tagged addresses
-	Password     string
+	GatewayURL      string
+	KafkaBrokers    string
+	BaseEmail       string // base email used to derive tagged addresses
+	Password        string
+	BootstrapSecret string
 }
 
 // Load reads configuration from environment variables with defaults.
 func Load() *Config {
 	return &Config{
-		GatewayURL:   getEnv("TEST_GATEWAY_URL", "http://localhost:8080"),
-		KafkaBrokers: getEnv("TEST_KAFKA_BROKERS", "localhost:9092"),
-		BaseEmail:    getEnv("TEST_BASE_EMAIL", "vlupsic11723rn@raf.rs"),
-		Password:     "AdminAdmin2026.!",
+		GatewayURL:      getEnv("TEST_GATEWAY_URL", "http://localhost:8080"),
+		KafkaBrokers:    getEnv("TEST_KAFKA_BROKERS", "localhost:9092"),
+		BaseEmail:       getEnv("TEST_BASE_EMAIL", "lsavic12123rn@raf.rs"),
+		Password:        "AdminAdmin2026!.",
+		BootstrapSecret: getEnv("BOOTSTRAP_SECRET", "dev-bootstrap-secret"),
 	}
 }
 
