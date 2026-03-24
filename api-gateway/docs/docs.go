@@ -95,6 +95,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Creates a new bank account for a client. Requires accounts.create permission.",
                 "consumes": [
                     "application/json"
                 ],
@@ -338,6 +339,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Updates the daily/monthly/transfer limits for a bank account. Requires accounts.update permission.",
                 "consumes": [
                     "application/json"
                 ],
@@ -411,6 +413,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Updates the display name of a bank account. Requires accounts.update permission.",
                 "consumes": [
                     "application/json"
                 ],
@@ -484,6 +487,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Updates the active/inactive status of a bank account. Requires accounts.update permission.",
                 "consumes": [
                     "application/json"
                 ],
@@ -842,7 +846,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns all bank-owned accounts (admin only)",
+                "description": "Returns all bank-owned accounts. Requires bank-accounts.manage permission.",
                 "produces": [
                     "application/json"
                 ],
@@ -884,7 +888,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates a bank-owned account for fee collection (admin only)",
+                "description": "Creates a bank-owned account for fee collection. Requires bank-accounts.manage permission.",
                 "consumes": [
                     "application/json"
                 ],
@@ -951,7 +955,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deletes a bank-owned account. Fails if it's the last RSD or last foreign currency bank account.",
+                "description": "Deletes a bank-owned account. Requires bank-accounts.manage permission. Fails if it's the last RSD or last foreign currency bank account.",
                 "produces": [
                     "application/json"
                 ],
@@ -1022,6 +1026,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Returns all bank margin configurations for variable-rate loans. Requires interest-rates.manage permission.",
                 "produces": [
                     "application/json"
                 ],
@@ -1065,6 +1070,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Updates the bank margin for a loan tier. Requires interest-rates.manage permission.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1147,6 +1153,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Issues a new physical card for a client or authorized person. Requires cards.create permission.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1385,6 +1392,463 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/cards/requests": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns all card requests, optionally filtered by status. Requires employee authentication with cards.approve permission.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "card-requests"
+                ],
+                "summary": "List all card requests",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by status (pending, approved, rejected)",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page number (default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 20)",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "list of card requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ClientBearerAuth": []
+                    }
+                ],
+                "description": "Client submits a request to get a card for one of their accounts. Requires client authentication.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "card-requests"
+                ],
+                "summary": "Create a card request",
+                "parameters": [
+                    {
+                        "description": "Card request details",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.createCardRequestBody"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "created card request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid input",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/cards/requests/me": {
+            "get": {
+                "security": [
+                    {
+                        "ClientBearerAuth": []
+                    }
+                ],
+                "description": "Returns all card requests for the authenticated client.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "card-requests"
+                ],
+                "summary": "List my card requests",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page number (default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 20)",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "list of card requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/cards/requests/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns a single card request by ID. Accessible by both employees and the owning client.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "card-requests"
+                ],
+                "summary": "Get a card request by ID",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Card Request ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "card request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/cards/requests/{id}/approve": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Employee approves a pending card request, which creates the card. Requires cards.approve permission.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "card-requests"
+                ],
+                "summary": "Approve a card request",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Card Request ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "approved request and created card",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "already processed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/cards/requests/{id}/reject": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Employee rejects a pending card request with a reason. Requires cards.approve permission.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "card-requests"
+                ],
+                "summary": "Reject a card request",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Card Request ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rejection reason",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.rejectCardRequestBody"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "rejected request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid input",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "already processed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/cards/virtual": {
             "post": {
                 "security": [
@@ -1511,7 +1975,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Blocks a card. Employees with cards.manage permission can block any card. Clients can block their own cards via the client-authenticated endpoint.",
+                "description": "Blocks a card. Employees with cards.update permission can block any card. Clients can block their own cards via the client-authenticated endpoint.",
                 "produces": [
                     "application/json"
                 ],
@@ -1591,6 +2055,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Permanently deactivates a card. Requires cards.update permission.",
                 "produces": [
                     "application/json"
                 ],
@@ -1800,6 +2265,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Unblocks a previously blocked card. Requires cards.update permission.",
                 "produces": [
                     "application/json"
                 ],
@@ -1993,6 +2459,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Creates a new bank client with login credentials. Requires clients.create permission.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2152,6 +2619,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Updates client profile information. Requires clients.update permission.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3202,7 +3670,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns all configurable fee rules (admin only)",
+                "description": "Returns all configurable fee rules. Requires fees.manage permission.",
                 "produces": [
                     "application/json"
                 ],
@@ -3244,7 +3712,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates a new configurable fee rule (admin only)",
+                "description": "Creates a new configurable fee rule. Requires fees.manage permission.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3311,7 +3779,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Updates an existing fee rule (admin only)",
+                "description": "Updates an existing fee rule. Requires fees.manage permission.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3392,7 +3860,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deactivates a fee rule (admin only). Cannot be undone except via update.",
+                "description": "Deactivates a fee rule. Requires fees.manage permission. Cannot be undone except via update.",
                 "produces": [
                     "application/json"
                 ],
@@ -3454,6 +3922,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Returns all interest rate tier configurations. Requires interest-rates.manage permission.",
                 "produces": [
                     "application/json"
                 ],
@@ -3495,6 +3964,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Creates a new interest rate tier. Requires interest-rates.manage permission.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3561,6 +4031,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Updates an existing interest rate tier. Requires interest-rates.manage permission.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3641,6 +4112,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Deletes an interest rate tier. Requires interest-rates.manage permission.",
                 "produces": [
                     "application/json"
                 ],
@@ -3711,6 +4183,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Recalculates interest for all variable-rate loans using a given tier. Requires interest-rates.manage permission.",
                 "produces": [
                     "application/json"
                 ],
@@ -4038,6 +4511,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Returns all loan requests with optional filters. Requires credits.read permission.",
                 "produces": [
                     "application/json"
                 ],
@@ -4259,6 +4733,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Returns a single loan request. Requires credits.read permission.",
                 "produces": [
                     "application/json"
                 ],
@@ -4311,6 +4786,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Approves a pending loan request and creates the loan. Requires credits.approve permission.",
                 "produces": [
                     "application/json"
                 ],
@@ -4363,6 +4839,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Rejects a pending loan request. Requires credits.approve permission.",
                 "produces": [
                     "application/json"
                 ],
@@ -5955,6 +6432,31 @@ const docTemplate = `{
                 }
             }
         },
+        "handler.createCardRequestBody": {
+            "type": "object",
+            "required": [
+                "account_number",
+                "card_brand"
+            ],
+            "properties": {
+                "account_number": {
+                    "type": "string",
+                    "example": "265-0000000001-00"
+                },
+                "card_brand": {
+                    "type": "string",
+                    "example": "visa"
+                },
+                "card_name": {
+                    "type": "string",
+                    "example": "My Visa Card"
+                },
+                "card_type": {
+                    "type": "string",
+                    "example": "debit"
+                }
+            }
+        },
         "handler.createClientRequest": {
             "type": "object",
             "required": [
@@ -6431,6 +6933,18 @@ const docTemplate = `{
             "properties": {
                 "refresh_token": {
                     "type": "string"
+                }
+            }
+        },
+        "handler.rejectCardRequestBody": {
+            "type": "object",
+            "required": [
+                "reason"
+            ],
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "example": "Insufficient account history"
                 }
             }
         },

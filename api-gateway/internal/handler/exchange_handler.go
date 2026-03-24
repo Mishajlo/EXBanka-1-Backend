@@ -25,7 +25,7 @@ func NewExchangeHandler(txClient transactionpb.TransactionServiceClient) *Exchan
 func (h *ExchangeHandler) ListExchangeRates(c *gin.Context) {
 	resp, err := h.txClient.ListExchangeRates(c.Request.Context(), &transactionpb.ListExchangeRatesRequest{})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -53,7 +53,7 @@ func (h *ExchangeHandler) GetExchangeRate(c *gin.Context) {
 		ToCurrency:   to,
 	})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "exchange rate not found"})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, exchangeRateToJSON(resp))

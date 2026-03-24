@@ -50,16 +50,6 @@ func (s *EmployeeService) ResolvePermissions(emp *model.Employee) []string {
 }
 
 func (s *EmployeeService) CreateEmployee(ctx context.Context, emp *model.Employee) error {
-	// Validate role name: check DB if roleSvc available, fall back to legacy map check
-	if s.roleSvc != nil {
-		if emp.Role != "" && !s.roleSvc.ValidRole(emp.Role) {
-			return errors.New("invalid role")
-		}
-	} else {
-		if !validRoleLegacy(emp.Role) {
-			return errors.New("invalid role")
-		}
-	}
 	if err := ValidateJMBG(emp.JMBG); err != nil {
 		return err
 	}
@@ -68,17 +58,7 @@ func (s *EmployeeService) CreateEmployee(ctx context.Context, emp *model.Employe
 		return fmt.Errorf("create employee: %w", err)
 	}
 
-	// Associate role with the employee via the new many2many relationship
-	if s.roleSvc != nil && emp.Role != "" {
-		if err := s.repo.SetEmployeeRoles(emp.ID, []model.Role{{Name: emp.Role}}); err != nil {
-			log.Printf("warn: failed to set employee roles after create: %v", err)
-		}
-	}
-
 	roleNames := extractRoleNames(emp.Roles)
-	if len(roleNames) == 0 && emp.Role != "" {
-		roleNames = []string{emp.Role}
-	}
 
 	if s.producer != nil {
 		if err := s.producer.PublishEmployeeCreated(ctx, kafkamsg.EmployeeCreatedMessage{
@@ -129,24 +109,6 @@ func (s *EmployeeService) UpdateEmployee(ctx context.Context, id int64, updates 
 		return nil, err
 	}
 
-	if role, ok := updates["role"].(string); ok {
-		if s.roleSvc != nil {
-			if !s.roleSvc.ValidRole(role) {
-				return nil, errors.New("invalid role")
-			}
-		} else {
-			if !validRoleLegacy(role) {
-				return nil, errors.New("invalid role")
-			}
-		}
-		emp.Role = role
-		// Also update many2many role association
-		if s.roleSvc != nil {
-			if err := s.repo.SetEmployeeRoles(id, []model.Role{{Name: role}}); err != nil {
-				log.Printf("warn: failed to update employee roles: %v", err)
-			}
-		}
-	}
 	if v, ok := updates["last_name"].(string); ok {
 		emp.LastName = v
 	}
@@ -181,9 +143,6 @@ func (s *EmployeeService) UpdateEmployee(ctx context.Context, id int64, updates 
 	}
 
 	roleNames := extractRoleNames(emp.Roles)
-	if len(roleNames) == 0 && emp.Role != "" {
-		roleNames = []string{emp.Role}
-	}
 
 	if s.producer != nil {
 		if err := s.producer.PublishEmployeeUpdated(ctx, kafkamsg.EmployeeCreatedMessage{
@@ -290,17 +249,6 @@ func ValidatePassword(password string) error {
 func HashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	return string(bytes), err
-}
-
-// validRoleLegacy is a fallback role check using the static map (used when roleSvc is nil in tests).
-func validRoleLegacy(role string) bool {
-	validRoles := map[string]bool{
-		"EmployeeBasic":      true,
-		"EmployeeAgent":      true,
-		"EmployeeSupervisor": true,
-		"EmployeeAdmin":      true,
-	}
-	return validRoles[role]
 }
 
 func extractRoleNames(roles []model.Role) []string {

@@ -82,7 +82,7 @@ func (h *LimitHandler) GetEmployeeLimits(c *gin.Context) {
 		EmployeeId: id,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -124,7 +124,7 @@ func (h *LimitHandler) SetEmployeeLimits(c *gin.Context) {
 		MaxClientMonthlyLimit: body.MaxClientMonthlyLimit,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -162,7 +162,7 @@ func (h *LimitHandler) ApplyLimitTemplate(c *gin.Context) {
 		TemplateName: body.TemplateName,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -181,7 +181,7 @@ func (h *LimitHandler) ApplyLimitTemplate(c *gin.Context) {
 func (h *LimitHandler) ListLimitTemplates(c *gin.Context) {
 	resp, err := h.empLimitClient.ListLimitTemplates(c.Request.Context(), &userpb.ListLimitTemplatesRequest{})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -217,7 +217,7 @@ func (h *LimitHandler) CreateLimitTemplate(c *gin.Context) {
 		MaxClientMonthlyLimit: body.MaxClientMonthlyLimit,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, resp)
@@ -246,7 +246,7 @@ func (h *LimitHandler) GetClientLimits(c *gin.Context) {
 		ClientId: id,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -290,7 +290,7 @@ func (h *LimitHandler) SetClientLimits(c *gin.Context) {
 		SetByEmployee: empID,
 	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)

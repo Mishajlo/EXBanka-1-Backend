@@ -15,7 +15,6 @@ type Employee struct {
 	Username              string       `gorm:"uniqueIndex;not null" json:"username"`
 	Position              string       `json:"position"`
 	Department            string       `json:"department"`
-	Role                  string       `gorm:"size:50;default:'EmployeeBasic'" json:"role"` // DEPRECATED — kept for backwards compat
 	Roles                 []Role       `gorm:"many2many:employee_roles;" json:"roles"`
 	AdditionalPermissions []Permission `gorm:"many2many:employee_additional_permissions;" json:"additional_permissions,omitempty"`
 	CreatedAt             time.Time    `json:"created_at"`

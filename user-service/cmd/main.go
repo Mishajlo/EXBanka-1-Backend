@@ -127,7 +127,7 @@ func main() {
 	// Seed admin in background so user-service is not blocked waiting for
 	// auth-service to become ready (auth-service starts after user-service).
 	go func() {
-		if err := seedAdminUser(empService, authClient); err != nil {
+		if err := seedAdminUser(empService, roleSvc, authClient); err != nil {
 			log.Printf("warn: seed admin user: %v", err)
 		}
 	}()
@@ -142,12 +142,24 @@ func main() {
 	log.Println("Server stopped")
 }
 
-func seedAdminUser(empSvc *service.EmployeeService, authClient authpb.AuthServiceClient) error {
-	existing, _ := empSvc.GetEmployeeByEmail("vlupsic11723rn@raf.rs")
+// getEnv returns the value of an environment variable or a fallback default.
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func seedAdminUser(empSvc *service.EmployeeService, roleSvc *service.RoleService, authClient authpb.AuthServiceClient) error {
+	adminEmail := getEnv("ADMIN_EMAIL", "admin@exbanka.com")
+
+	existing, _ := empSvc.GetEmployeeByEmail(adminEmail)
 	if existing != nil {
 		log.Println("Admin user already exists, skipping seed")
-		// Still ensure the auth account exists in case a previous run failed
-		// to register it (e.g. auth-service was down).
+		// Ensure EmployeeAdmin role is assigned even if a previous run missed it.
+		if err := empSvc.SetEmployeeRoles(context.Background(), existing.ID, []string{"EmployeeAdmin"}); err != nil {
+			log.Printf("warn: assign EmployeeAdmin role to existing admin: %v", err)
+		}
 		if authClient != nil {
 			ensureAuthAccount(authClient, existing.ID, existing.Email, existing.FirstName, "employee")
 		}
@@ -159,17 +171,20 @@ func seedAdminUser(empSvc *service.EmployeeService, authClient authpb.AuthServic
 		LastName:    "Admin",
 		DateOfBirth: time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC),
 		Gender:      "other",
-		Email:       "vlupsic11723rn@raf.rs",
+		Email:       adminEmail,
 		Phone:       "+381000000000",
 		Address:     "System Account",
 		JMBG:        "0101990000000",
 		Username:    "admin",
 		Position:    "System Administrator",
 		Department:  "IT",
-		Role:        "EmployeeAdmin",
 	}
 	if err := empSvc.CreateEmployee(context.Background(), admin); err != nil {
 		return err
+	}
+
+	if err := empSvc.SetEmployeeRoles(context.Background(), admin.ID, []string{"EmployeeAdmin"}); err != nil {
+		log.Printf("warn: assign EmployeeAdmin role to admin: %v", err)
 	}
 
 	if authClient != nil {

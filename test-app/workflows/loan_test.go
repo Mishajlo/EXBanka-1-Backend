@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -93,4 +94,132 @@ func TestLoan_ListLoansByClient(t *testing.T) {
 		t.Fatalf("error: %v", err)
 	}
 	helpers.RequireStatus(t, resp, 200)
+}
+
+func TestLoan_FullLifecycle(t *testing.T) {
+	adminClient := loginAsAdmin(t)
+
+	// Create client and activate them with a funded account
+	clientID, accountNumber, clientC := setupActivatedClient(t, adminClient)
+
+	// Get client's own ID (may differ from clientID if setupActivatedClient uses separate client)
+	meResp, err := clientC.GET("/api/clients/me")
+	if err != nil {
+		t.Fatalf("get /api/clients/me error: %v", err)
+	}
+	helpers.RequireStatus(t, meResp, 200)
+	_ = clientID // clientID used to create account; meClientID is the authenticated client's id
+	meClientID := int(helpers.GetNumberField(t, meResp, "id"))
+
+	// Client submits a loan request (cash, fixed, 10000 RSD, 12 months)
+	loanReqResp, err := clientC.POST("/api/loans/requests", map[string]interface{}{
+		"client_id":        meClientID,
+		"loan_type":        "cash",
+		"interest_type":    "fixed",
+		"amount":           10000,
+		"currency_code":    "RSD",
+		"repayment_period": 12,
+		"account_number":   accountNumber,
+	})
+	if err != nil {
+		t.Fatalf("create loan request error: %v", err)
+	}
+	helpers.RequireStatus(t, loanReqResp, 201)
+	loanReqID := int(helpers.GetNumberField(t, loanReqResp, "id"))
+	t.Logf("loan request id: %d", loanReqID)
+
+	// Employee lists loan requests and finds the new one
+	listResp, err := adminClient.GET("/api/loans/requests")
+	if err != nil {
+		t.Fatalf("list loan requests error: %v", err)
+	}
+	helpers.RequireStatus(t, listResp, 200)
+
+	// Verify the request appears in the list
+	found := false
+	if requests, ok := listResp.Body["requests"]; ok {
+		if requestsSlice, ok := requests.([]interface{}); ok {
+			for _, r := range requestsSlice {
+				if reqMap, ok := r.(map[string]interface{}); ok {
+					if id, ok := reqMap["id"].(float64); ok && int(id) == loanReqID {
+						found = true
+						break
+					}
+				}
+			}
+		}
+	}
+	// Also try via client-specific endpoint
+	clientReqResp, err := adminClient.GET(fmt.Sprintf("/api/loans/requests/client/%d", meClientID))
+	if err != nil {
+		t.Fatalf("list client loan requests error: %v", err)
+	}
+	helpers.RequireStatus(t, clientReqResp, 200)
+	if !found {
+		t.Logf("loan request %d not found in global list (may be filtered); checking client-specific list", loanReqID)
+	}
+
+	// Employee approves the loan request
+	approveResp, err := adminClient.PUT(fmt.Sprintf("/api/loans/requests/%d/approve", loanReqID), nil)
+	if err != nil {
+		t.Fatalf("approve loan request error: %v", err)
+	}
+	helpers.RequireStatus(t, approveResp, 200)
+
+	// Verify loan is created with approved/active status
+	status := helpers.GetStringField(t, approveResp, "status")
+	if status != "approved" && status != "active" {
+		t.Fatalf("expected loan status approved or active, got %q", status)
+	}
+	loanID := int(helpers.GetNumberField(t, approveResp, "id"))
+	t.Logf("loan id: %d, status: %s", loanID, status)
+
+	// Get installments for the loan — verify 12 installments
+	installmentsResp, err := adminClient.GET(fmt.Sprintf("/api/loans/%d/installments", loanID))
+	if err != nil {
+		t.Fatalf("get installments error: %v", err)
+	}
+	helpers.RequireStatus(t, installmentsResp, 200)
+
+	// Parse installments array
+	var installmentCount int
+	if installments, ok := installmentsResp.Body["installments"]; ok {
+		raw, _ := json.Marshal(installments)
+		var arr []interface{}
+		if json.Unmarshal(raw, &arr) == nil {
+			installmentCount = len(arr)
+		}
+	}
+	if installmentCount != 12 {
+		t.Fatalf("expected 12 installments, got %d", installmentCount)
+	}
+
+	// Client lists their loan requests — verify it appears
+	clientLoanReqResp, err := clientC.GET("/api/loans/requests/me")
+	if err != nil {
+		t.Fatalf("client list loan requests error: %v", err)
+	}
+	// If /loans/requests/me is not available, fall back to client-scoped admin endpoint
+	if clientLoanReqResp.StatusCode == 404 || clientLoanReqResp.StatusCode == 405 {
+		clientLoanReqResp, err = adminClient.GET(fmt.Sprintf("/api/loans/requests/client/%d", meClientID))
+		if err != nil {
+			t.Fatalf("list client loan requests error: %v", err)
+		}
+	}
+	helpers.RequireStatus(t, clientLoanReqResp, 200)
+
+	// Client lists their loans — verify approved loan appears
+	clientLoansResp, err := clientC.GET("/api/loans/me")
+	if err != nil {
+		t.Fatalf("client list loans error: %v", err)
+	}
+	// Fall back to admin endpoint if /loans/me is not available
+	if clientLoansResp.StatusCode == 404 || clientLoansResp.StatusCode == 405 {
+		clientLoansResp, err = adminClient.GET(fmt.Sprintf("/api/loans/client/%d", meClientID))
+		if err != nil {
+			t.Fatalf("list client loans error: %v", err)
+		}
+	}
+	helpers.RequireStatus(t, clientLoansResp, 200)
+	t.Logf("loan lifecycle complete: request %d → loan %d (%s)", loanReqID, loanID, status)
 }

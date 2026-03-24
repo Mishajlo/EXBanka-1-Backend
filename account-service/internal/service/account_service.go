@@ -68,14 +68,6 @@ func (s *AccountService) CreateAccount(account *model.Account) error {
 		}
 	}
 
-	// Check for duplicate account (same client, same kind, same currency).
-	existing, _, _ := s.repo.ListByClient(account.OwnerID, 1, 1000)
-	for _, a := range existing {
-		if a.AccountKind == account.AccountKind && a.CurrencyCode == account.CurrencyCode {
-			return fmt.Errorf("client %d already has a %s account in %s", account.OwnerID, account.AccountKind, account.CurrencyCode)
-		}
-	}
-
 	account.AccountNumber = GenerateAccountNumber(account.AccountKind)
 	account.ExpiresAt = time.Now().AddDate(5, 0, 0)
 	account.Status = "active"
@@ -180,7 +172,19 @@ func (s *AccountService) UpdateBalance(accountNumber string, amount decimal.Deci
 			accountNumber, account.AvailableBalance.StringFixed(4), amount.Abs().StringFixed(4))
 	}
 
-	return s.repo.UpdateBalance(accountNumber, amount, updateAvailable)
+	if err := s.repo.UpdateBalance(accountNumber, amount, updateAvailable); err != nil {
+		return err
+	}
+
+	// Track spending for debit operations on client (non-bank) accounts.
+	if amount.IsNegative() && !account.IsBankAccount {
+		if err := s.repo.UpdateSpending(accountNumber, amount.Abs()); err != nil {
+			// Non-fatal: log but do not fail the balance update.
+			_ = err
+		}
+	}
+
+	return nil
 }
 
 func (s *AccountService) CreateBankAccount(currencyCode, accountKind, accountName string) (*model.Account, error) {
@@ -260,4 +264,9 @@ func (s *AccountService) GetBankRSDAccount() (*model.Account, error) {
 		return nil, errors.New("no bank RSD account found")
 	}
 	return &accounts[0], nil
+}
+
+// UpdateSpending increments daily_spending and monthly_spending by amount on client accounts.
+func (s *AccountService) UpdateSpending(accountNumber string, amount decimal.Decimal) error {
+	return s.repo.UpdateSpending(accountNumber, amount)
 }

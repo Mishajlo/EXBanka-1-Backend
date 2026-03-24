@@ -47,7 +47,7 @@ func (h *EmployeeHandler) ListEmployees(c *gin.Context) {
 		PageSize:       int32(pageSize),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list employees"})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -99,7 +99,7 @@ func (h *EmployeeHandler) GetEmployee(c *gin.Context) {
 
 	resp, err := h.userClient.GetEmployee(c.Request.Context(), &userpb.GetEmployeeRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "employee not found"})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -165,7 +165,7 @@ func (h *EmployeeHandler) CreateEmployee(c *gin.Context) {
 		Role:        req.Role,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -210,7 +210,7 @@ func (h *EmployeeHandler) UpdateEmployee(c *gin.Context) {
 	// Admins can only edit non-admin employees
 	target, err := h.userClient.GetEmployee(c.Request.Context(), &userpb.GetEmployeeRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "employee not found"})
+		handleGRPCError(c, err)
 		return
 	}
 	if target.Role == "EmployeeAdmin" {
@@ -258,7 +258,7 @@ func (h *EmployeeHandler) UpdateEmployee(c *gin.Context) {
 
 		resp, err = h.userClient.UpdateEmployee(c.Request.Context(), pbReq)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			handleGRPCError(c, err)
 			return
 		}
 	} else {
@@ -266,7 +266,7 @@ func (h *EmployeeHandler) UpdateEmployee(c *gin.Context) {
 		var fetchErr error
 		resp, fetchErr = h.userClient.GetEmployee(c.Request.Context(), &userpb.GetEmployeeRequest{Id: id})
 		if fetchErr != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "employee not found"})
+			handleGRPCError(c, fetchErr)
 			return
 		}
 	}
@@ -278,7 +278,7 @@ func (h *EmployeeHandler) UpdateEmployee(c *gin.Context) {
 			Active:        *req.Active,
 		})
 		if authErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update account status"})
+			handleGRPCError(c, authErr)
 			return
 		}
 	}
@@ -312,6 +312,7 @@ func employeeToJSONWithActive(emp *userpb.EmployeeResponse, active bool) gin.H {
 		"department":    emp.Department,
 		"active":        active,
 		"role":          emp.Role,
+		"roles":         emp.Roles,
 		"permissions":   emp.Permissions,
 	}
 }

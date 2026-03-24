@@ -31,7 +31,7 @@ func NewRoleHandler(userClient userpb.UserServiceClient) *RoleHandler {
 func (h *RoleHandler) ListRoles(c *gin.Context) {
 	resp, err := h.userClient.ListRoles(c.Request.Context(), &userpb.ListRolesRequest{})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list roles"})
+		handleGRPCError(c, err)
 		return
 	}
 	roles := make([]gin.H, 0, len(resp.Roles))
@@ -62,7 +62,7 @@ func (h *RoleHandler) GetRole(c *gin.Context) {
 	}
 	resp, err := h.userClient.GetRole(c.Request.Context(), &userpb.GetRoleRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "role not found"})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, roleToJSON(resp))
@@ -100,7 +100,7 @@ func (h *RoleHandler) CreateRole(c *gin.Context) {
 		PermissionCodes: req.PermissionCodes,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, roleToJSON(resp))
@@ -141,7 +141,7 @@ func (h *RoleHandler) UpdateRolePermissions(c *gin.Context) {
 		PermissionCodes: req.PermissionCodes,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, roleToJSON(resp))
@@ -161,7 +161,7 @@ func (h *RoleHandler) UpdateRolePermissions(c *gin.Context) {
 func (h *RoleHandler) ListPermissions(c *gin.Context) {
 	resp, err := h.userClient.ListPermissions(c.Request.Context(), &userpb.ListPermissionsRequest{})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list permissions"})
+		handleGRPCError(c, err)
 		return
 	}
 	perms := make([]gin.H, 0, len(resp.Permissions))
@@ -212,7 +212,7 @@ func (h *RoleHandler) SetEmployeeRoles(c *gin.Context) {
 		RoleNames:  req.RoleNames,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, employeeToJSONWithActive(resp, false))
@@ -254,7 +254,7 @@ func (h *RoleHandler) SetEmployeeAdditionalPermissions(c *gin.Context) {
 		PermissionCodes: req.PermissionCodes,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, employeeToJSONWithActive(resp, false))

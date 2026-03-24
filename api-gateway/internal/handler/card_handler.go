@@ -12,10 +12,11 @@ import (
 type CardHandler struct {
 	cardClient        cardpb.CardServiceClient
 	virtualCardClient cardpb.VirtualCardServiceClient
+	cardRequestClient cardpb.CardRequestServiceClient
 }
 
-func NewCardHandler(cardClient cardpb.CardServiceClient, virtualCardClient cardpb.VirtualCardServiceClient) *CardHandler {
-	return &CardHandler{cardClient: cardClient, virtualCardClient: virtualCardClient}
+func NewCardHandler(cardClient cardpb.CardServiceClient, virtualCardClient cardpb.VirtualCardServiceClient, cardRequestClient cardpb.CardRequestServiceClient) *CardHandler {
+	return &CardHandler{cardClient: cardClient, virtualCardClient: virtualCardClient, cardRequestClient: cardRequestClient}
 }
 
 // createVirtualCardBody is the swagger body for creating a virtual card.
@@ -53,6 +54,7 @@ type createCardRequest struct {
 }
 
 // @Summary      Issue a card
+// @Description  Issues a new physical card for a client or authorized person. Requires cards.create permission.
 // @Tags         cards
 // @Accept       json
 // @Produce      json
@@ -90,7 +92,7 @@ func (h *CardHandler) CreateCard(c *gin.Context) {
 		CardBrand:     cardBrand,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, cardToJSON(resp))
@@ -114,7 +116,7 @@ func (h *CardHandler) GetCard(c *gin.Context) {
 
 	resp, err := h.cardClient.GetCard(c.Request.Context(), &cardpb.GetCardRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "card not found"})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, cardToJSON(resp))
@@ -135,7 +137,7 @@ func (h *CardHandler) ListCardsByAccount(c *gin.Context) {
 		AccountNumber: accountNumber,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -170,7 +172,7 @@ func (h *CardHandler) ListCardsByClient(c *gin.Context) {
 		ClientId: clientID,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -183,7 +185,7 @@ func (h *CardHandler) ListCardsByClient(c *gin.Context) {
 
 // BlockCard godoc
 // @Summary      Block a card
-// @Description  Blocks a card. Employees with cards.manage permission can block any card. Clients can block their own cards via the client-authenticated endpoint.
+// @Description  Blocks a card. Employees with cards.update permission can block any card. Clients can block their own cards via the client-authenticated endpoint.
 // @Tags         cards
 // @Produce      json
 // @Param        id   path  int  true  "Card ID"
@@ -204,7 +206,7 @@ func (h *CardHandler) BlockCard(c *gin.Context) {
 
 	resp, err := h.cardClient.BlockCard(c.Request.Context(), &cardpb.BlockCardRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, cardToJSON(resp))
@@ -224,7 +226,7 @@ func (h *CardHandler) ClientBlockCard(c *gin.Context) {
 	// Fetch the card to verify ownership
 	card, err := h.cardClient.GetCard(c.Request.Context(), &cardpb.GetCardRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "card not found"})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -238,13 +240,14 @@ func (h *CardHandler) ClientBlockCard(c *gin.Context) {
 
 	resp, err := h.cardClient.BlockCard(c.Request.Context(), &cardpb.BlockCardRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, cardToJSON(resp))
 }
 
 // @Summary      Unblock a card
+// @Description  Unblocks a previously blocked card. Requires cards.update permission.
 // @Tags         cards
 // @Produce      json
 // @Param        id   path  int  true  "Card ID"
@@ -262,13 +265,14 @@ func (h *CardHandler) UnblockCard(c *gin.Context) {
 
 	resp, err := h.cardClient.UnblockCard(c.Request.Context(), &cardpb.UnblockCardRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, cardToJSON(resp))
 }
 
 // @Summary      Deactivate a card
+// @Description  Permanently deactivates a card. Requires cards.update permission.
 // @Tags         cards
 // @Produce      json
 // @Param        id   path  int  true  "Card ID"
@@ -286,7 +290,7 @@ func (h *CardHandler) DeactivateCard(c *gin.Context) {
 
 	resp, err := h.cardClient.DeactivateCard(c.Request.Context(), &cardpb.DeactivateCardRequest{Id: id})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, cardToJSON(resp))
@@ -332,7 +336,7 @@ func (h *CardHandler) CreateAuthorizedPerson(c *gin.Context) {
 		AccountId:   req.AccountID,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{
@@ -435,7 +439,7 @@ func (h *CardHandler) SetCardPin(c *gin.Context) {
 		Pin: body.Pin,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -475,7 +479,7 @@ func (h *CardHandler) VerifyCardPin(c *gin.Context) {
 		Pin: body.Pin,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -523,6 +527,283 @@ func (h *CardHandler) TemporaryBlockCard(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// createCardRequestBody is the request body for creating a card request.
+type createCardRequestBody struct {
+	AccountNumber string `json:"account_number" binding:"required" example:"265-0000000001-00"`
+	CardBrand     string `json:"card_brand" binding:"required" example:"visa"`
+	CardType      string `json:"card_type" example:"debit"`
+	CardName      string `json:"card_name" example:"My Visa Card"`
+}
+
+// rejectCardRequestBody is the request body for rejecting a card request.
+type rejectCardRequestBody struct {
+	Reason string `json:"reason" binding:"required" example:"Insufficient account history"`
+}
+
+// CreateCardRequest godoc
+// @Summary      Create a card request
+// @Description  Client submits a request to get a card for one of their accounts. Requires client authentication.
+// @Tags         card-requests
+// @Accept       json
+// @Produce      json
+// @Param        body  body  createCardRequestBody  true  "Card request details"
+// @Security     ClientBearerAuth
+// @Success      201  {object}  map[string]interface{}  "created card request"
+// @Failure      400  {object}  map[string]string       "invalid input"
+// @Failure      401  {object}  map[string]string       "unauthorized"
+// @Failure      500  {object}  map[string]string       "error"
+// @Router       /api/cards/requests [post]
+func (h *CardHandler) CreateCardRequest(c *gin.Context) {
+	var body createCardRequestBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	cardBrand, err := oneOf("card_brand", body.CardBrand, "visa", "mastercard", "dinacard", "amex")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	uid, _ := c.Get("user_id")
+	userID, ok := uid.(int64)
+	if !ok || userID <= 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid client identity"})
+		return
+	}
+
+	resp, err := h.cardRequestClient.CreateCardRequest(c.Request.Context(), &cardpb.CreateCardRequestRequest{
+		ClientId:      uint64(userID),
+		AccountNumber: body.AccountNumber,
+		CardBrand:     cardBrand,
+		CardType:      body.CardType,
+		CardName:      body.CardName,
+	})
+	if err != nil {
+		handleGRPCError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, cardRequestToJSON(resp))
+}
+
+// ListMyCardRequests godoc
+// @Summary      List my card requests
+// @Description  Returns all card requests for the authenticated client.
+// @Tags         card-requests
+// @Produce      json
+// @Param        page       query  int  false  "Page number (default 1)"
+// @Param        page_size  query  int  false  "Page size (default 20)"
+// @Security     ClientBearerAuth
+// @Success      200  {object}  map[string]interface{}  "list of card requests"
+// @Failure      401  {object}  map[string]string       "unauthorized"
+// @Failure      500  {object}  map[string]string       "error"
+// @Router       /api/cards/requests/me [get]
+func (h *CardHandler) ListMyCardRequests(c *gin.Context) {
+	uid, _ := c.Get("user_id")
+	userID, ok := uid.(int64)
+	if !ok || userID <= 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid client identity"})
+		return
+	}
+
+	page := int32(1)
+	pageSize := int32(20)
+	if p, err := strconv.ParseInt(c.Query("page"), 10, 32); err == nil && p > 0 {
+		page = int32(p)
+	}
+	if ps, err := strconv.ParseInt(c.Query("page_size"), 10, 32); err == nil && ps > 0 {
+		pageSize = int32(ps)
+	}
+
+	resp, err := h.cardRequestClient.ListCardRequestsByClient(c.Request.Context(), &cardpb.ListCardRequestsByClientRequest{
+		ClientId: uint64(userID),
+		Page:     page,
+		PageSize: pageSize,
+	})
+	if err != nil {
+		handleGRPCError(c, err)
+		return
+	}
+
+	requests := make([]gin.H, 0, len(resp.Requests))
+	for _, r := range resp.Requests {
+		requests = append(requests, cardRequestToJSON(r))
+	}
+	c.JSON(http.StatusOK, gin.H{"requests": requests, "total": resp.Total})
+}
+
+// ListCardRequests godoc
+// @Summary      List all card requests
+// @Description  Returns all card requests, optionally filtered by status. Requires employee authentication with cards.approve permission.
+// @Tags         card-requests
+// @Produce      json
+// @Param        status     query  string  false  "Filter by status (pending, approved, rejected)"
+// @Param        page       query  int     false  "Page number (default 1)"
+// @Param        page_size  query  int     false  "Page size (default 20)"
+// @Security     BearerAuth
+// @Success      200  {object}  map[string]interface{}  "list of card requests"
+// @Failure      401  {object}  map[string]string       "unauthorized"
+// @Failure      403  {object}  map[string]string       "forbidden"
+// @Failure      500  {object}  map[string]string       "error"
+// @Router       /api/cards/requests [get]
+func (h *CardHandler) ListCardRequests(c *gin.Context) {
+	statusFilter := c.Query("status")
+	if statusFilter != "" {
+		var err error
+		statusFilter, err = oneOf("status", statusFilter, "pending", "approved", "rejected")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	page := int32(1)
+	pageSize := int32(20)
+	if p, err := strconv.ParseInt(c.Query("page"), 10, 32); err == nil && p > 0 {
+		page = int32(p)
+	}
+	if ps, err := strconv.ParseInt(c.Query("page_size"), 10, 32); err == nil && ps > 0 {
+		pageSize = int32(ps)
+	}
+
+	resp, err := h.cardRequestClient.ListCardRequests(c.Request.Context(), &cardpb.ListCardRequestsRequest{
+		Status:   statusFilter,
+		Page:     page,
+		PageSize: pageSize,
+	})
+	if err != nil {
+		handleGRPCError(c, err)
+		return
+	}
+
+	requests := make([]gin.H, 0, len(resp.Requests))
+	for _, r := range resp.Requests {
+		requests = append(requests, cardRequestToJSON(r))
+	}
+	c.JSON(http.StatusOK, gin.H{"requests": requests, "total": resp.Total})
+}
+
+// GetCardRequest godoc
+// @Summary      Get a card request by ID
+// @Description  Returns a single card request by ID. Accessible by both employees and the owning client.
+// @Tags         card-requests
+// @Produce      json
+// @Param        id  path  int  true  "Card Request ID"
+// @Security     BearerAuth
+// @Success      200  {object}  map[string]interface{}  "card request"
+// @Failure      400  {object}  map[string]string       "invalid id"
+// @Failure      401  {object}  map[string]string       "unauthorized"
+// @Failure      404  {object}  map[string]string       "not found"
+// @Failure      500  {object}  map[string]string       "error"
+// @Router       /api/cards/requests/{id} [get]
+func (h *CardHandler) GetCardRequest(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	resp, err := h.cardRequestClient.GetCardRequest(c.Request.Context(), &cardpb.GetCardRequestRequest{Id: id})
+	if err != nil {
+		handleGRPCError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, cardRequestToJSON(resp))
+}
+
+// ApproveCardRequest godoc
+// @Summary      Approve a card request
+// @Description  Employee approves a pending card request, which creates the card. Requires cards.approve permission.
+// @Tags         card-requests
+// @Produce      json
+// @Param        id  path  int  true  "Card Request ID"
+// @Security     BearerAuth
+// @Success      200  {object}  map[string]interface{}  "approved request and created card"
+// @Failure      400  {object}  map[string]string       "invalid id"
+// @Failure      401  {object}  map[string]string       "unauthorized"
+// @Failure      403  {object}  map[string]string       "forbidden"
+// @Failure      404  {object}  map[string]string       "not found"
+// @Failure      422  {object}  map[string]string       "already processed"
+// @Failure      500  {object}  map[string]string       "error"
+// @Router       /api/cards/requests/{id}/approve [put]
+func (h *CardHandler) ApproveCardRequest(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	uid, _ := c.Get("user_id")
+	employeeID, ok := uid.(int64)
+	if !ok || employeeID <= 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid employee identity"})
+		return
+	}
+
+	resp, err := h.cardRequestClient.ApproveCardRequest(c.Request.Context(), &cardpb.ApproveCardRequestRequest{
+		Id:         id,
+		EmployeeId: uint64(employeeID),
+	})
+	if err != nil {
+		handleGRPCError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"request": cardRequestToJSON(resp.Request),
+		"card":    cardToJSON(resp.Card),
+	})
+}
+
+// RejectCardRequest godoc
+// @Summary      Reject a card request
+// @Description  Employee rejects a pending card request with a reason. Requires cards.approve permission.
+// @Tags         card-requests
+// @Accept       json
+// @Produce      json
+// @Param        id    path  int                    true  "Card Request ID"
+// @Param        body  body  rejectCardRequestBody  true  "Rejection reason"
+// @Security     BearerAuth
+// @Success      200  {object}  map[string]interface{}  "rejected request"
+// @Failure      400  {object}  map[string]string       "invalid input"
+// @Failure      401  {object}  map[string]string       "unauthorized"
+// @Failure      403  {object}  map[string]string       "forbidden"
+// @Failure      404  {object}  map[string]string       "not found"
+// @Failure      422  {object}  map[string]string       "already processed"
+// @Failure      500  {object}  map[string]string       "error"
+// @Router       /api/cards/requests/{id}/reject [put]
+func (h *CardHandler) RejectCardRequest(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	var body rejectCardRequestBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	uid, _ := c.Get("user_id")
+	employeeID, ok := uid.(int64)
+	if !ok || employeeID <= 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid employee identity"})
+		return
+	}
+
+	resp, err := h.cardRequestClient.RejectCardRequest(c.Request.Context(), &cardpb.RejectCardRequestRequest{
+		Id:         id,
+		EmployeeId: uint64(employeeID),
+		Reason:     body.Reason,
+	})
+	if err != nil {
+		handleGRPCError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, cardRequestToJSON(resp))
+}
+
 func cardToJSON(card *cardpb.CardResponse) gin.H {
 	return gin.H{
 		"id":               card.Id,
@@ -539,5 +820,21 @@ func cardToJSON(card *cardpb.CardResponse) gin.H {
 		"status":           card.Status,
 		"owner_type":       card.OwnerType,
 		"owner_id":         card.OwnerId,
+	}
+}
+
+func cardRequestToJSON(r *cardpb.CardRequestResponse) gin.H {
+	return gin.H{
+		"id":             r.Id,
+		"client_id":      r.ClientId,
+		"account_number": r.AccountNumber,
+		"card_brand":     r.CardBrand,
+		"card_type":      r.CardType,
+		"card_name":      r.CardName,
+		"status":         r.Status,
+		"reason":         r.Reason,
+		"approved_by":    r.ApprovedBy,
+		"created_at":     r.CreatedAt,
+		"updated_at":     r.UpdatedAt,
 	}
 }

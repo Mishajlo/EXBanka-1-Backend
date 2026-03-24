@@ -30,7 +30,6 @@ message CreateEmployeeRequest {
   string position = 9;
   string department = 10;
   string role = 11;
-  reserved 12;
   string jmbg = 13;
 }
 
@@ -43,7 +42,6 @@ message UpdateEmployeeRequest {
   optional string position = 6;
   optional string department = 7;
   optional string role = 8;
-  reserved 9;
   optional string jmbg = 10;
 }
 
@@ -71,7 +69,6 @@ message EmployeeResponse {
   string username = 9;
   string position = 10;
   string department = 11;
-  reserved 12;
   string role = 13;
   repeated string permissions = 14;
   string jmbg = 15;

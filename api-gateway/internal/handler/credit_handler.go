@@ -100,13 +100,14 @@ func (h *CreditHandler) CreateLoanRequest(c *gin.Context) {
 		AccountNumber:    req.AccountNumber,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, loanRequestToJSON(resp))
 }
 
 // @Summary      Get loan request by ID
+// @Description  Returns a single loan request. Requires credits.read permission.
 // @Tags         loans
 // @Produce      json
 // @Param        id   path  int  true  "Loan request ID"
@@ -124,13 +125,14 @@ func (h *CreditHandler) GetLoanRequest(c *gin.Context) {
 
 	resp, err := h.creditClient.GetLoanRequest(c.Request.Context(), &creditpb.GetLoanRequestReq{Id: id})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "loan request not found"})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, loanRequestToJSON(resp))
 }
 
 // @Summary      List loan requests
+// @Description  Returns all loan requests with optional filters. Requires credits.read permission.
 // @Tags         loans
 // @Produce      json
 // @Param        page                  query  int     false  "Page number (default 1)"
@@ -155,7 +157,7 @@ func (h *CreditHandler) ListLoanRequests(c *gin.Context) {
 		PageSize:            int32(pageSize),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -170,6 +172,7 @@ func (h *CreditHandler) ListLoanRequests(c *gin.Context) {
 }
 
 // @Summary      Approve loan request
+// @Description  Approves a pending loan request and creates the loan. Requires credits.approve permission.
 // @Tags         loans
 // @Produce      json
 // @Param        id   path  int  true  "Loan request ID"
@@ -194,13 +197,14 @@ func (h *CreditHandler) ApproveLoanRequest(c *gin.Context) {
 		EmployeeId: uint64(employeeID),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, loanToJSON(resp))
 }
 
 // @Summary      Reject loan request
+// @Description  Rejects a pending loan request. Requires credits.approve permission.
 // @Tags         loans
 // @Produce      json
 // @Param        id   path  int  true  "Loan request ID"
@@ -218,7 +222,7 @@ func (h *CreditHandler) RejectLoanRequest(c *gin.Context) {
 
 	resp, err := h.creditClient.RejectLoanRequest(c.Request.Context(), &creditpb.RejectLoanRequestReq{RequestId: id})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, loanRequestToJSON(resp))
@@ -242,7 +246,7 @@ func (h *CreditHandler) GetLoan(c *gin.Context) {
 
 	resp, err := h.creditClient.GetLoan(c.Request.Context(), &creditpb.GetLoanReq{Id: id})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "loan not found"})
+		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, loanToJSON(resp))
@@ -278,7 +282,7 @@ func (h *CreditHandler) ListLoansByClient(c *gin.Context) {
 		PageSize: int32(pageSize),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -317,7 +321,7 @@ func (h *CreditHandler) ListAllLoans(c *gin.Context) {
 		PageSize:            int32(pageSize),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -350,7 +354,7 @@ func (h *CreditHandler) GetInstallmentsByLoan(c *gin.Context) {
 
 	resp, err := h.creditClient.GetInstallmentsByLoan(c.Request.Context(), &creditpb.GetInstallmentsByLoanReq{LoanId: loanID})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -401,7 +405,7 @@ func (h *CreditHandler) ListLoanRequestsByClient(c *gin.Context) {
 		PageSize:       int32(pageSize),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleGRPCError(c, err)
 		return
 	}
 
@@ -438,6 +442,7 @@ func loanRequestToJSON(r *creditpb.LoanRequestResponse) gin.H {
 // --- Interest Rate Tier endpoints ---
 
 // @Summary      List interest rate tiers
+// @Description  Returns all interest rate tier configurations. Requires interest-rates.manage permission.
 // @Tags         rate-config
 // @Produce      json
 // @Security     BearerAuth
@@ -467,6 +472,7 @@ type createInterestRateTierBody struct {
 }
 
 // @Summary      Create interest rate tier
+// @Description  Creates a new interest rate tier. Requires interest-rates.manage permission.
 // @Tags         rate-config
 // @Accept       json
 // @Produce      json
@@ -521,6 +527,7 @@ type updateInterestRateTierBody struct {
 }
 
 // @Summary      Update interest rate tier
+// @Description  Updates an existing interest rate tier. Requires interest-rates.manage permission.
 // @Tags         rate-config
 // @Accept       json
 // @Produce      json
@@ -577,6 +584,7 @@ func (h *CreditHandler) UpdateInterestRateTier(c *gin.Context) {
 }
 
 // @Summary      Delete interest rate tier
+// @Description  Deletes an interest rate tier. Requires interest-rates.manage permission.
 // @Tags         rate-config
 // @Produce      json
 // @Param        id   path  int  true  "Tier ID"
@@ -605,6 +613,7 @@ func (h *CreditHandler) DeleteInterestRateTier(c *gin.Context) {
 // --- Bank Margin endpoints ---
 
 // @Summary      List bank margins
+// @Description  Returns all bank margin configurations for variable-rate loans. Requires interest-rates.manage permission.
 // @Tags         rate-config
 // @Produce      json
 // @Security     BearerAuth
@@ -631,6 +640,7 @@ type updateBankMarginBody struct {
 }
 
 // @Summary      Update bank margin
+// @Description  Updates the bank margin for a loan tier. Requires interest-rates.manage permission.
 // @Tags         rate-config
 // @Accept       json
 // @Produce      json
@@ -672,6 +682,7 @@ func (h *CreditHandler) UpdateBankMargin(c *gin.Context) {
 }
 
 // @Summary      Apply variable rate update to active loans
+// @Description  Recalculates interest for all variable-rate loans using a given tier. Requires interest-rates.manage permission.
 // @Tags         rate-config
 // @Produce      json
 // @Param        id   path  int  true  "Interest Rate Tier ID"

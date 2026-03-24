@@ -68,6 +68,8 @@ services:
       REDIS_ADDR: redis:6379
       USER_DB_SSLMODE: disable
       AUTH_GRPC_ADDR: "auth-service:50051"
+      ADMIN_EMAIL: "lsavic12123rn@raf.rs"
+      ADMIN_PASSWORD: "AdminAdmin2026!."
     ports:
       - "50052:50052"
     depends_on:

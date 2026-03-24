@@ -179,3 +179,15 @@ func (r *AccountRepository) UpdateBalance(accountNumber string, amount decimal.D
 		return nil
 	})
 }
+
+// UpdateSpending increments daily_spending and monthly_spending by the given amount.
+// Only call this for debit operations on client accounts (not bank accounts).
+func (r *AccountRepository) UpdateSpending(accountNumber string, amount decimal.Decimal) error {
+	result := r.db.Model(&model.Account{}).
+		Where("account_number = ? AND is_bank_account = ?", accountNumber, false).
+		Updates(map[string]interface{}{
+			"daily_spending":   gorm.Expr("daily_spending + ?", amount),
+			"monthly_spending": gorm.Expr("monthly_spending + ?", amount),
+		})
+	return result.Error
+}
