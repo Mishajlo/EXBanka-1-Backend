@@ -211,7 +211,7 @@ func TestAccount_CreateCurrentPersonalEUR(t *testing.T) {
 	clientID := createTestClient(t, c)
 	resp, err := c.POST("/api/accounts", map[string]interface{}{
 		"owner_id":      clientID,
-		"account_kind":  "current",
+		"account_kind":  "foreign",
 		"account_type":  "personal",
 		"currency_code": "EUR",
 	})
@@ -227,7 +227,7 @@ func TestAccount_CreateCurrentPersonalUSD(t *testing.T) {
 	clientID := createTestClient(t, c)
 	resp, err := c.POST("/api/accounts", map[string]interface{}{
 		"owner_id":      clientID,
-		"account_kind":  "current",
+		"account_kind":  "foreign",
 		"account_type":  "personal",
 		"currency_code": "USD",
 	})
