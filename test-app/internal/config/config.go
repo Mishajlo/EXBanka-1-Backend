@@ -19,7 +19,7 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		GatewayURL:      getEnv("TEST_GATEWAY_URL", "http://localhost:8080"),
-		KafkaBrokers:    getEnv("TEST_KAFKA_BROKERS", "localhost:9092"),
+		KafkaBrokers:    getEnv("TEST_KAFKA_BROKERS", "localhost:9094"),
 		BaseEmail:       getEnv("TEST_BASE_EMAIL", "lsavic12123rn@raf.rs"),
 		Password:        "AdminAdmin2026!.",
 		BootstrapSecret: getEnv("BOOTSTRAP_SECRET", "dev-bootstrap-secret"),

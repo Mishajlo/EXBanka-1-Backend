@@ -14,7 +14,44 @@
 #      Swagger UI at http://localhost:8080/swagger/index.html
 
 services:
-  # ── Infrastructure ──────────────────────────────────────────────
+
+  # ─── Third-party infrastructure ───────────────────────────────────────────
+
+  kafka:
+    image: apache/kafka:3.7.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:9094
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:9094
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── Databases ────────────────────────────────────────────────────────────
 
   user-db:
     image: postgres:16-alpine
@@ -128,41 +165,7 @@ services:
       timeout: 5s
       retries: 5
 
-  kafka:
-    image: apache/kafka:3.7.0
-    environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:9094
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:9094
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
-    ports:
-      - "9092:9092"
-      - "9094:9094"
-    healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  # ── Backend Services (pre-built images) ─────────────────────────
+  # ─── Services ─────────────────────────────────────────────────────────────
 
   user-service:
     image: ghcr.io/raf-si-2025/user-service:${TAG:-latest}
@@ -214,6 +217,22 @@ services:
       user-service:
         condition: service_started
       redis:
+        condition: service_healthy
+
+  notification-service:
+    image: ghcr.io/raf-si-2025/notification-service:${TAG:-latest}
+    environment:
+      NOTIFICATION_GRPC_ADDR: ":50053"
+      KAFKA_BROKERS: kafka:9092
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-thebiggestdouchebagaround@gmail.com}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-eebu yksy isfx nanl}
+      SMTP_FROM: ${SMTP_FROM:-thebiggestdouchebagaround@gmail.com}
+    ports:
+      - "50053:50053"
+    depends_on:
+      kafka:
         condition: service_healthy
 
   client-service:
@@ -342,21 +361,7 @@ services:
       user-service:
         condition: service_started
 
-  notification-service:
-    image: ghcr.io/raf-si-2025/notification-service:${TAG:-latest}
-    environment:
-      NOTIFICATION_GRPC_ADDR: ":50053"
-      KAFKA_BROKERS: kafka:9092
-      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USER: ${SMTP_USER:-thebiggestdouchebagaround@gmail.com}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-eebu yksy isfx nanl}
-      SMTP_FROM: ${SMTP_FROM:-thebiggestdouchebagaround@gmail.com}
-    ports:
-      - "50053:50053"
-    depends_on:
-      kafka:
-        condition: service_healthy
+  # ─── API Gateway ──────────────────────────────────────────────────────────
 
   api-gateway:
     image: ghcr.io/raf-si-2025/api-gateway:${TAG:-latest}
