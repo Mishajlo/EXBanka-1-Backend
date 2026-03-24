@@ -35,7 +35,7 @@ func TestInterestRateTiers_CreateFixed(t *testing.T) {
 	c := loginAsAdmin(t)
 	resp, err := c.POST("/api/interest-rate-tiers", map[string]interface{}{
 		"fixed_rate":    5.50,
-		"variable_base": 0.0,
+		"variable_base": 0.01,
 	})
 	if err != nil {
 		t.Fatalf("error: %v", err)
@@ -48,7 +48,7 @@ func TestInterestRateTiers_CreateFixed(t *testing.T) {
 func TestInterestRateTiers_CreateVariable(t *testing.T) {
 	c := loginAsAdmin(t)
 	resp, err := c.POST("/api/interest-rate-tiers", map[string]interface{}{
-		"fixed_rate":    0.0,
+		"fixed_rate":    0.01,
 		"variable_base": 3.25,
 	})
 	if err != nil {
@@ -80,7 +80,7 @@ func TestInterestRateTiers_UpdateTier(t *testing.T) {
 	// Create a tier first
 	createResp, err := c.POST("/api/interest-rate-tiers", map[string]interface{}{
 		"fixed_rate":    4.0,
-		"variable_base": 0.0,
+		"variable_base": 0.01,
 	})
 	if err != nil {
 		t.Fatalf("create tier error: %v", err)
@@ -93,7 +93,7 @@ func TestInterestRateTiers_UpdateTier(t *testing.T) {
 	// Update the tier
 	resp, err := c.PUT(fmt.Sprintf("/api/interest-rate-tiers/%d", tierID), map[string]interface{}{
 		"fixed_rate":    6.0,
-		"variable_base": 0.0,
+		"variable_base": 0.01,
 	})
 	if err != nil {
 		t.Fatalf("update tier error: %v", err)
