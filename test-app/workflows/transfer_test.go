@@ -307,13 +307,13 @@ func TestTransfer_CrossCurrencyRSDtoEUR(t *testing.T) {
 
 func TestTransfer_PaymentRecipientCRUD(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	_, _, clientC := setupActivatedClient(t, adminClient)
+	clientID, _, clientC := setupActivatedClient(t, adminClient)
 
-	// Create a payment recipient
+	// Create a payment recipient — handler requires client_id, recipient_name, account_number
 	createResp, err := clientC.POST("/api/payment-recipients", map[string]interface{}{
+		"client_id":      clientID,
 		"account_number": "908-0000000001-00",
-		"first_name":     "John",
-		"last_name":      "Doe",
+		"recipient_name": "John Doe",
 	})
 	if err != nil {
 		t.Fatalf("create payment recipient error: %v", err)
