@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net"
 	"os"
@@ -56,7 +55,9 @@ func main() {
 		log.Printf("WARN: initial rate sync failed, starting with cached/empty rates: %v", err)
 	} else {
 		log.Println("exchange-service: initial rate sync complete")
-		_ = producer.PublishRatesUpdated(context.Background(), provider.SupportedCurrencies, time.Now().UTC().Format(time.RFC3339))
+		if err := producer.PublishRatesUpdated(context.Background(), provider.SupportedCurrencies, time.Now().UTC().Format(time.RFC3339)); err != nil {
+			log.Printf("WARN: failed to publish rates-updated event: %v", err)
+		}
 	}
 
 	// Periodic sync every N hours.
@@ -67,7 +68,9 @@ func main() {
 			if err := svc.SyncRates(context.Background(), rateProvider); err != nil {
 				log.Printf("WARN: periodic rate sync failed: %v", err)
 			} else {
-				_ = producer.PublishRatesUpdated(context.Background(), provider.SupportedCurrencies, time.Now().UTC().Format(time.RFC3339))
+				if err := producer.PublishRatesUpdated(context.Background(), provider.SupportedCurrencies, time.Now().UTC().Format(time.RFC3339)); err != nil {
+					log.Printf("WARN: failed to publish rates-updated event: %v", err)
+				}
 			}
 		}
 	}()
@@ -82,7 +85,7 @@ func main() {
 	shared.RegisterHealthCheck(s, "exchange-service")
 
 	go func() {
-		fmt.Printf("exchange-service listening on %s\n", cfg.GRPCAddr)
+		log.Printf("exchange-service listening on %s", cfg.GRPCAddr)
 		if err := s.Serve(lis); err != nil {
 			log.Fatalf("failed to serve: %v", err)
 		}
