@@ -57,7 +57,6 @@ type TransactionGRPCHandler struct {
 	paymentSvc      *service.PaymentService
 	transferSvc     *service.TransferService
 	recipientSvc    *service.PaymentRecipientService
-	exchangeSvc     *service.ExchangeService
 	verificationSvc *service.VerificationService
 	producer        *kafka.Producer
 }
@@ -66,7 +65,6 @@ func NewTransactionGRPCHandler(
 	paymentSvc *service.PaymentService,
 	transferSvc *service.TransferService,
 	recipientSvc *service.PaymentRecipientService,
-	exchangeSvc *service.ExchangeService,
 	verificationSvc *service.VerificationService,
 	producer *kafka.Producer,
 ) *TransactionGRPCHandler {
@@ -74,7 +72,6 @@ func NewTransactionGRPCHandler(
 		paymentSvc:      paymentSvc,
 		transferSvc:     transferSvc,
 		recipientSvc:    recipientSvc,
-		exchangeSvc:     exchangeSvc,
 		verificationSvc: verificationSvc,
 		producer:        producer,
 	}
@@ -455,12 +452,3 @@ func recipientToProto(r *model.PaymentRecipient) *pb.PaymentRecipientResponse {
 	}
 }
 
-func exchangeRateToProto(r *model.ExchangeRate) *pb.ExchangeRateResponse {
-	return &pb.ExchangeRateResponse{
-		FromCurrency: r.FromCurrency,
-		ToCurrency:   r.ToCurrency,
-		BuyRate:      r.BuyRate.StringFixed(4),
-		SellRate:     r.SellRate.StringFixed(4),
-		UpdatedAt:    r.UpdatedAt.String(),
-	}
-}

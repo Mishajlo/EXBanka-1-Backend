@@ -34,6 +34,21 @@ const (
 	TransactionService_DeletePaymentRecipient_FullMethodName = "/transaction.TransactionService/DeletePaymentRecipient"
 	TransactionService_GetExchangeRate_FullMethodName        = "/transaction.TransactionService/GetExchangeRate"
 	TransactionService_ListExchangeRates_FullMethodName      = "/transaction.TransactionService/ListExchangeRates"
+	TransactionService_CreatePayment_FullMethodName            = "/transaction.TransactionService/CreatePayment"
+	TransactionService_ExecutePayment_FullMethodName           = "/transaction.TransactionService/ExecutePayment"
+	TransactionService_GetPayment_FullMethodName               = "/transaction.TransactionService/GetPayment"
+	TransactionService_ListPaymentsByAccount_FullMethodName    = "/transaction.TransactionService/ListPaymentsByAccount"
+	TransactionService_ListPaymentsByClient_FullMethodName     = "/transaction.TransactionService/ListPaymentsByClient"
+	TransactionService_CreateTransfer_FullMethodName           = "/transaction.TransactionService/CreateTransfer"
+	TransactionService_ExecuteTransfer_FullMethodName          = "/transaction.TransactionService/ExecuteTransfer"
+	TransactionService_GetTransfer_FullMethodName              = "/transaction.TransactionService/GetTransfer"
+	TransactionService_ListTransfersByClient_FullMethodName    = "/transaction.TransactionService/ListTransfersByClient"
+	TransactionService_CreatePaymentRecipient_FullMethodName   = "/transaction.TransactionService/CreatePaymentRecipient"
+	TransactionService_ListPaymentRecipients_FullMethodName    = "/transaction.TransactionService/ListPaymentRecipients"
+	TransactionService_UpdatePaymentRecipient_FullMethodName   = "/transaction.TransactionService/UpdatePaymentRecipient"
+	TransactionService_DeletePaymentRecipient_FullMethodName   = "/transaction.TransactionService/DeletePaymentRecipient"
+	TransactionService_CreateVerificationCode_FullMethodName   = "/transaction.TransactionService/CreateVerificationCode"
+	TransactionService_ValidateVerificationCode_FullMethodName = "/transaction.TransactionService/ValidateVerificationCode"
 )
 
 // TransactionServiceClient is the client API for TransactionService service.
@@ -195,20 +210,20 @@ func (c *transactionServiceClient) DeletePaymentRecipient(ctx context.Context, i
 	return out, nil
 }
 
-func (c *transactionServiceClient) GetExchangeRate(ctx context.Context, in *GetExchangeRateRequest, opts ...grpc.CallOption) (*ExchangeRateResponse, error) {
+func (c *transactionServiceClient) CreateVerificationCode(ctx context.Context, in *CreateVerificationCodeRequest, opts ...grpc.CallOption) (*CreateVerificationCodeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ExchangeRateResponse)
-	err := c.cc.Invoke(ctx, TransactionService_GetExchangeRate_FullMethodName, in, out, cOpts...)
+	out := new(CreateVerificationCodeResponse)
+	err := c.cc.Invoke(ctx, TransactionService_CreateVerificationCode_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *transactionServiceClient) ListExchangeRates(ctx context.Context, in *ListExchangeRatesRequest, opts ...grpc.CallOption) (*ListExchangeRatesResponse, error) {
+func (c *transactionServiceClient) ValidateVerificationCode(ctx context.Context, in *ValidateVerificationCodeRequest, opts ...grpc.CallOption) (*ValidateVerificationCodeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListExchangeRatesResponse)
-	err := c.cc.Invoke(ctx, TransactionService_ListExchangeRates_FullMethodName, in, out, cOpts...)
+	out := new(ValidateVerificationCodeResponse)
+	err := c.cc.Invoke(ctx, TransactionService_ValidateVerificationCode_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
