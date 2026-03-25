@@ -83,14 +83,14 @@ type CalculateExchangeRequest struct {
 func (h *ExchangeHandler) CalculateExchange(c *gin.Context) {
 	var req CalculateExchangeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "fromCurrency, toCurrency, and amount are required"})
+		apiError(c, http.StatusBadRequest, ErrValidation, "fromCurrency, toCurrency, and amount are required")
 		return
 	}
 
 	// Validate amount is a positive decimal (gateway must validate before forwarding to gRPC).
 	amount, err := decimal.NewFromString(req.Amount)
 	if err != nil || !amount.IsPositive() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "amount must be a positive number"})
+		apiError(c, http.StatusBadRequest, ErrValidation, "amount must be a positive number")
 		return
 	}
 
@@ -101,11 +101,11 @@ func (h *ExchangeHandler) CalculateExchange(c *gin.Context) {
 	from := strings.ToUpper(req.FromCurrency)
 	to := strings.ToUpper(req.ToCurrency)
 	if !supportedCurrencies[from] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported fromCurrency: " + from})
+		apiError(c, http.StatusBadRequest, ErrValidation, "unsupported fromCurrency: "+from)
 		return
 	}
 	if !supportedCurrencies[to] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported toCurrency: " + to})
+		apiError(c, http.StatusBadRequest, ErrValidation, "unsupported toCurrency: "+to)
 		return
 	}
 
