@@ -536,7 +536,7 @@ func TestPayment_WrongOTPCodeRejected(t *testing.T) {
 
 func TestPayment_InsufficientBalance(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	_, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	_, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	// The account has 100000 RSD. Create a destination.
 	destClientID := createTestClient(t, adminClient)

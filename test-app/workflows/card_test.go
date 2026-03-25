@@ -202,7 +202,7 @@ func TestCard_ListByAccount(t *testing.T) {
 
 func TestCard_VirtualSingleUseWithClientAuth(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	clientID, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	clientID, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	resp, err := clientC.POST("/api/me/cards/virtual", map[string]interface{}{
 		"account_number": accountNumber,
@@ -222,7 +222,7 @@ func TestCard_VirtualSingleUseWithClientAuth(t *testing.T) {
 
 func TestCard_VirtualMultiUseWithClientAuth(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	clientID, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	clientID, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	resp, err := clientC.POST("/api/me/cards/virtual", map[string]interface{}{
 		"account_number": accountNumber,
@@ -243,7 +243,7 @@ func TestCard_VirtualMultiUseWithClientAuth(t *testing.T) {
 
 func TestCard_VirtualUnlimitedWithClientAuth(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	clientID, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	clientID, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	// The API does not support "unlimited" usage_type.
 	// Use multi_use with a high max_uses to approximate unlimited usage.
@@ -265,7 +265,7 @@ func TestCard_VirtualUnlimitedWithClientAuth(t *testing.T) {
 
 func TestCard_VirtualInvalidUsageType(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	clientID, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	clientID, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	resp, err := clientC.POST("/api/me/cards/virtual", map[string]interface{}{
 		"account_number": accountNumber,
@@ -285,7 +285,7 @@ func TestCard_VirtualInvalidUsageType(t *testing.T) {
 
 func TestCard_PINSetAndVerify(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	clientID, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	clientID, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	// Employee creates a card for the account
 	createResp, err := adminClient.POST("/api/cards", map[string]interface{}{
@@ -322,7 +322,7 @@ func TestCard_PINSetAndVerify(t *testing.T) {
 
 func TestCard_PINWrongThreeTimes_LocksCard(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	clientID, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	clientID, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	createResp, err := adminClient.POST("/api/cards", map[string]interface{}{
 		"account_number": accountNumber,
@@ -371,7 +371,7 @@ func TestCard_PINWrongThreeTimes_LocksCard(t *testing.T) {
 
 func TestCard_ChangePin(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	clientID, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	clientID, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	createResp, err := adminClient.POST("/api/cards", map[string]interface{}{
 		"account_number": accountNumber,
@@ -411,7 +411,7 @@ func TestCard_ChangePin(t *testing.T) {
 
 func TestCard_TemporaryBlockWithExpiry(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	clientID, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	clientID, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	createResp, err := adminClient.POST("/api/cards", map[string]interface{}{
 		"account_number": accountNumber,

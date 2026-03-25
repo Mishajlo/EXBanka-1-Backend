@@ -166,7 +166,7 @@ func TestCardRequest_FullLifecycle(t *testing.T) {
 	adminClient := loginAsAdmin(t)
 
 	// Create client with funded RSD account and activate them
-	_, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	_, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	// Client lists their requests before — should be empty or have prior requests
 	listBefore, err := clientC.GET("/api/me/cards/requests")

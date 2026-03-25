@@ -108,7 +108,7 @@ func TestLoan_FullLifecycle(t *testing.T) {
 	adminClient := loginAsAdmin(t)
 
 	// Create client and activate them with a funded account
-	clientID, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	clientID, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	// Get client's own ID (may differ from clientID if setupActivatedClient uses separate client)
 	meResp, err := clientC.GET("/api/me")
@@ -235,7 +235,7 @@ func TestLoan_FullLifecycle(t *testing.T) {
 // TestLoan_AllLoanTypes verifies that loan requests can be created for all supported loan types.
 func TestLoan_AllLoanTypes(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	_, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	_, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	meResp, err := clientC.GET("/api/me")
 	if err != nil {
@@ -279,7 +279,7 @@ func TestLoan_AllLoanTypes(t *testing.T) {
 // TestLoan_RejectLoanRequest verifies the reject flow: create → reject → status = rejected.
 func TestLoan_RejectLoanRequest(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	_, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	_, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	meResp, err := clientC.GET("/api/me")
 	if err != nil {

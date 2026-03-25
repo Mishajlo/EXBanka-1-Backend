@@ -307,7 +307,7 @@ func TestTransfer_CrossCurrencyRSDtoEUR(t *testing.T) {
 
 func TestTransfer_PaymentRecipientCRUD(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	clientID, _, clientC := setupActivatedClient(t, adminClient)
+	clientID, _, clientC, _ := setupActivatedClient(t, adminClient)
 
 	// Create a payment recipient — handler requires client_id, recipient_name, account_number
 	createResp, err := clientC.POST("/api/me/payment-recipients", map[string]interface{}{
@@ -336,7 +336,7 @@ func TestTransfer_PaymentRecipientCRUD(t *testing.T) {
 
 func TestTransfer_InsufficientBalance(t *testing.T) {
 	adminClient := loginAsAdmin(t)
-	_, accountNumber, clientC := setupActivatedClient(t, adminClient)
+	_, accountNumber, clientC, _ := setupActivatedClient(t, adminClient)
 
 	// Second account for same client
 	meResp, err := clientC.GET("/api/me")
