@@ -32,6 +32,7 @@ jobs:
           - card-service
           - transaction-service
           - credit-service
+          - exchange-service
 
     steps:
       - name: Checkout repository
