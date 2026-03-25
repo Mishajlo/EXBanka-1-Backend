@@ -386,29 +386,6 @@ func (h *TransactionGRPCHandler) DeletePaymentRecipient(ctx context.Context, req
 	return &pb.DeletePaymentRecipientResponse{Success: true}, nil
 }
 
-// ---- Exchange Rate RPCs ----
-
-func (h *TransactionGRPCHandler) GetExchangeRate(ctx context.Context, req *pb.GetExchangeRateRequest) (*pb.ExchangeRateResponse, error) {
-	rate, err := h.exchangeSvc.GetExchangeRate(req.GetFromCurrency(), req.GetToCurrency())
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "exchange rate not found: %v", err)
-	}
-	return exchangeRateToProto(rate), nil
-}
-
-func (h *TransactionGRPCHandler) ListExchangeRates(ctx context.Context, req *pb.ListExchangeRatesRequest) (*pb.ListExchangeRatesResponse, error) {
-	rates, err := h.exchangeSvc.ListExchangeRates()
-	if err != nil {
-		return nil, status.Errorf(mapServiceError(err), "list exchange rates: %v", err)
-	}
-
-	pbRates := make([]*pb.ExchangeRateResponse, 0, len(rates))
-	for i := range rates {
-		pbRates = append(pbRates, exchangeRateToProto(&rates[i]))
-	}
-	return &pb.ListExchangeRatesResponse{Rates: pbRates}, nil
-}
-
 // ---- Helpers ----
 
 func paymentToProto(p *model.Payment) *pb.PaymentResponse {
