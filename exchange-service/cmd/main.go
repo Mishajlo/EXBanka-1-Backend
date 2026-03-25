@@ -41,7 +41,10 @@ func main() {
 	kafkaprod.EnsureTopics(cfg.KafkaBrokers, "exchange.rates-updated")
 
 	repo := repository.NewExchangeRateRepository(db)
-	svc := service.NewExchangeService(repo, cfg.CommissionRate, cfg.Spread)
+	svc, err := service.NewExchangeService(repo, cfg.CommissionRate, cfg.Spread)
+	if err != nil {
+		log.Fatalf("failed to create exchange service: %v", err)
+	}
 
 	rateProvider := provider.NewExchangeRateAPIClient(cfg.APIKey, "")
 

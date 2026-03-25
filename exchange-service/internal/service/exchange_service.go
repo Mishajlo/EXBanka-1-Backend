@@ -20,10 +20,16 @@ type ExchangeService struct {
 	spread         decimal.Decimal // e.g. 0.003 for 0.3%, applied to derive buy/sell from mid
 }
 
-func NewExchangeService(repo *repository.ExchangeRateRepository, commissionRate, spread string) *ExchangeService {
-	cr, _ := decimal.NewFromString(commissionRate)
-	sp, _ := decimal.NewFromString(spread)
-	return &ExchangeService{repo: repo, commissionRate: cr, spread: sp}
+func NewExchangeService(repo *repository.ExchangeRateRepository, commissionRate, spread string) (*ExchangeService, error) {
+	cr, err := decimal.NewFromString(commissionRate)
+	if err != nil {
+		return nil, fmt.Errorf("invalid commission rate %q: %w", commissionRate, err)
+	}
+	sp, err := decimal.NewFromString(spread)
+	if err != nil {
+		return nil, fmt.Errorf("invalid spread %q: %w", spread, err)
+	}
+	return &ExchangeService{repo: repo, commissionRate: cr, spread: sp}, nil
 }
 
 // SyncRates fetches mid-market rates from the provider and upserts buy/sell
