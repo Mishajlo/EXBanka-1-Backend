@@ -1866,13 +1866,15 @@ Delete a saved recipient. (Previously `DELETE /api/payment-recipients/:id` — n
 
 ## 10. Exchange Rates
 
-Public endpoints — no authentication required.
+Public endpoints — no authentication required. Canonical paths are `/api/exchange/rates` and `/api/exchange/calculate`. The legacy `/api/exchange-rates` paths are kept as backward-compatible aliases.
+
+Supported currencies: `RSD`, `EUR`, `USD`, `CHF`, `GBP`, `JPY`, `CAD`, `AUD`.
 
 ---
 
-### GET /api/exchange-rates
+### GET /api/exchange/rates
 
-List all current exchange rates.
+List all current exchange rates. Also accessible via `GET /api/exchange-rates` (alias).
 
 **Authentication:** None (public)
 
@@ -1883,8 +1885,8 @@ List all current exchange rates.
     {
       "from_currency": "EUR",
       "to_currency": "RSD",
-      "buy_rate": 116.50,
-      "sell_rate": 117.80,
+      "buy_rate": "116.5000",
+      "sell_rate": "117.8000",
       "updated_at": "2026-03-13T08:00:00Z"
     }
   ]
@@ -1893,9 +1895,9 @@ List all current exchange rates.
 
 ---
 
-### GET /api/exchange-rates/:from/:to
+### GET /api/exchange/rates/:from/:to
 
-Get the exchange rate between two specific currencies.
+Get the exchange rate between two specific currencies. Also accessible via `GET /api/exchange-rates/:from/:to` (alias).
 
 **Authentication:** None (public)
 
@@ -1911,13 +1913,62 @@ Get the exchange rate between two specific currencies.
 {
   "from_currency": "EUR",
   "to_currency": "RSD",
-  "buy_rate": 116.50,
-  "sell_rate": 117.80,
+  "buy_rate": "116.5000",
+  "sell_rate": "117.8000",
   "updated_at": "2026-03-13T08:00:00Z"
 }
 ```
 
-**Response 404:** `{"error": "exchange rate not found"}`
+**Response 404:** `{"error": {"code": "not_found", "message": "exchange rate not found"}}`
+
+---
+
+### POST /api/exchange/calculate
+
+Calculate a currency conversion including the bank's commission. Informational only — no transaction is created.
+
+**Authentication:** None (public)
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `fromCurrency` | string | yes | Source currency code (e.g. `EUR`) |
+| `toCurrency` | string | yes | Target currency code (e.g. `RSD`) |
+| `amount` | string | yes | Amount to convert (must be positive decimal) |
+
+**Example request:**
+```json
+POST /api/exchange/calculate
+Content-Type: application/json
+
+{
+  "fromCurrency": "EUR",
+  "toCurrency": "RSD",
+  "amount": "100.00"
+}
+```
+
+**Response 200:**
+```json
+{
+  "from_currency": "EUR",
+  "to_currency": "RSD",
+  "input_amount": "100.0000",
+  "converted_amount": "11700.0000",
+  "commission_rate": "0.005",
+  "effective_rate": "117.3000"
+}
+```
+
+A verification code has been sent to the client's registered email. Use it when calling the execute endpoint.
+
+| Code | Description |
+|---|---|
+| 200 | Conversion result |
+| 400 | Validation error (missing fields, invalid amount, unsupported currency) — `{"error": {"code": "validation_error", "message": "..."}}` |
+| 404 | Exchange rate not found for the requested pair |
+| 500 | Internal error |
 
 ---
 

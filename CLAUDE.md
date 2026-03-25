@@ -16,8 +16,9 @@ This is a Go workspace monorepo. Each service has its own self-contained directo
 ├── client-service/          # Bank client CRUD and credential management (gRPC, port 50054)
 ├── account-service/         # Bank accounts, currencies, companies (gRPC, port 50055)
 ├── card-service/            # Payment cards and authorized persons (gRPC, port 50056)
-├── transaction-service/     # Payments, transfers, exchange rates (gRPC, port 50057)
+├── transaction-service/     # Payments, transfers, currency conversion via exchange-service (gRPC, port 50057)
 ├── credit-service/          # Loan requests, loans, installments (gRPC, port 50058)
+├── exchange-service/        # Currency exchange rates and conversion (gRPC, port 50059)
 ├── docs/                    # API documentation and implementation plans
 ├── docker-compose.yml
 ├── Makefile
@@ -63,6 +64,7 @@ Each service reads its `.env` file by walking up the directory tree from its wor
 | `CARD_GRPC_ADDR` | localhost:50056 | card-service gRPC address |
 | `TRANSACTION_GRPC_ADDR` | localhost:50057 | transaction-service gRPC address |
 | `CREDIT_GRPC_ADDR` | localhost:50058 | credit-service gRPC address |
+| `EXCHANGE_GRPC_ADDR` | localhost:50059 | exchange-service gRPC address; also required by transaction-service |
 | `GATEWAY_HTTP_ADDR` | :8080 | |
 | `KAFKA_BROKERS` | localhost:9092 | |
 | `REDIS_ADDR` | localhost:6379 | Shared by auth + user services |
@@ -80,6 +82,7 @@ Each service reads its `.env` file by walking up the directory tree from its wor
 | card-service | 5436 |
 | transaction-service | 5437 |
 | credit-service | 5438 |
+| exchange-service | 5439 |
 
 **Note:** `credit-service` and `card-service` both depend on `CLIENT_GRPC_ADDR` and `ACCOUNT_GRPC_ADDR` in addition to their own gRPC addresses. Ensure these variables are set in their docker-compose environment sections.
 
@@ -142,10 +145,12 @@ The Notification Service has no DB; it has `internal/consumer/` for Kafka consum
 - Seeded at startup: 1 RSD + 1 EUR bank account.
 - Used for collecting transaction fees and loan installment credits.
 
-**NBS exchange rates** (transaction-service):
-- Exchange rates are synced from the National Bank of Serbia XML API every 6 hours.
-- Rates are seeded with hardcoded defaults on first startup; NBS sync failure on startup is non-fatal (log warning, keep seed rates).
-- Rates stored as both `CODE/RSD` and inverse `RSD/CODE` pairs.
+**Exchange rates** (exchange-service):
+- Exchange rates are synced from the open.er-api.com API every 6 hours (configurable via `EXCHANGE_SYNC_INTERVAL_HOURS`).
+- Rates are seeded with hardcoded defaults on first startup; external API sync failure is non-fatal (log warning, keep seed rates).
+- Rates stored as both `CODE/RSD` and inverse `RSD/CODE` pairs with buy/sell spread applied.
+- Transaction-service calls exchange-service via gRPC (`Convert` RPC) for cross-currency transfers; no commission applied at that layer.
+- Exchange-service config: `EXCHANGE_COMMISSION_RATE` (default 0.005), `EXCHANGE_SPREAD` (default 0.003), `EXCHANGE_API_KEY` (optional, for paid tier).
 
 **Transfer fees** (transaction-service):
 - Configurable fee rules stored in `transfer_fees` table (type: `percentage` or `fixed`, with `min_amount` threshold and `max_fee` cap).
