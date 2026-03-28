@@ -257,15 +257,19 @@ func (s *TransferService) ExecuteTransfer(ctx context.Context, transferID uint64
 			reason := "cross-currency transfer requires both accountClient and bankAccountClient"
 			_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
 			s.publishTransferFailed(ctx, transfer, reason)
-			return fmt.Errorf("%s", reason)
+			return errors.New(reason)
 		}
 
-		bankAccountsResp, err := s.bankAccountClient.ListBankAccounts(ctx, &accountpb.ListBankAccountsRequest{})
-		if err != nil {
+		var bankAccountsResp *accountpb.ListBankAccountsResponse
+		if err := shared.Retry(ctx, s.retryConfig, func() error {
+			var e error
+			bankAccountsResp, e = s.bankAccountClient.ListBankAccounts(ctx, &accountpb.ListBankAccountsRequest{})
+			return e
+		}); err != nil {
 			reason := fmt.Sprintf("failed to fetch bank accounts: %v", err)
 			_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
 			s.publishTransferFailed(ctx, transfer, reason)
-			return fmt.Errorf("%s", reason)
+			return errors.New(reason)
 		}
 
 		bankFromAccount, err := findBankAccountByCurrency(bankAccountsResp.GetAccounts(), transfer.FromCurrency)
@@ -273,7 +277,7 @@ func (s *TransferService) ExecuteTransfer(ctx context.Context, transferID uint64
 			reason := fmt.Sprintf("no bank account for from-currency %s: %v", transfer.FromCurrency, err)
 			_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
 			s.publishTransferFailed(ctx, transfer, reason)
-			return fmt.Errorf("%s", reason)
+			return errors.New(reason)
 		}
 
 		bankToAccount, err := findBankAccountByCurrency(bankAccountsResp.GetAccounts(), transfer.ToCurrency)
@@ -281,7 +285,7 @@ func (s *TransferService) ExecuteTransfer(ctx context.Context, transferID uint64
 			reason := fmt.Sprintf("no bank account for to-currency %s: %v", transfer.ToCurrency, err)
 			_ = s.transferRepo.UpdateStatusWithReason(transfer.ID, "failed", reason)
 			s.publishTransferFailed(ctx, transfer, reason)
-			return fmt.Errorf("%s", reason)
+			return errors.New(reason)
 		}
 
 		// Step 1: Debit user FROM account.
