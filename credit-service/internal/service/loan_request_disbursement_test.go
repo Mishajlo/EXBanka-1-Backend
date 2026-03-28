@@ -213,8 +213,8 @@ func TestApproveLoan_SoftFailOnDisbursementError(t *testing.T) {
 	require.NoError(t, err, "soft failure must not propagate as an error to the caller")
 	assert.Equal(t, "disbursement_failed", loan.Status)
 
-	require.NotEmpty(t, loanRepo.updateSeen)
-	assert.Equal(t, "disbursement_failed", loanRepo.updateSeen[len(loanRepo.updateSeen)-1])
+	require.Len(t, loanRepo.updateSeen, 1, "loanRepo.Update must be called exactly once on soft failure")
+	assert.Equal(t, "disbursement_failed", loanRepo.updateSeen[0])
 
 	persisted, err := loanRepo.GetByID(loan.ID)
 	require.NoError(t, err)
