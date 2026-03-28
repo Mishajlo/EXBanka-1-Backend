@@ -296,6 +296,50 @@ func TestExecuteTransfer_CrossCurrency_Step4Fails(t *testing.T) {
 	assert.Equal(t, "failed", persisted.Status)
 }
 
+// TestExecuteTransfer_CrossCurrency_Step3Fails verifies steps 2 and 1 are reversed.
+func TestExecuteTransfer_CrossCurrency_Step3Fails(t *testing.T) {
+	accountClient := &mockAccountClientForTransfer{failOnCall: 3}
+	bankClient := &mockBankAccountClient{accounts: standardBankAccounts()}
+	svc, repo := newCrossCurrencyTransferService(accountClient, bankClient)
+
+	transfer := buildCrossCurrencyTransfer(repo)
+	err := svc.ExecuteTransfer(context.Background(), transfer.ID)
+
+	assert.Error(t, err)
+	// Calls: step1, step2, step3(fail), reverse-step2, reverse-step1 = 5 total
+	require.Len(t, accountClient.calls, 5)
+
+	totalDebit := transfer.InitialAmount.Add(transfer.Commission)
+
+	// reverse-step2: debit bank FROM-currency account (undo the credit)
+	assert.Equal(t, "BANK-RSD-001", accountClient.calls[3].accountNumber, "reversal targets bank FROM account")
+	assert.Equal(t, totalDebit.Neg().StringFixed(4), accountClient.calls[3].amount, "reversal debits bank FROM account")
+
+	// reverse-step1: credit user FROM account (refund)
+	assert.Equal(t, "FROM-RSD-001", accountClient.calls[4].accountNumber, "reversal targets user FROM account")
+	assert.Equal(t, totalDebit.StringFixed(4), accountClient.calls[4].amount, "reversal credits user FROM account")
+
+	persisted, _ := repo.GetByID(transfer.ID)
+	assert.Equal(t, "failed", persisted.Status)
+}
+
+// TestExecuteTransfer_CrossCurrency_BankAccountListFails verifies that a ListBankAccounts
+// error marks the transfer failed and makes no balance changes.
+func TestExecuteTransfer_CrossCurrency_BankAccountListFails(t *testing.T) {
+	accountClient := &mockAccountClientForTransfer{}
+	bankClient := &mockBankAccountClient{listErr: errors.New("bank service unavailable")}
+	svc, repo := newCrossCurrencyTransferService(accountClient, bankClient)
+
+	transfer := buildCrossCurrencyTransfer(repo)
+	err := svc.ExecuteTransfer(context.Background(), transfer.ID)
+
+	assert.Error(t, err)
+	assert.Empty(t, accountClient.calls, "no balance changes when ListBankAccounts fails")
+
+	persisted, _ := repo.GetByID(transfer.ID)
+	assert.Equal(t, "failed", persisted.Status)
+}
+
 func TestExecuteTransfer_CrossCurrency_NoBankAccount(t *testing.T) {
 	accountClient := &mockAccountClientForTransfer{}
 	// Only RSD bank account — no EUR.
