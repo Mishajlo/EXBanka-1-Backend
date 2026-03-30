@@ -35,11 +35,11 @@ func (r *TransferRepository) GetByIdempotencyKey(key string) (*model.Transfer, e
 }
 
 func (r *TransferRepository) UpdateStatus(id uint64, status string) error {
-	return r.db.Model(&model.Transfer{}).Where("id = ?", id).Update("status", status).Error
+	return r.db.Session(&gorm.Session{SkipHooks: true}).Model(&model.Transfer{}).Where("id = ?", id).Update("status", status).Error
 }
 
 func (r *TransferRepository) UpdateStatusWithReason(id uint64, status, reason string) error {
-	return r.db.Model(&model.Transfer{}).Where("id = ?", id).Updates(map[string]interface{}{
+	return r.db.Session(&gorm.Session{SkipHooks: true}).Model(&model.Transfer{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"status":         status,
 		"failure_reason": reason,
 	}).Error

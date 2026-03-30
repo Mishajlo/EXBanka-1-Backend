@@ -29,7 +29,7 @@ func (r *InstallmentRepository) ListByLoan(loanID uint64) ([]model.Installment, 
 
 func (r *InstallmentRepository) MarkPaid(id uint64) error {
 	now := time.Now()
-	return r.db.Model(&model.Installment{}).
+	return r.db.Session(&gorm.Session{SkipHooks: true}).Model(&model.Installment{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"status":      "paid",
@@ -38,7 +38,8 @@ func (r *InstallmentRepository) MarkPaid(id uint64) error {
 }
 
 func (r *InstallmentRepository) MarkOverdue() error {
-	return r.db.Model(&model.Installment{}).
+	// SkipHooks: bulk status sweep intentionally bypasses per-row version checks.
+	return r.db.Session(&gorm.Session{SkipHooks: true}).Model(&model.Installment{}).
 		Where("status = ? AND expected_date < ?", "unpaid", time.Now()).
 		Update("status", "overdue").Error
 }
@@ -61,7 +62,8 @@ func (r *InstallmentRepository) CountUnpaidByLoan(loanID uint64) (int64, error) 
 
 // UpdateUnpaidByLoan updates the amount and interest_rate of all unpaid installments for a given loan.
 func (r *InstallmentRepository) UpdateUnpaidByLoan(loanID uint64, newAmount, newRate interface{}) error {
-	return r.db.Model(&model.Installment{}).
+	// SkipHooks: bulk update of all unpaid installments for a loan intentionally bypasses per-row version checks.
+	return r.db.Session(&gorm.Session{SkipHooks: true}).Model(&model.Installment{}).
 		Where("loan_id = ? AND status = ?", loanID, "unpaid").
 		Updates(map[string]interface{}{
 			"amount":        newAmount,

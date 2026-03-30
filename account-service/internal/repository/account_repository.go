@@ -90,7 +90,7 @@ func (r *AccountRepository) ExistsByNameAndOwner(name string, ownerID uint64, ex
 }
 
 func (r *AccountRepository) UpdateName(id, clientID uint64, newName string) error {
-	result := r.db.Model(&model.Account{}).Where("id = ? AND owner_id = ?", id, clientID).Update("account_name", newName)
+	result := r.db.Session(&gorm.Session{SkipHooks: true}).Model(&model.Account{}).Where("id = ? AND owner_id = ?", id, clientID).Update("account_name", newName)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -101,7 +101,7 @@ func (r *AccountRepository) UpdateName(id, clientID uint64, newName string) erro
 }
 
 func (r *AccountRepository) UpdateLimits(id uint64, updates map[string]interface{}) error {
-	result := r.db.Model(&model.Account{}).Where("id = ?", id).Updates(updates)
+	result := r.db.Session(&gorm.Session{SkipHooks: true}).Model(&model.Account{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -112,7 +112,7 @@ func (r *AccountRepository) UpdateLimits(id uint64, updates map[string]interface
 }
 
 func (r *AccountRepository) UpdateStatus(id uint64, status string) error {
-	result := r.db.Model(&model.Account{}).Where("id = ?", id).Update("status", status)
+	result := r.db.Session(&gorm.Session{SkipHooks: true}).Model(&model.Account{}).Where("id = ?", id).Update("status", status)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -146,12 +146,14 @@ func (r *AccountRepository) SoftDelete(id uint64) error {
 }
 
 func (r *AccountRepository) ResetDailySpending() error {
-	return r.db.Model(&model.Account{}).Where("status = ?", "active").
+	// SkipHooks: bulk reset intentionally bypasses per-row version checks.
+	return r.db.Session(&gorm.Session{SkipHooks: true}).Model(&model.Account{}).Where("status = ?", "active").
 		Update("daily_spending", 0).Error
 }
 
 func (r *AccountRepository) ResetMonthlySpending() error {
-	return r.db.Model(&model.Account{}).Where("status = ?", "active").
+	// SkipHooks: bulk reset intentionally bypasses per-row version checks.
+	return r.db.Session(&gorm.Session{SkipHooks: true}).Model(&model.Account{}).Where("status = ?", "active").
 		Update("monthly_spending", 0).Error
 }
 
@@ -169,7 +171,7 @@ func (r *AccountRepository) UpdateBalance(accountNumber string, amount decimal.D
 		if updateAvailable {
 			updates["available_balance"] = gorm.Expr("available_balance + ?", amount)
 		}
-		result := tx.Model(&model.Account{}).Where("account_number = ?", accountNumber).Updates(updates)
+		result := tx.Session(&gorm.Session{SkipHooks: true}).Model(&model.Account{}).Where("account_number = ?", accountNumber).Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -183,7 +185,7 @@ func (r *AccountRepository) UpdateBalance(accountNumber string, amount decimal.D
 // UpdateSpending increments daily_spending and monthly_spending by the given amount.
 // Only call this for debit operations on client accounts (not bank accounts).
 func (r *AccountRepository) UpdateSpending(accountNumber string, amount decimal.Decimal) error {
-	result := r.db.Model(&model.Account{}).
+	result := r.db.Session(&gorm.Session{SkipHooks: true}).Model(&model.Account{}).
 		Where("account_number = ? AND is_bank_account = ?", accountNumber, false).
 		Updates(map[string]interface{}{
 			"daily_spending":   gorm.Expr("daily_spending + ?", amount),

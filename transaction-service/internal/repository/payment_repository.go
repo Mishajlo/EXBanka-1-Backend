@@ -82,11 +82,11 @@ func (r *PaymentRepository) GetByIdempotencyKey(key string) (*model.Payment, err
 }
 
 func (r *PaymentRepository) UpdateStatus(id uint64, status string) error {
-	return r.db.Model(&model.Payment{}).Where("id = ?", id).Update("status", status).Error
+	return r.db.Session(&gorm.Session{SkipHooks: true}).Model(&model.Payment{}).Where("id = ?", id).Update("status", status).Error
 }
 
 func (r *PaymentRepository) UpdateStatusWithReason(id uint64, status, reason string) error {
-	return r.db.Model(&model.Payment{}).Where("id = ?", id).Updates(map[string]interface{}{
+	return r.db.Session(&gorm.Session{SkipHooks: true}).Model(&model.Payment{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"status":         status,
 		"failure_reason": reason,
 	}).Error
