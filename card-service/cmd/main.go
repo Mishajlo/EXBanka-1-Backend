@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -79,7 +80,9 @@ func main() {
 	virtualCardHandler := handler.NewVirtualCardGRPCHandler(cardService)
 	cardRequestHandler := handler.NewCardRequestGRPCHandler(cardRequestSvc)
 
-	service.StartCardCron(cardRepo, blockRepo)
+	cronCtx, cronCancel := context.WithCancel(context.Background())
+	defer cronCancel()
+	service.StartCardCron(cronCtx, cardRepo, blockRepo, db)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {

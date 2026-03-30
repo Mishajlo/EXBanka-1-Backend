@@ -41,27 +41,6 @@ func (s *CardService) CreateCard(ctx context.Context, accountNumber string, owne
 		return nil, "", fmt.Errorf("owner type must be one of: client, authorized_person; got: %s", ownerType)
 	}
 
-	// Enforce card-per-account limits based on owner type.
-	// "authorized_person" indicates a business account context: max 1 card per owner per account.
-	// "client" indicates a personal account context: max 2 cards total per account.
-	if ownerType == "authorized_person" {
-		count, err := s.cardRepo.CountByAccountAndOwner(accountNumber, ownerID)
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to check card count: %w", err)
-		}
-		if count >= 1 {
-			return nil, "", fmt.Errorf("business accounts can have at most 1 card per person; person %d already has a card on account %s", ownerID, accountNumber)
-		}
-	} else {
-		count, err := s.cardRepo.CountByAccount(accountNumber)
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to check card count: %w", err)
-		}
-		if count >= 2 {
-			return nil, "", fmt.Errorf("personal accounts can have at most 2 cards; account %s already has %d", accountNumber, count)
-		}
-	}
-
 	cardNumber := GenerateCardNumber(cardBrand)
 	cvv := GenerateCVV()
 	masked := MaskCardNumber(cardNumber)
@@ -79,8 +58,41 @@ func (s *CardService) CreateCard(ctx context.Context, accountNumber string, owne
 		ExpiresAt:      time.Now().AddDate(3, 0, 0),
 	}
 
-	if err := s.cardRepo.Create(card); err != nil {
-		return nil, "", fmt.Errorf("account %s not found or inactive", accountNumber)
+	// Serialize card creation for this account using a PostgreSQL advisory lock
+	// to eliminate the TOCTOU race between the card count check and the INSERT.
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if e := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", accountNumber).Error; e != nil {
+			return e
+		}
+
+		// Enforce card-per-account limits based on owner type.
+		// "authorized_person" indicates a business account context: max 1 card per owner per account.
+		// "client" indicates a personal account context: max 2 cards total per account.
+		if ownerType == "authorized_person" {
+			var count int64
+			if e := tx.Model(&model.Card{}).Where("account_number = ? AND owner_id = ? AND status != ?", accountNumber, ownerID, "deactivated").Count(&count).Error; e != nil {
+				return fmt.Errorf("failed to check card count: %w", e)
+			}
+			if count >= 1 {
+				return fmt.Errorf("business accounts can have at most 1 card per person; person %d already has a card on account %s", ownerID, accountNumber)
+			}
+		} else {
+			var count int64
+			if e := tx.Model(&model.Card{}).Where("account_number = ? AND status != ?", accountNumber, "deactivated").Count(&count).Error; e != nil {
+				return fmt.Errorf("failed to check card count: %w", e)
+			}
+			if count >= 2 {
+				return fmt.Errorf("personal accounts can have at most 2 cards; account %s already has %d", accountNumber, count)
+			}
+		}
+
+		if e := tx.Create(card).Error; e != nil {
+			return fmt.Errorf("account %s not found or inactive", accountNumber)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, "", err
 	}
 	return card, cvv, nil
 }
