@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -86,11 +87,14 @@ func main() {
 	currencyService := service.NewCurrencyService(currencyRepo)
 	ledgerService := service.NewLedgerService(ledgerRepo, db)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	spendingCron := service.NewSpendingCronService(accountRepo)
-	spendingCron.Start()
+	spendingCron.Start(ctx)
 
 	maintenanceCron := service.NewMaintenanceCronService(accountRepo, ledgerService)
-	maintenanceCron.Start()
+	maintenanceCron.Start(ctx)
 
 	// Seed bank accounts for all supported currencies (idempotent)
 	bankAccounts, _ := accountService.ListBankAccounts()

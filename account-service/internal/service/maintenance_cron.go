@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -17,16 +18,23 @@ func NewMaintenanceCronService(accountRepo *repository.AccountRepository, ledger
 	return &MaintenanceCronService{accountRepo: accountRepo, ledgerSvc: ledgerSvc}
 }
 
-func (s *MaintenanceCronService) Start() {
-	go s.runMonthlyCharge()
+// Start launches the monthly charge goroutine. It exits when ctx is cancelled.
+func (s *MaintenanceCronService) Start(ctx context.Context) {
+	go s.runMonthlyCharge(ctx)
 }
 
-func (s *MaintenanceCronService) runMonthlyCharge() {
+func (s *MaintenanceCronService) runMonthlyCharge(ctx context.Context) {
 	for {
 		now := time.Now()
 		// Next 1st of month at 00:01
 		nextMonth := time.Date(now.Year(), now.Month()+1, 1, 0, 1, 0, 0, now.Location())
-		time.Sleep(time.Until(nextMonth))
+		timer := time.NewTimer(time.Until(nextMonth))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
 		s.chargeMaintenanceFees()
 	}
 }
