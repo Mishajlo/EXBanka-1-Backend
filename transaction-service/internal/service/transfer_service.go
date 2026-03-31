@@ -447,7 +447,10 @@ func (s *TransferService) runRecoveryTick(ctx context.Context) {
 			return e
 		})
 		if retryErr != nil {
-			_ = s.sagaRepo.IncrementRetryCount(comp.ID)
+			if incErr := s.sagaRepo.IncrementRetryCount(comp.ID); incErr != nil {
+				log.Printf("saga recovery: failed to increment retry count for comp %d: %v — skipping dead-letter check", comp.ID, incErr)
+				continue
+			}
 			// comp.RetryCount was loaded at the start of this tick and is stale
 			// after IncrementRetryCount. Because StartCompensationRecovery runs
 			// as a single goroutine (one tick at a time), no other writer can
@@ -466,12 +469,17 @@ func (s *TransferService) runRecoveryTick(ctx context.Context) {
 					RetryCount:      updatedCount,
 					LastError:       retryErr.Error(),
 				}
+				// Mark dead_letter in DB first; if this fails, skip publishing to avoid
+				// duplicate Kafka events on the next tick (step would still be compensating).
+				if dlErr := s.sagaRepo.MarkDeadLetter(comp.ID, retryErr.Error()); dlErr != nil {
+					log.Printf("saga recovery: failed to mark comp %d as dead_letter: %v — will retry next tick", comp.ID, dlErr)
+					continue
+				}
 				if s.dlPublisher != nil {
 					if pubErr := s.dlPublisher.PublishSagaDeadLetter(ctx, dlMsg); pubErr != nil {
 						log.Printf("saga recovery: failed to publish dead-letter for comp %d: %v", comp.ID, pubErr)
 					}
 				}
-				_ = s.sagaRepo.MarkDeadLetter(comp.ID, retryErr.Error())
 				log.Printf("saga recovery: compensation %d moved to dead-letter after %d retries (account %s amount %s)",
 					comp.ID, updatedCount, comp.AccountNumber, comp.Amount.StringFixed(4))
 			} else {
