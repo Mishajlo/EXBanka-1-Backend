@@ -2,7 +2,7 @@
 
 ## Goal
 
-Split the single `Build&Publish_Docker_Images.yml` workflow into two focused files (build-only and build+push), fix the `notification-service` Docker build failure caused by a missing `go.sum` entry, and harden the integration test XML upload so test results are always captured.
+Split the single `Build&Publish_Docker_Images.yml` workflow into two focused files (build-only and build+push), fix the `notification-service` Docker build failure caused by a missing `go.sum` entry, and remove the stale XML warning on integration tests.
 
 ## Architecture
 
@@ -32,50 +32,89 @@ This approach was chosen over true image reuse (building once, tagging twice) be
 Replaces the build-on-PR half of `Build&Publish_Docker_Images.yml`.
 
 - **Trigger**: `pull_request` targeting `Development`
-- **Jobs**: `build` — 11-service matrix (`api-gateway`, `auth-service`, `user-service`, `notification-service`, `client-service`, `account-service`, `card-service`, `transaction-service`, `credit-service`, `exchange-service`, `seeder`)
-- **Key settings**:
-  - `push: false` — images are built but not pushed to registry
-  - `cache-to: type=gha,mode=max,scope=${{ matrix.service }}` — populates GHA cache
-  - `cache-from: type=gha,scope=${{ matrix.service }}` — reads existing cache
-  - No `docker/login-action` step (no registry auth needed)
-- **Permissions**: `contents: read` only
+- **Job guard**: `if: github.repository == 'RAF-SI-2025/EXBanka-1-Backend'` (same as existing file — prevents fork builds from failing on missing registry credentials)
+- **Job name**: `Build ${{ matrix.service }}`
+- **Runner**: `ubuntu-latest`
+- **Permissions**: `contents: read` only (no `packages: write` — no push)
+- **Strategy**: `fail-fast: false` (one service failure does not cancel others)
+- **Matrix** (11 services):
+  ```
+  api-gateway, auth-service, user-service, notification-service,
+  client-service, account-service, card-service, transaction-service,
+  credit-service, exchange-service, seeder
+  ```
+- **Workflow-level env vars**:
+  ```yaml
+  env:
+    REGISTRY: ghcr.io
+    IMAGE_PREFIX: ghcr.io/raf-si-2025
+  ```
+- **Steps** (in order):
+  1. `actions/checkout@v4`
+  2. `docker/setup-qemu-action@v3` (required for multi-platform builds)
+  3. `docker/setup-buildx-action@v3` (required for `cache-to: type=gha`)
+  4. `docker/build-push-action@v6` with:
+     - `context: .`
+     - `file: ${{ matrix.service }}/Dockerfile`
+     - `platforms: linux/amd64,linux/arm64`
+     - `push: false`
+     - `tags: ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ github.sha }}`
+     - `cache-from: type=gha,scope=${{ matrix.service }}`
+     - `cache-to: type=gha,mode=max,scope=${{ matrix.service }}`
+- **No `docker/login-action` step** — no registry auth needed when not pushing.
 
 ### `docker-publish.yml` (new)
 
 Replaces the push-on-merge half of `Build&Publish_Docker_Images.yml`.
 
 - **Trigger**: `push` targeting `Development`
-- **Jobs**: `publish` — same 11-service matrix
-- **Key settings**:
-  - `push: true` — always pushes (trigger already guards for push-only)
-  - `cache-from: type=gha,scope=${{ matrix.service }}` — reads cache from PR build
-  - `cache-to: type=gha,mode=max,scope=${{ matrix.service }}` — updates cache after publish
-  - Tags: `:${{ github.sha }}` and `:latest`
-  - `docker/login-action` step required (registry auth)
+- **Job guard**: `if: github.repository == 'RAF-SI-2025/EXBanka-1-Backend'`
+- **Job name**: `Build ${{ matrix.service }}`
+- **Runner**: `ubuntu-latest`
 - **Permissions**: `contents: read`, `packages: write`
+- **Strategy**: `fail-fast: false`
+- **Matrix**: same 11 services as `docker-build.yml`
+- **Workflow-level env vars**:
+  ```yaml
+  env:
+    REGISTRY: ghcr.io
+    IMAGE_PREFIX: ghcr.io/raf-si-2025
+  ```
+- **Steps** (in order):
+  1. `actions/checkout@v4`
+  2. `docker/login-action@v3` with `registry: ${{ env.REGISTRY }}`, `username: ${{ github.actor }}`, `password: ${{ secrets.GITHUB_TOKEN }}`
+  3. `docker/setup-qemu-action@v3`
+  4. `docker/setup-buildx-action@v3`
+  5. `docker/build-push-action@v6` with:
+     - `context: .`
+     - `file: ${{ matrix.service }}/Dockerfile`
+     - `platforms: linux/amd64,linux/arm64`
+     - `push: true`
+     - `tags:` both `:${{ github.sha }}` and `:latest` under `${{ env.IMAGE_PREFIX }}/${{ matrix.service }}`
+     - `cache-from: type=gha,scope=${{ matrix.service }}`
+     - `cache-to: type=gha,mode=max,scope=${{ matrix.service }}`
 
-Both files share identical matrix definitions, `context: .`, `file: ${{ matrix.service }}/Dockerfile`, and `platforms: linux/amd64,linux/arm64`.
+### `integration-tests.yml` (unchanged)
 
-### `integration-tests.yml` (modified)
-
-- **Change**: Add `continue-on-error: true` to the `Run integration tests` step.
-  - `gotestsum --junitfile test-results.xml` writes the XML regardless of test pass/fail
-  - With `continue-on-error: true`, the step is marked as a warning rather than a hard failure when tests fail, allowing the `Upload test results artifact` step (which already has `if: always()`) to always find and upload the file
-  - The overall workflow job still reflects the test outcome via the step's `outcome` property
-- No other structural changes to this file
+The primary cause of the missing XML file is the `notification-service` Docker build failure (see Bug Fix section below). Once that is fixed, `docker compose up --build -d --wait` succeeds, `gotestsum` runs, and writes `test-results.xml`. The upload step already has `if: always()` which ensures it runs even when tests fail. No changes needed to this file.
 
 ### `publish-test-results.yml` (unchanged)
 
-The existing implementation is correct: `workflow_run` trigger, `actions/download-artifact@v4` with `run-id`, `dorny/test-reporter@v1`. No changes needed.
+The existing implementation is correct: `workflow_run` trigger, `actions/download-artifact@v4` with `run-id: ${{ github.event.workflow_run.id }}`, `dorny/test-reporter@v1`. No changes needed.
 
 ## Bug Fix: `notification-service` go.sum
 
 **Root cause**: `contract/shared/optimistic_lock.go` imports `gorm.io/gorm`. Under the Go workspace (`go.work`), this resolves via the workspace graph. The `notification-service` Dockerfile sets `GOWORK=off` and runs `go mod download` in isolation. `notification-service/go.mod` does not list `gorm.io/gorm` as a dependency, so `go.sum` has no entry for it. Build fails with:
 ```
 missing go.sum entry for module providing package gorm.io/gorm
+(imported by github.com/exbanka/contract/shared)
 ```
 
-**Fix**: Run `go mod tidy` in `notification-service/` (with the `replace github.com/exbanka/contract => ../contract` directive active). This adds `gorm.io/gorm` as an indirect dependency to `notification-service/go.mod` and adds the required checksums to `notification-service/go.sum`.
+**Fix**: Run `go mod tidy` inside the `notification-service/` directory while the `replace github.com/exbanka/contract => ../contract` directive is active (it already is in `notification-service/go.mod`). This adds `gorm.io/gorm` as an indirect dependency to `notification-service/go.mod` and adds the required checksums to `notification-service/go.sum`.
+
+```bash
+cd notification-service && go mod tidy
+```
 
 This is a one-time code fix. No Dockerfile changes, no workflow changes.
 
@@ -88,7 +127,6 @@ This is a one-time code fix. No Dockerfile changes, no workflow changes.
 | `.github/workflows/Build&Publish_Docker_Images.yml` | Delete | Replaced by two focused files |
 | `.github/workflows/docker-build.yml` | Create | Build-only on PRs, populates GHA cache |
 | `.github/workflows/docker-publish.yml` | Create | Build+push on merge, reads GHA cache |
-| `.github/workflows/integration-tests.yml` | Modify | Add `continue-on-error: true` on test step |
 | `notification-service/go.mod` | Modify | Add `gorm.io/gorm` as indirect dependency |
 | `notification-service/go.sum` | Modify | Add checksums for `gorm.io/gorm` and its deps |
 
