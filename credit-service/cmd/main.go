@@ -113,7 +113,7 @@ func main() {
 	loanRequestSvc := service.NewLoanRequestService(loanRequestRepo, loanRepo, installmentRepo, limitClient, accountClient, rateConfigSvc, db)
 	loanSvc := service.NewLoanService(loanRepo)
 	installmentSvc := service.NewInstallmentService(installmentRepo)
-	cronSvc := service.NewCronService(installmentSvc, loanSvc, accountClient, bankAccountClient, clientClient, producer, bankRSDAccount)
+	cronSvc := service.NewCronService(installmentSvc, loanSvc, accountClient, bankAccountClient, clientClient, producer, bankRSDAccount, db)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

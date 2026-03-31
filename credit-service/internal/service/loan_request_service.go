@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	accountpb "github.com/exbanka/contract/accountpb"
@@ -114,7 +115,7 @@ func (s *LoanRequestService) ListLoanRequests(loanTypeFilter, accountFilter, sta
 	return requests, total, nil
 }
 
-func (s *LoanRequestService) ApproveLoanRequest(requestID uint64, employeeID uint64) (*model.Loan, error) {
+func (s *LoanRequestService) ApproveLoanRequest(ctx context.Context, requestID uint64, employeeID uint64) (*model.Loan, error) {
 	// Pre-check: read loan request to validate before taking any locks.
 	// A second authoritative check happens inside the transaction.
 	req, err := s.repo.GetByID(requestID)
@@ -127,7 +128,7 @@ func (s *LoanRequestService) ApproveLoanRequest(requestID uint64, employeeID uin
 
 	// Check employee MaxLoanApprovalAmount limit (advisory — gRPC call cannot be held inside a DB TX).
 	if employeeID > 0 && s.limitClient != nil {
-		limits, limErr := s.limitClient.GetEmployeeLimits(context.Background(), &userpb.EmployeeLimitRequest{EmployeeId: int64(employeeID)})
+		limits, limErr := s.limitClient.GetEmployeeLimits(ctx, &userpb.EmployeeLimitRequest{EmployeeId: int64(employeeID)})
 		if limErr == nil && limits.MaxLoanApprovalAmount != "" && limits.MaxLoanApprovalAmount != "0" {
 			maxAmount, parseErr := decimal.NewFromString(limits.MaxLoanApprovalAmount)
 			if parseErr == nil && maxAmount.IsPositive() && req.Amount.GreaterThan(maxAmount) {
@@ -205,21 +206,47 @@ func (s *LoanRequestService) ApproveLoanRequest(requestID uint64, employeeID uin
 	if err != nil {
 		return nil, err
 	}
+
+	// Disbursement: credit the loan amount to the borrower's account (outside TX — gRPC cannot be held inside a DB TX).
+	if s.accountClient == nil {
+		return loan, nil
+	}
+	_, disburseErr := s.accountClient.UpdateBalance(ctx, &accountpb.UpdateBalanceRequest{
+		AccountNumber:   loan.AccountNumber,
+		Amount:          loan.Amount.StringFixed(4),
+		UpdateAvailable: true,
+	})
+	if disburseErr != nil {
+		loan.Status = "disbursement_failed"
+	} else {
+		loan.Status = "active"
+	}
+	if updateErr := s.loanRepo.Update(loan); updateErr != nil {
+		log.Printf("ApproveLoanRequest: failed to update loan %d status to %s after disbursement: %v", loan.ID, loan.Status, updateErr)
+	}
 	return loan, nil
 }
 
 func (s *LoanRequestService) RejectLoanRequest(requestID uint64) (*model.LoanRequest, error) {
-	req, err := s.repo.GetByID(requestID)
+	var req *model.LoanRequest
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		locked, e := s.repo.GetByIDForUpdate(tx, requestID)
+		if e != nil {
+			return fmt.Errorf("failed to retrieve loan request %d for rejection: %v", requestID, e)
+		}
+		if locked.Status != "pending" {
+			return fmt.Errorf("loan request %d is already %s; only pending requests can be rejected", requestID, locked.Status)
+		}
+		locked.Status = "rejected"
+		if e := tx.Save(locked).Error; e != nil {
+			return fmt.Errorf("failed to update loan request %d status to rejected (loan_type=%s, amount=%s, account=%s): %v",
+				requestID, locked.LoanType, locked.Amount.StringFixed(2), locked.AccountNumber, e)
+		}
+		req = locked
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve loan request %d for rejection: %v", requestID, err)
-	}
-	if req.Status != "pending" {
-		return nil, fmt.Errorf("loan request %d is already %s; only pending requests can be rejected", requestID, req.Status)
-	}
-	req.Status = "rejected"
-	if err := s.repo.Update(req); err != nil {
-		return nil, fmt.Errorf("failed to update loan request %d status to rejected (loan_type=%s, amount=%s, account=%s): %v",
-			requestID, req.LoanType, req.Amount.StringFixed(2), req.AccountNumber, err)
+		return nil, err
 	}
 	return req, nil
 }
