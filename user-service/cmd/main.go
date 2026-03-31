@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -84,8 +85,11 @@ func main() {
 		log.Fatalf("failed to seed default limit templates: %v", err)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	limitCron := service.NewLimitCronService(employeeLimitRepo)
-	limitCron.Start()
+	limitCron.Start(ctx)
 
 	grpcHandler := handler.NewUserGRPCHandler(empService, roleSvc)
 	limitHandler := handler.NewLimitGRPCHandler(limitSvc)

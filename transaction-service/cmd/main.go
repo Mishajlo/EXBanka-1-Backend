@@ -42,6 +42,7 @@ func main() {
 		&model.PaymentRecipient{},
 		&model.VerificationCode{},
 		&model.TransferFee{},
+		&model.SagaLog{},
 	); err != nil {
 		log.Fatalf("failed to migrate: %v", err)
 	}
@@ -58,6 +59,7 @@ func main() {
 		"transaction.transfer-created",
 		"transaction.transfer-completed",
 		"transaction.transfer-failed",
+		"transaction.saga-dead-letter",
 		"notification.send-email",
 	)
 
@@ -91,6 +93,7 @@ func main() {
 	transferRepo := repository.NewTransferRepository(db)
 	recipientRepo := repository.NewPaymentRecipientRepository(db)
 	vcRepo := repository.NewVerificationCodeRepository(db)
+	sagaLogRepo := repository.NewSagaLogRepository(db)
 
 	feeRepo := repository.NewTransferFeeRepository(db)
 	feeSvc := service.NewFeeService(feeRepo)
@@ -120,8 +123,12 @@ func main() {
 		log.Printf("warn: could not fetch bank RSD account, fees will not be credited to bank: %v", bankRSDErr)
 	}
 
-	paymentSvc := service.NewPaymentService(paymentRepo, accountClient, feeSvc, producer, bankRSDAccountNumber)
-	transferSvc := service.NewTransferService(transferRepo, exchangeClient, accountClient, bankClient, feeSvc, producer)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	paymentSvc := service.NewPaymentService(paymentRepo, accountClient, feeSvc, producer, bankRSDAccountNumber, sagaLogRepo)
+	transferSvc := service.NewTransferService(transferRepo, exchangeClient, accountClient, bankClient, feeSvc, producer, sagaLogRepo)
+	transferSvc.StartCompensationRecovery(ctx)
 	recipientSvc := service.NewPaymentRecipientService(recipientRepo)
 	verificationSvc := service.NewVerificationService(vcRepo, paymentRepo, transferRepo)
 

@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -73,99 +75,39 @@ func (m *mockAccountClientForLoan) GetLedgerEntries(_ context.Context, _ *accoun
 	return nil, nil
 }
 
-// ---- in-memory repos --------------------------------------------------------
+// ---- test DB & helpers -------------------------------------------------------
 
-type memLoanRequestRepo struct {
-	requests map[uint64]*model.LoanRequest
-	nextID   uint64
-}
-
-func newMemLoanRequestRepo() *memLoanRequestRepo {
-	return &memLoanRequestRepo{requests: make(map[uint64]*model.LoanRequest), nextID: 1}
-}
-func (r *memLoanRequestRepo) Create(req *model.LoanRequest) error {
-	req.ID = r.nextID
-	r.nextID++
-	cp := *req
-	r.requests[req.ID] = &cp
-	return nil
-}
-func (r *memLoanRequestRepo) GetByID(id uint64) (*model.LoanRequest, error) {
-	if req, ok := r.requests[id]; ok {
-		cp := *req
-		return &cp, nil
-	}
-	return nil, errors.New("not found")
-}
-func (r *memLoanRequestRepo) Update(req *model.LoanRequest) error {
-	cp := *req
-	r.requests[req.ID] = &cp
-	return nil
-}
-func (r *memLoanRequestRepo) List(_, _, _ string, _ uint64, _, _ int) ([]model.LoanRequest, int64, error) {
-	return nil, 0, nil
-}
-
-type memLoanRepo struct {
-	loans      map[uint64]*model.Loan
-	nextID     uint64
-	updateSeen []string
-}
-
-func newMemLoanRepo() *memLoanRepo {
-	return &memLoanRepo{loans: make(map[uint64]*model.Loan), nextID: 1}
-}
-func (r *memLoanRepo) GenerateLoanNumber() string { return "LN0000000001" }
-func (r *memLoanRepo) Create(loan *model.Loan) error {
-	loan.ID = r.nextID
-	r.nextID++
-	cp := *loan
-	r.loans[loan.ID] = &cp
-	return nil
-}
-func (r *memLoanRepo) Update(loan *model.Loan) error {
-	r.updateSeen = append(r.updateSeen, loan.Status)
-	cp := *loan
-	r.loans[loan.ID] = &cp
-	return nil
-}
-func (r *memLoanRepo) GetByID(id uint64) (*model.Loan, error) {
-	if l, ok := r.loans[id]; ok {
-		cp := *l
-		return &cp, nil
-	}
-	return nil, errors.New("not found")
-}
-
-type memInstallmentRepo struct{}
-
-func (r *memInstallmentRepo) CreateBatch(_ []model.Installment) error { return nil }
-
-// ---- helper -----------------------------------------------------------------
-
-func buildDisbursementSvc(t *testing.T, accountClient accountpb.AccountServiceClient) (*LoanRequestService, *memLoanRequestRepo, *memLoanRepo) {
+func newDisbursementTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	loanReqRepo := newMemLoanRequestRepo()
-	loanRepo := newMemLoanRepo()
-	installRepo := &memInstallmentRepo{}
-	rateConfigSvc := newTestRateConfigSvc(t)
-	svc := NewLoanRequestService(loanReqRepo, loanRepo, installRepo, nil, accountClient, rateConfigSvc)
-	return svc, loanReqRepo, loanRepo
-}
-
-func newTestRateConfigSvc(t *testing.T) *RateConfigService {
-	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	dbName := strings.ReplaceAll(t.Name(), "/", "_")
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", dbName)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.InterestRateTier{}, &model.BankMargin{}))
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, db.AutoMigrate(
+		&model.LoanRequest{}, &model.Loan{}, &model.Installment{},
+		&model.InterestRateTier{}, &model.BankMargin{},
+	))
+	return db
+}
+
+func buildDisbursementSvc(t *testing.T, accountClient accountpb.AccountServiceClient) (*LoanRequestService, *gorm.DB) {
+	t.Helper()
+	db := newDisbursementTestDB(t)
+	loanReqRepo := repository.NewLoanRequestRepository(db)
+	loanRepo := repository.NewLoanRepository(db)
+	installRepo := repository.NewInstallmentRepository(db)
 	tierRepo := repository.NewInterestRateTierRepository(db)
 	marginRepo := repository.NewBankMarginRepository(db)
-	svc := NewRateConfigService(tierRepo, marginRepo)
-	require.NoError(t, svc.SeedDefaults())
-	return svc
+	rateConfigSvc := NewRateConfigService(tierRepo, marginRepo, db)
+	require.NoError(t, rateConfigSvc.SeedDefaults())
+	svc := NewLoanRequestService(loanReqRepo, loanRepo, installRepo, nil, accountClient, rateConfigSvc, db)
+	return svc, db
 }
 
-func seedPendingRequest(t *testing.T, repo *memLoanRequestRepo) *model.LoanRequest {
+func seedPendingRequest(t *testing.T, db *gorm.DB) *model.LoanRequest {
 	t.Helper()
 	req := &model.LoanRequest{
 		ClientID:        1,
@@ -177,7 +119,7 @@ func seedPendingRequest(t *testing.T, repo *memLoanRequestRepo) *model.LoanReque
 		AccountNumber:   "ACC-TEST-001",
 		Status:          "pending",
 	}
-	require.NoError(t, repo.Create(req))
+	require.NoError(t, db.Create(req).Error)
 	return req
 }
 
@@ -185,49 +127,49 @@ func seedPendingRequest(t *testing.T, repo *memLoanRequestRepo) *model.LoanReque
 
 func TestApproveLoan_DisbursesOnSuccess(t *testing.T) {
 	client := &mockAccountClientForLoan{updateBalanceErr: nil}
-	svc, reqRepo, loanRepo := buildDisbursementSvc(t, client)
-
-	req := seedPendingRequest(t, reqRepo)
+	svc, db := buildDisbursementSvc(t, client)
+	req := seedPendingRequest(t, db)
 
 	loan, err := svc.ApproveLoanRequest(context.Background(), req.ID, 0)
 	require.NoError(t, err)
 	assert.Equal(t, "active", loan.Status, "loan status must be active when disbursement succeeds")
+
+	// Verify persisted status in DB.
+	var dbLoan model.Loan
+	require.NoError(t, db.First(&dbLoan, loan.ID).Error)
+	assert.Equal(t, "active", dbLoan.Status)
 
 	require.Len(t, client.calls, 1, "UpdateBalance must be called exactly once")
 	assert.Equal(t, "ACC-TEST-001", client.calls[0])
 
 	require.Len(t, client.amounts, 1)
 	assert.Equal(t, "10000.0000", client.amounts[0], "disbursement amount must match loan amount in StringFixed(4) format")
-
-	require.Len(t, loanRepo.updateSeen, 1, "loanRepo.Update must be called exactly once on success")
-	assert.Equal(t, "active", loanRepo.updateSeen[0])
 }
 
 func TestApproveLoan_SoftFailOnDisbursementError(t *testing.T) {
 	client := &mockAccountClientForLoan{updateBalanceErr: errors.New("account service unavailable")}
-	svc, reqRepo, loanRepo := buildDisbursementSvc(t, client)
-
-	req := seedPendingRequest(t, reqRepo)
+	svc, db := buildDisbursementSvc(t, client)
+	req := seedPendingRequest(t, db)
 
 	loan, err := svc.ApproveLoanRequest(context.Background(), req.ID, 0)
 	require.NoError(t, err, "soft failure must not propagate as an error to the caller")
 	assert.Equal(t, "disbursement_failed", loan.Status)
 
-	require.Len(t, loanRepo.updateSeen, 1, "loanRepo.Update must be called exactly once on soft failure")
-	assert.Equal(t, "disbursement_failed", loanRepo.updateSeen[0])
-
-	persisted, err := loanRepo.GetByID(loan.ID)
-	require.NoError(t, err)
-	assert.Equal(t, "disbursement_failed", persisted.Status)
+	// Verify persisted status in DB.
+	var dbLoan model.Loan
+	require.NoError(t, db.First(&dbLoan, loan.ID).Error)
+	assert.Equal(t, "disbursement_failed", dbLoan.Status)
 }
 
 func TestApproveLoan_NilAccountClient(t *testing.T) {
-	svc, reqRepo, loanRepo := buildDisbursementSvc(t, nil)
-	req := seedPendingRequest(t, reqRepo)
+	svc, db := buildDisbursementSvc(t, nil)
+	req := seedPendingRequest(t, db)
 
 	loan, err := svc.ApproveLoanRequest(context.Background(), req.ID, 0)
 	require.NoError(t, err)
 	assert.Equal(t, "approved", loan.Status)
-	assert.Len(t, loanRepo.loans, 1, "loan must be created even when accountClient is nil")
-	assert.Empty(t, loanRepo.updateSeen, "loanRepo.Update must not be called when accountClient is nil")
+
+	var count int64
+	db.Model(&model.Loan{}).Count(&count)
+	assert.Equal(t, int64(1), count, "loan must be created even when accountClient is nil")
 }
