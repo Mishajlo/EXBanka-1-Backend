@@ -15,6 +15,7 @@ import (
 	shared "github.com/exbanka/contract/shared"
 	"github.com/exbanka/transaction-service/internal/kafka"
 	"github.com/exbanka/transaction-service/internal/model"
+	"github.com/exbanka/transaction-service/internal/repository"
 )
 
 // PaymentRepo abstracts the PaymentRepository for testing.
@@ -34,15 +35,17 @@ type PaymentService struct {
 	feeSvc         *FeeService
 	producer       *kafka.Producer
 	bankRSDAccount string // account number of bank's RSD account
+	sagaRepo       *repository.SagaLogRepository // nil-safe: saga logging skipped when nil
 }
 
-func NewPaymentService(paymentRepo PaymentRepo, accountClient accountpb.AccountServiceClient, feeSvc *FeeService, producer *kafka.Producer, bankRSDAccount string) *PaymentService {
+func NewPaymentService(paymentRepo PaymentRepo, accountClient accountpb.AccountServiceClient, feeSvc *FeeService, producer *kafka.Producer, bankRSDAccount string, sagaRepo *repository.SagaLogRepository) *PaymentService {
 	return &PaymentService{
 		paymentRepo:    paymentRepo,
 		accountClient:  accountClient,
 		feeSvc:         feeSvc,
 		producer:       producer,
 		bankRSDAccount: bankRSDAccount,
+		sagaRepo:       sagaRepo,
 	}
 }
 
@@ -209,54 +212,42 @@ func (s *PaymentService) ExecutePayment(ctx context.Context, paymentID uint64) e
 		}
 	}
 
-	// Debit sender account
+	// Debit sender and credit recipient via saga-logged steps for durable compensation.
 	if s.accountClient != nil {
-		debitAmt := totalDebit.Neg().StringFixed(4)
-		if err := shared.Retry(ctx, shared.DefaultRetryConfig, func() error {
-			_, e := s.accountClient.UpdateBalance(ctx, &accountpb.UpdateBalanceRequest{
-				AccountNumber:   payment.FromAccountNumber,
-				Amount:          debitAmt,
-				UpdateAvailable: true,
-			})
-			return e
-		}); err != nil {
-			reason := fmt.Sprintf("debit failed on account %s for amount %s %s: %v",
-				payment.FromAccountNumber, totalDebit.StringFixed(4), currency, err)
-			_ = s.paymentRepo.UpdateStatusWithReason(payment.ID, "failed", reason)
-			s.publishPaymentFailed(ctx, payment, reason)
-			return fmt.Errorf("failed to debit sender account %s for %s %s: %w",
-				payment.FromAccountNumber, totalDebit.StringFixed(4), currency, err)
+		steps := []sagaStep{
+			{
+				name:          "debit_sender",
+				accountNumber: payment.FromAccountNumber,
+				amount:        totalDebit.Neg(),
+				execute: func(ctx context.Context) error {
+					return shared.Retry(ctx, shared.DefaultRetryConfig, func() error {
+						_, e := s.accountClient.UpdateBalance(ctx, &accountpb.UpdateBalanceRequest{
+							AccountNumber: payment.FromAccountNumber, Amount: totalDebit.Neg().StringFixed(4), UpdateAvailable: true,
+						})
+						return e
+					})
+				},
+			},
+			{
+				name:          "credit_recipient",
+				accountNumber: payment.ToAccountNumber,
+				amount:        payment.InitialAmount,
+				execute: func(ctx context.Context) error {
+					return shared.Retry(ctx, shared.DefaultRetryConfig, func() error {
+						_, e := s.accountClient.UpdateBalance(ctx, &accountpb.UpdateBalanceRequest{
+							AccountNumber: payment.ToAccountNumber, Amount: payment.InitialAmount.StringFixed(4), UpdateAvailable: true,
+						})
+						return e
+					})
+				},
+			},
 		}
-	}
-
-	// Credit recipient account
-	if s.accountClient != nil {
-		creditAmt := payment.InitialAmount.StringFixed(4)
-		if err := shared.Retry(ctx, shared.DefaultRetryConfig, func() error {
-			_, e := s.accountClient.UpdateBalance(ctx, &accountpb.UpdateBalanceRequest{
-				AccountNumber:   payment.ToAccountNumber,
-				Amount:          creditAmt,
-				UpdateAvailable: true,
-			})
-			return e
-		}); err != nil {
-			// Compensating transaction: reverse the debit
-			reverseAmt := totalDebit.StringFixed(4)
-			_ = shared.Retry(ctx, shared.DefaultRetryConfig, func() error {
-				_, e := s.accountClient.UpdateBalance(ctx, &accountpb.UpdateBalanceRequest{
-					AccountNumber:   payment.FromAccountNumber,
-					Amount:          reverseAmt,
-					UpdateAvailable: true,
-				})
-				return e
-			})
-			reason := fmt.Sprintf("credit failed on recipient account %s for amount %s %s (debit of %s on %s reversed): %v",
-				payment.ToAccountNumber, payment.InitialAmount.StringFixed(4), currency,
-				totalDebit.StringFixed(4), payment.FromAccountNumber, err)
+		if err := executeWithSaga(ctx, s.sagaRepo, s.accountClient, shared.DefaultRetryConfig, payment.ID, "payment", steps); err != nil {
+			reason := fmt.Sprintf("payment execution failed for %s → %s amount %s %s: %v",
+				payment.FromAccountNumber, payment.ToAccountNumber, totalDebit.StringFixed(4), currency, err)
 			_ = s.paymentRepo.UpdateStatusWithReason(payment.ID, "failed", reason)
 			s.publishPaymentFailed(ctx, payment, reason)
-			return fmt.Errorf("failed to credit recipient account %s for %s %s: %w",
-				payment.ToAccountNumber, payment.InitialAmount.StringFixed(4), currency, err)
+			return fmt.Errorf("payment %d execution failed: %w", payment.ID, err)
 		}
 	}
 

@@ -184,7 +184,7 @@ func buildCrossCurrencyTransfer(repo *mockTransferRepo) *model.Transfer {
 func newCrossCurrencyTransferService(accountClient *mockAccountClientForTransfer, bankClient *mockBankAccountClient) (*TransferService, *mockTransferRepo) {
 	repo := newMockTransferRepo()
 	feeSvc := &FeeService{repo: &mockFeeRepo{}}
-	svc := NewTransferService(repo, nil, accountClient, bankClient, feeSvc, nil)
+	svc := NewTransferService(repo, nil, accountClient, bankClient, feeSvc, nil, nil)
 	// MaxAttempts=1 ensures each UpdateBalance is attempted exactly once,
 	// so failOnCall indices are deterministic and tests run without sleep delays.
 	svc.retryConfig = shared.RetryConfig{MaxAttempts: 1}

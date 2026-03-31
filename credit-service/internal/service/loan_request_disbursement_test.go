@@ -149,7 +149,7 @@ func buildDisbursementSvc(t *testing.T, accountClient accountpb.AccountServiceCl
 	loanRepo := newMemLoanRepo()
 	installRepo := &memInstallmentRepo{}
 	rateConfigSvc := newTestRateConfigSvc(t)
-	svc := NewLoanRequestService(loanReqRepo, loanRepo, installRepo, nil, accountClient, rateConfigSvc)
+	svc := NewLoanRequestService(loanReqRepo, loanRepo, installRepo, nil, accountClient, rateConfigSvc, nil)
 	return svc, loanReqRepo, loanRepo
 }
 
@@ -160,7 +160,7 @@ func newTestRateConfigSvc(t *testing.T) *RateConfigService {
 	require.NoError(t, db.AutoMigrate(&model.InterestRateTier{}, &model.BankMargin{}))
 	tierRepo := repository.NewInterestRateTierRepository(db)
 	marginRepo := repository.NewBankMarginRepository(db)
-	svc := NewRateConfigService(tierRepo, marginRepo)
+	svc := NewRateConfigService(tierRepo, marginRepo, db)
 	require.NoError(t, svc.SeedDefaults())
 	return svc
 }
