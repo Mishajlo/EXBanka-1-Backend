@@ -98,5 +98,5 @@ func (c *EmailConsumer) Close() error {
 // is logged to the console and a success confirmation is published.
 func isTestAddress(email string) bool {
 	at := strings.Index(email, "@")
-	return at > 0 && strings.Contains(email[:at], "+")
+	return at > 0 && strings.Contains(email[:at], "+test")
 }
