@@ -166,6 +166,22 @@ services:
       timeout: 5s
       retries: 5
 
+  stock-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: stockdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5440:5432"
+    volumes:
+      - stock-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   # ─── Services ─────────────────────────────────────────────────────────────
 
   user-service:
@@ -410,6 +426,36 @@ services:
       kafka:
         condition: service_healthy
 
+  stock-service:
+    build:
+      context: .
+      dockerfile: stock-service/Dockerfile
+    environment:
+      STOCK_DB_HOST: stock-db
+      STOCK_DB_PORT: "5432"
+      STOCK_DB_USER: postgres
+      STOCK_DB_PASSWORD: postgres
+      STOCK_DB_NAME: stockdb
+      STOCK_DB_SSLMODE: disable
+      STOCK_GRPC_ADDR: ":50060"
+      KAFKA_BROKERS: kafka:9092
+      USER_GRPC_ADDR: "user-service:50052"
+      ACCOUNT_GRPC_ADDR: "account-service:50055"
+      EXCHANGE_GRPC_ADDR: "exchange-service:50059"
+    ports:
+      - "50060:50060"
+    depends_on:
+      stock-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+      account-service:
+        condition: service_started
+      exchange-service:
+        condition: service_started
+
   # ─── API Gateway ──────────────────────────────────────────────────────────
 
   api-gateway:
@@ -426,6 +472,7 @@ services:
       TRANSACTION_GRPC_ADDR: "transaction-service:50057"
       CREDIT_GRPC_ADDR: "credit-service:50058"
       EXCHANGE_GRPC_ADDR: "exchange-service:50059"
+      STOCK_GRPC_ADDR: "stock-service:50060"
     ports:
       - "8080:8080"
     depends_on:
@@ -444,6 +491,8 @@ services:
       credit-service:
         condition: service_started
       exchange-service:
+        condition: service_started
+      stock-service:
         condition: service_started
 
   # ─── Seeder ───────────────────────────────────────────────────────────────
@@ -480,3 +529,4 @@ volumes:
   transaction-db-data:
   credit-db-data:
   exchange-db-data:
+  stock-db-data:
