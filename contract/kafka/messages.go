@@ -232,10 +232,10 @@ type VirtualCardCreatedMessage struct {
 
 // Account event topic constants
 const (
-	TopicAccountNameUpdated      = "account.name-updated"
-	TopicAccountLimitsUpdated    = "account.limits-updated"
-	TopicMaintenanceFeeCharged   = "account.maintenance-charged"
-	TopicSpendingReset           = "account.spending-reset"
+	TopicAccountNameUpdated    = "account.name-updated"
+	TopicAccountLimitsUpdated  = "account.limits-updated"
+	TopicMaintenanceFeeCharged = "account.maintenance-charged"
+	TopicSpendingReset         = "account.spending-reset"
 )
 
 // AccountNameUpdatedMessage is published when an account's name is changed.
@@ -314,6 +314,16 @@ type CardRequestRejectedMessage struct {
 	RequestID  uint64 `json:"request_id"`
 	EmployeeID uint64 `json:"employee_id"`
 	Reason     string `json:"reason"`
+}
+
+// Actuary events
+const (
+	TopicActuaryLimitUpdated = "user.actuary-limit-updated"
+)
+
+type ActuaryLimitUpdatedMessage struct {
+	EmployeeID int64  `json:"employee_id"`
+	Action     string `json:"action"` // limit_set, used_limit_reset, need_approval_changed
 }
 
 const (

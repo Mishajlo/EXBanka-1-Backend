@@ -12,8 +12,15 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
+	pb "github.com/exbanka/contract/stockpb"
+
 	shared "github.com/exbanka/contract/shared"
 	"github.com/exbanka/stock-service/internal/config"
+	"github.com/exbanka/stock-service/internal/handler"
+	kafkaprod "github.com/exbanka/stock-service/internal/kafka"
+	"github.com/exbanka/stock-service/internal/model"
+	"github.com/exbanka/stock-service/internal/repository"
+	"github.com/exbanka/stock-service/internal/service"
 )
 
 func main() {
@@ -23,24 +30,48 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
+	if err := db.AutoMigrate(
+		&model.StockExchange{},
+		&model.SystemSetting{},
+	); err != nil {
+		log.Fatalf("failed to migrate: %v", err)
+	}
 
-	// AutoMigrate will be added in implementation plans
-	_ = db
+	producer := kafkaprod.NewProducer(cfg.KafkaBrokers)
+	defer producer.Close()
+
+	kafkaprod.EnsureTopics(cfg.KafkaBrokers,
+		"stock.exchange-synced",
+	)
+
+	_ = producer // will be used by future services
+
+	exchangeRepo := repository.NewExchangeRepository(db)
+	settingRepo := repository.NewSystemSettingRepository(db)
+
+	exchangeSvc := service.NewExchangeService(exchangeRepo, settingRepo)
+
+	// Seed exchanges from CSV on startup
+	csvPath := getEnv("EXCHANGE_CSV_PATH", "data/exchanges.csv")
+	if err := exchangeSvc.SeedExchanges(csvPath); err != nil {
+		log.Printf("WARN: failed to seed exchanges from CSV: %v", err)
+	}
+
+	exchangeHandler := handler.NewExchangeGRPCHandler(exchangeSvc)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
-	// Register services — will be added in implementation plans
-
-	shared.RegisterHealthCheck(grpcServer, "stock-service")
+	s := grpc.NewServer()
+	pb.RegisterStockExchangeGRPCServiceServer(s, exchangeHandler)
+	shared.RegisterHealthCheck(s, "stock-service")
 
 	go func() {
 		fmt.Printf("stock-service listening on %s\n", cfg.GRPCAddr)
-		if err := grpcServer.Serve(lis); err != nil {
-			log.Fatalf("failed to serve: %v", err)
+		if err := s.Serve(lis); err != nil {
+			log.Fatalf("gRPC server failed: %v", err)
 		}
 	}()
 
@@ -48,7 +79,14 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down gracefully...")
-	grpcServer.GracefulStop()
-	log.Println("Server stopped")
+	log.Println("Shutting down stock-service...")
+	s.GracefulStop()
+	log.Println("stock-service stopped")
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }

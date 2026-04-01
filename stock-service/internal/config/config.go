@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
 
 type Config struct {
@@ -18,21 +19,34 @@ type Config struct {
 	UserGRPCAddr     string
 	AccountGRPCAddr  string
 	ExchangeGRPCAddr string
+	ExchangeCSVPath  string
+	// Securities sync
+	AlphaVantageAPIKey       string
+	SecuritySyncIntervalMins int
 }
 
 func Load() *Config {
+	syncMins := 15
+	if v := os.Getenv("SECURITY_SYNC_INTERVAL_MINUTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			syncMins = n
+		}
+	}
 	return &Config{
-		DBHost:           getEnv("STOCK_DB_HOST", "localhost"),
-		DBPort:           getEnv("STOCK_DB_PORT", "5440"),
-		DBUser:           getEnv("STOCK_DB_USER", "postgres"),
-		DBPassword:       getEnv("STOCK_DB_PASSWORD", "postgres"),
-		DBName:           getEnv("STOCK_DB_NAME", "stock_db"),
-		DBSslmode:        getEnv("STOCK_DB_SSLMODE", "disable"),
-		GRPCAddr:         getEnv("STOCK_GRPC_ADDR", ":50060"),
-		KafkaBrokers:     getEnv("KAFKA_BROKERS", "localhost:9092"),
-		UserGRPCAddr:     getEnv("USER_GRPC_ADDR", "localhost:50052"),
-		AccountGRPCAddr:  getEnv("ACCOUNT_GRPC_ADDR", "localhost:50055"),
-		ExchangeGRPCAddr: getEnv("EXCHANGE_GRPC_ADDR", "localhost:50059"),
+		DBHost:                   getEnv("STOCK_DB_HOST", "localhost"),
+		DBPort:                   getEnv("STOCK_DB_PORT", "5440"),
+		DBUser:                   getEnv("STOCK_DB_USER", "postgres"),
+		DBPassword:               getEnv("STOCK_DB_PASSWORD", "postgres"),
+		DBName:                   getEnv("STOCK_DB_NAME", "stock_db"),
+		DBSslmode:                getEnv("STOCK_DB_SSLMODE", "disable"),
+		GRPCAddr:                 getEnv("STOCK_GRPC_ADDR", ":50060"),
+		KafkaBrokers:             getEnv("KAFKA_BROKERS", "localhost:9092"),
+		UserGRPCAddr:             getEnv("USER_GRPC_ADDR", "localhost:50052"),
+		AccountGRPCAddr:          getEnv("ACCOUNT_GRPC_ADDR", "localhost:50055"),
+		ExchangeGRPCAddr:         getEnv("EXCHANGE_GRPC_ADDR", "localhost:50059"),
+		ExchangeCSVPath:          getEnv("EXCHANGE_CSV_PATH", "data/exchanges.csv"),
+		AlphaVantageAPIKey:       getEnv("ALPHAVANTAGE_API_KEY", ""),
+		SecuritySyncIntervalMins: syncMins,
 	}
 }
 
