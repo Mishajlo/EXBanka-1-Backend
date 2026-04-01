@@ -13,6 +13,7 @@ import (
 	_ "github.com/exbanka/api-gateway/docs"
 	"github.com/exbanka/api-gateway/internal/config"
 	grpcclients "github.com/exbanka/api-gateway/internal/grpc"
+	"github.com/exbanka/api-gateway/internal/handler"
 	"github.com/exbanka/api-gateway/internal/router"
 )
 
@@ -161,7 +162,24 @@ func main() {
 	}
 	defer actuaryConn.Close()
 
-	r := router.Setup(authClient, userClient, clientClient, accountClient, cardClient, txClient, creditClient, empLimitClient, clientLimitClient, virtualCardClient, bankAccountClient, feeClient, cardRequestClient, exchangeClient, stockExchangeClient, securityClient, orderClient, portfolioClient, otcClient, taxClient, actuaryClient)
+	verificationClient, verificationConn, err := grpcclients.NewVerificationClient(cfg.VerificationGRPCAddr)
+	if err != nil {
+		log.Fatalf("failed to connect to verification service: %v", err)
+	}
+	defer verificationConn.Close()
+
+	notificationClient, notificationConn, err := grpcclients.NewNotificationClient(cfg.NotificationGRPCAddr)
+	if err != nil {
+		log.Fatalf("failed to connect to notification service: %v", err)
+	}
+	defer notificationConn.Close()
+
+	wsHandler := handler.NewWebSocketHandler(authClient)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wsHandler.StartKafkaConsumer(ctx, cfg.KafkaBrokers)
+
+	r := router.Setup(authClient, userClient, clientClient, accountClient, cardClient, txClient, creditClient, empLimitClient, clientLimitClient, virtualCardClient, bankAccountClient, feeClient, cardRequestClient, exchangeClient, stockExchangeClient, securityClient, orderClient, portfolioClient, otcClient, taxClient, actuaryClient, verificationClient, notificationClient, wsHandler)
 
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,
@@ -182,9 +200,10 @@ func main() {
 	<-quit
 
 	log.Println("Shutting down API Gateway gracefully...")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	cancel() // stop WebSocket Kafka consumer
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("server forced to shutdown: %v", err)
 	}
 	log.Println("Server stopped")

@@ -14,9 +14,11 @@ import (
 	clientpb "github.com/exbanka/contract/clientpb"
 	creditpb "github.com/exbanka/contract/creditpb"
 	exchangepb "github.com/exbanka/contract/exchangepb"
+	notificationpb "github.com/exbanka/contract/notificationpb"
 	stockpb "github.com/exbanka/contract/stockpb"
 	transactionpb "github.com/exbanka/contract/transactionpb"
 	userpb "github.com/exbanka/contract/userpb"
+	verificationpb "github.com/exbanka/contract/verificationpb"
 )
 
 func Setup(
@@ -41,6 +43,9 @@ func Setup(
 	otcClient stockpb.OTCGRPCServiceClient,
 	taxClient stockpb.TaxGRPCServiceClient,
 	actuaryClient userpb.ActuaryServiceClient,
+	verificationClient verificationpb.VerificationGRPCServiceClient,
+	notificationClient notificationpb.NotificationServiceClient,
+	wsHandler *handler.WebSocketHandler,
 ) *gin.Engine {
 	r := gin.Default()
 	r.Use(cors.New(cors.Config{
@@ -177,6 +182,57 @@ func Setup(
 		{
 			otc.GET("", portfolioHandler.ListOTCOffers)
 			otc.POST("/:id/buy", portfolioHandler.BuyOTCOffer)
+		}
+
+		// --- Mobile Auth (public, no auth required) ---
+		mobileAuth := api.Group("/mobile/auth")
+		{
+			mobileAuthHandler := handler.NewMobileAuthHandler(authClient)
+			mobileAuth.POST("/request-activation", mobileAuthHandler.RequestActivation)
+			mobileAuth.POST("/activate", mobileAuthHandler.ActivateDevice)
+			mobileAuth.POST("/refresh", mobileAuthHandler.RefreshMobileToken)
+		}
+
+		// --- Mobile Device Management (MobileAuthMiddleware) ---
+		mobileDevice := api.Group("/mobile/device")
+		mobileDevice.Use(middleware.MobileAuthMiddleware(authClient))
+		{
+			mobileAuthHandler := handler.NewMobileAuthHandler(authClient)
+			mobileDevice.GET("", mobileAuthHandler.GetDeviceInfo)
+			mobileDevice.POST("/deactivate", mobileAuthHandler.DeactivateDevice)
+			mobileDevice.POST("/transfer", mobileAuthHandler.TransferDevice)
+		}
+
+		// --- Mobile Verifications (MobileAuthMiddleware + RequireDeviceSignature) ---
+		mobileVerify := api.Group("/mobile/verifications")
+		mobileVerify.Use(middleware.MobileAuthMiddleware(authClient))
+		mobileVerify.Use(middleware.RequireDeviceSignature(authClient))
+		{
+			verifyHandler := handler.NewVerificationHandler(verificationClient, notificationClient)
+			mobileVerify.GET("/pending", verifyHandler.GetPendingVerifications)
+			mobileVerify.POST("/:challenge_id/submit", verifyHandler.SubmitMobileVerification)
+		}
+
+		// --- QR Verification (MobileAuthMiddleware + RequireDeviceSignature) ---
+		qrVerify := api.Group("/verify")
+		qrVerify.Use(middleware.MobileAuthMiddleware(authClient))
+		qrVerify.Use(middleware.RequireDeviceSignature(authClient))
+		{
+			verifyHandler := handler.NewVerificationHandler(verificationClient, notificationClient)
+			qrVerify.POST("/:challenge_id", verifyHandler.VerifyQR)
+		}
+
+		// --- WebSocket for mobile push ---
+		api.GET("/ws/mobile", wsHandler.HandleConnect)
+
+		// --- Browser-facing Verifications (AnyAuthMiddleware) ---
+		verifications := api.Group("/verifications")
+		verifications.Use(middleware.AnyAuthMiddleware(authClient))
+		{
+			verifyHandler := handler.NewVerificationHandler(verificationClient, notificationClient)
+			verifications.POST("", verifyHandler.CreateVerification)
+			verifications.GET("/:id/status", verifyHandler.GetVerificationStatus)
+			verifications.POST("/:id/code", verifyHandler.SubmitVerificationCode)
 		}
 
 		// Employee/admin routes (AuthMiddleware + RequirePermission)
