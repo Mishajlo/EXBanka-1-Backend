@@ -15,4 +15,5 @@ use (
 	./stock-service
 	./transaction-service
 	./user-service
+	./verification-service
 )

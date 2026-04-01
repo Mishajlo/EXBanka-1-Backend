@@ -182,6 +182,22 @@ services:
       timeout: 5s
       retries: 5
 
+  verification-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: verificationdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5441:5432"
+    volumes:
+      - verification-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   # ─── Services ─────────────────────────────────────────────────────────────
 
   user-service:
@@ -228,6 +244,8 @@ services:
       AUTH_DB_SSLMODE: disable
       FRONTEND_BASE_URL: "http://localhost:5173"
       PASSWORD_PEPPER: "${PASSWORD_PEPPER}"
+      MOBILE_REFRESH_EXPIRY: "2160h"
+      MOBILE_ACTIVATION_EXPIRY: "15m"
     ports:
       - "50051:50051"
     depends_on:
@@ -462,6 +480,29 @@ services:
       client-service:
         condition: service_started
 
+  verification-service:
+    build:
+      context: .
+      dockerfile: verification-service/Dockerfile
+    environment:
+      VERIFICATION_DB_HOST: verification-db
+      VERIFICATION_DB_PORT: "5432"
+      VERIFICATION_DB_USER: postgres
+      VERIFICATION_DB_PASSWORD: postgres
+      VERIFICATION_DB_NAME: verificationdb
+      VERIFICATION_GRPC_ADDR: ":50061"
+      KAFKA_BROKERS: kafka:9092
+      VERIFICATION_DB_SSLMODE: disable
+      VERIFICATION_CHALLENGE_EXPIRY: "5m"
+      VERIFICATION_MAX_ATTEMPTS: "3"
+    ports:
+      - "50061:50061"
+    depends_on:
+      verification-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
   # ─── API Gateway ──────────────────────────────────────────────────────────
 
   api-gateway:
@@ -479,6 +520,7 @@ services:
       CREDIT_GRPC_ADDR: "credit-service:50058"
       EXCHANGE_GRPC_ADDR: "exchange-service:50059"
       STOCK_GRPC_ADDR: "stock-service:50060"
+      VERIFICATION_GRPC_ADDR: "verification-service:50061"
     ports:
       - "8080:8080"
     depends_on:
@@ -499,6 +541,8 @@ services:
       exchange-service:
         condition: service_started
       stock-service:
+        condition: service_started
+      verification-service:
         condition: service_started
 
   # ─── Seeder ───────────────────────────────────────────────────────────────
@@ -536,3 +580,4 @@ volumes:
   credit-db-data:
   exchange-db-data:
   stock-db-data:
+  verification-db-data:

@@ -81,6 +81,8 @@ const (
 	EmailTypeInstallmentFailed   = EmailType("INSTALLMENT_FAILED")
 	EmailTypeTransactionVerify   = EmailType("TRANSACTION_VERIFICATION")
 	EmailTypePaymentConfirmation = EmailType("PAYMENT_CONFIRMATION")
+	EmailTypeVerificationCode    = EmailType("VERIFICATION_CODE")
+	EmailTypeMobileActivation    = EmailType("MOBILE_ACTIVATION")
 )
 
 type ClientCreatedMessage struct {
@@ -411,9 +413,60 @@ type ActuaryLimitUpdatedMessage struct {
 	Action     string `json:"action"` // limit_set, used_limit_reset, need_approval_changed
 }
 
+// Verification service topic constants
 const (
-	TopicAuthAccountStatusChanged = "auth.account-status-changed"
-	TopicAuthDeadLetter           = "auth.dead-letter"
+	TopicVerificationChallengeCreated  = "verification.challenge-created"
+	TopicVerificationChallengeVerified = "verification.challenge-verified"
+	TopicVerificationChallengeFailed   = "verification.challenge-failed"
+	TopicMobilePush                    = "notification.mobile-push"
+)
+
+// VerificationChallengeCreatedMessage is published when a new verification challenge is created.
+// notification-service consumes this to store a mobile inbox item for the user's device.
+type VerificationChallengeCreatedMessage struct {
+	ChallengeID     uint64 `json:"challenge_id"`
+	UserID          uint64 `json:"user_id"`
+	DeviceID        string `json:"device_id"`
+	Method          string `json:"method"`           // "code_pull", "qr_scan", "number_match"
+	DisplayData     string `json:"display_data"`     // JSON string — what the mobile app needs to show
+	DeliveryChannel string `json:"delivery_channel"` // "mobile" or "email"
+	ExpiresAt       string `json:"expires_at"`       // RFC3339
+}
+
+// VerificationChallengeVerifiedMessage is published when a challenge is successfully verified.
+// transaction-service consumes this to unblock the pending transaction.
+type VerificationChallengeVerifiedMessage struct {
+	ChallengeID   uint64 `json:"challenge_id"`
+	UserID        uint64 `json:"user_id"`
+	SourceService string `json:"source_service"` // "transaction", "payment", "transfer"
+	SourceID      uint64 `json:"source_id"`
+	Method        string `json:"method"`
+	VerifiedAt    string `json:"verified_at"` // RFC3339
+}
+
+// VerificationChallengeFailedMessage is published when a challenge fails (max attempts or expired).
+// transaction-service consumes this to cancel the pending transaction.
+type VerificationChallengeFailedMessage struct {
+	ChallengeID   uint64 `json:"challenge_id"`
+	UserID        uint64 `json:"user_id"`
+	SourceService string `json:"source_service"`
+	SourceID      uint64 `json:"source_id"`
+	Reason        string `json:"reason"` // "max_attempts_exceeded", "expired"
+}
+
+// MobilePushMessage is published by notification-service when a mobile inbox item is stored.
+// api-gateway consumes this to push via WebSocket to connected mobile devices.
+type MobilePushMessage struct {
+	UserID   uint64 `json:"user_id"`
+	DeviceID string `json:"device_id"`
+	Type     string `json:"type"` // "verification_challenge"
+	Payload  string `json:"payload"` // JSON string
+}
+
+const (
+	TopicAuthAccountStatusChanged  = "auth.account-status-changed"
+	TopicAuthDeadLetter            = "auth.dead-letter"
+	TopicAuthMobileDeviceActivated = "auth.mobile-device-activated"
 )
 
 type AuthAccountStatusChangedMessage struct {

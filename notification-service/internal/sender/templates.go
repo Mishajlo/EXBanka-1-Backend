@@ -141,6 +141,21 @@ func BuildEmail(emailType kafkamsg.EmailType, data map[string]string) (subject, 
 </table>
 <p>Thank you for banking with EXBanka.</p>`, txStatus, fromAccount, toAccount, amount, txStatus)
 
+	case kafkamsg.EmailTypeMobileActivation:
+		code := data["code"]
+		expiresIn := data["expires_in"]
+		subject = "Your EXBanka Mobile App Activation Code"
+		body = fmt.Sprintf(`<html><body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+<h2 style="color:#1a365d;">Mobile App Activation</h2>
+<p>Use the following code to activate your EXBanka mobile app:</p>
+<div style="background:#f0f4f8;padding:20px;text-align:center;border-radius:8px;margin:20px 0;">
+	<span style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#2d3748;">%s</span>
+</div>
+<p>This code expires in <strong>%s</strong>.</p>
+<p>If you did not request this, please ignore this email.</p>
+<p style="color:#718096;font-size:12px;">EXBanka Security Team</p>
+</body></html>`, code, expiresIn)
+
 	default:
 		subject = "EXBanka Notification"
 		body = "<p>You have a new notification from EXBanka.</p>"
