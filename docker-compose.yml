@@ -198,6 +198,22 @@ services:
       timeout: 5s
       retries: 5
 
+  notification-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: notification_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5442:5432"
+    volumes:
+      - notification-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   # ─── Services ─────────────────────────────────────────────────────────────
 
   user-service:
@@ -270,9 +286,17 @@ services:
       SMTP_USER: ${SMTP_USER:-thebiggestdouchebagaround@gmail.com}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-eebu yksy isfx nanl}
       SMTP_FROM: ${SMTP_FROM:-thebiggestdouchebagaround@gmail.com}
+      NOTIFICATION_DB_HOST: notification-db
+      NOTIFICATION_DB_PORT: "5432"
+      NOTIFICATION_DB_USER: postgres
+      NOTIFICATION_DB_PASSWORD: postgres
+      NOTIFICATION_DB_NAME: notification_db
+      NOTIFICATION_DB_SSLMODE: disable
     ports:
       - "50053:50053"
     depends_on:
+      notification-db:
+        condition: service_healthy
       kafka:
         condition: service_healthy
 
@@ -521,6 +545,8 @@ services:
       EXCHANGE_GRPC_ADDR: "exchange-service:50059"
       STOCK_GRPC_ADDR: "stock-service:50060"
       VERIFICATION_GRPC_ADDR: "verification-service:50061"
+      NOTIFICATION_GRPC_ADDR: "notification-service:50053"
+      KAFKA_BROKERS: kafka:9092
     ports:
       - "8080:8080"
     depends_on:
@@ -544,6 +570,10 @@ services:
         condition: service_started
       verification-service:
         condition: service_started
+      notification-service:
+        condition: service_started
+      kafka:
+        condition: service_healthy
 
   # ─── Seeder ───────────────────────────────────────────────────────────────
   # One-shot job: provisions the default admin account on first startup.
@@ -581,3 +611,4 @@ volumes:
   exchange-db-data:
   stock-db-data:
   verification-db-data:
+  notification-db-data:
