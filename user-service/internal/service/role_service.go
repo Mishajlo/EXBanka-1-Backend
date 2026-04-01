@@ -46,6 +46,10 @@ var AllPermissions = []struct {
 	{"agents.manage", "Manage agent employees", "agents"},
 	{"otc.manage", "Manage OTC trading", "otc"},
 	{"funds.manage", "Manage investment funds", "funds"},
+	// Stock trading operations
+	{"orders.approve", "Approve/decline stock trading orders", "orders"},
+	{"tax.manage", "Manage capital gains tax collection", "tax"},
+	{"exchanges.manage", "Manage stock exchange settings and testing mode", "exchanges"},
 }
 
 // DefaultRolePermissions defines seed data for roles inserted on first startup.
@@ -73,6 +77,7 @@ var DefaultRolePermissions = map[string][]string{
 		"credits.read", "credits.approve",
 		"securities.trade", "securities.read",
 		"agents.manage", "otc.manage", "funds.manage",
+		"orders.approve", "tax.manage", "exchanges.manage",
 	},
 	"EmployeeAdmin": {
 		"clients.create", "clients.read", "clients.update",
@@ -82,6 +87,7 @@ var DefaultRolePermissions = map[string][]string{
 		"credits.read", "credits.approve",
 		"securities.trade", "securities.read",
 		"agents.manage", "otc.manage", "funds.manage",
+		"orders.approve", "tax.manage", "exchanges.manage",
 		"employees.create", "employees.update",
 		"employees.read", "employees.permissions",
 		"limits.manage",
