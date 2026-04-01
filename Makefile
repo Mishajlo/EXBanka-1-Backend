@@ -7,10 +7,11 @@ proto:
 		auth/auth.proto user/user.proto notification/notification.proto \
 		client/client.proto account/account.proto card/card.proto \
 		transaction/transaction.proto credit/credit.proto \
-		exchange/exchange.proto
+		exchange/exchange.proto stock/stock.proto
 	mkdir -p contract/authpb contract/userpb contract/notificationpb \
 		contract/clientpb contract/accountpb contract/cardpb \
-		contract/transactionpb contract/creditpb contract/exchangepb
+		contract/transactionpb contract/creditpb contract/exchangepb \
+		contract/stockpb
 	mv contract/auth/*.pb.go contract/authpb/ 2>/dev/null || true
 	mv contract/user/*.pb.go contract/userpb/ 2>/dev/null || true
 	mv contract/notification/*.pb.go contract/notificationpb/ 2>/dev/null || true
@@ -20,9 +21,11 @@ proto:
 	mv contract/transaction/*.pb.go contract/transactionpb/ 2>/dev/null || true
 	mv contract/credit/*.pb.go contract/creditpb/ 2>/dev/null || true
 	mv contract/exchange/*.pb.go contract/exchangepb/ 2>/dev/null || true
+	mv contract/stock/*.pb.go contract/stockpb/ 2>/dev/null || true
 	rmdir contract/auth contract/user contract/notification 2>/dev/null || true
 	rmdir contract/client contract/account contract/card \
-		contract/transaction contract/credit contract/exchange 2>/dev/null || true
+		contract/transaction contract/credit contract/exchange \
+		contract/stock 2>/dev/null || true
 
 swagger:
 	cd api-gateway && swag init -g cmd/main.go --output docs
@@ -39,6 +42,7 @@ build:
 	cd transaction-service && go build -o bin/transaction-service ./cmd
 	cd credit-service && go build -o bin/credit-service ./cmd
 	cd exchange-service && go build -o bin/exchange-service ./cmd
+	cd stock-service && go build -o bin/stock-service ./cmd
 
 tidy:
 	cd contract && go mod tidy
@@ -52,6 +56,7 @@ tidy:
 	cd transaction-service && go mod tidy
 	cd credit-service && go mod tidy
 	cd exchange-service && go mod tidy
+	cd stock-service && go mod tidy
 
 docker-up:
 	docker compose up --build -d
@@ -65,10 +70,10 @@ docker-logs:
 clean:
 	rm -f contract/authpb/*.go contract/userpb/*.go contract/notificationpb/*.go
 	rm -f contract/clientpb/*.go contract/accountpb/*.go contract/cardpb/*.go
-	rm -f contract/transactionpb/*.go contract/creditpb/*.go contract/exchangepb/*.go
+	rm -f contract/transactionpb/*.go contract/creditpb/*.go contract/exchangepb/*.go contract/stockpb/*.go
 	rm -f user-service/bin/* auth-service/bin/* api-gateway/bin/* notification-service/bin/*
 	rm -f client-service/bin/* account-service/bin/* card-service/bin/*
-	rm -f transaction-service/bin/* credit-service/bin/* exchange-service/bin/*
+	rm -f transaction-service/bin/* credit-service/bin/* exchange-service/bin/* stock-service/bin/*
 
 test:
 	cd user-service && go test ./... -v
@@ -81,6 +86,7 @@ test:
 	cd transaction-service && go test ./... -v
 	cd credit-service && go test ./... -v
 	cd exchange-service && go test ./... -v
+	cd stock-service && go test ./... -v
 
 test-integration:
 	cd test-app && go test -v -tags integration -timeout 15m ./workflows/...
