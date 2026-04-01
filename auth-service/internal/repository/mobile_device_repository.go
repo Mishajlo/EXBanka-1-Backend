@@ -71,3 +71,25 @@ func (r *MobileDeviceRepository) UpdateLastSeen(deviceID string) error {
 		Where("device_id = ?", deviceID).
 		Update("last_seen_at", time.Now()).Error
 }
+
+// DeactivateAllForUserInTx deactivates all active devices within an existing transaction.
+func (r *MobileDeviceRepository) DeactivateAllForUserInTx(tx *gorm.DB, userID int64) error {
+	now := time.Now()
+	return tx.Session(&gorm.Session{SkipHooks: true}).
+		Model(&model.MobileDevice{}).
+		Where("user_id = ? AND status = ?", userID, "active").
+		Updates(map[string]interface{}{
+			"status":         "deactivated",
+			"deactivated_at": now,
+		}).Error
+}
+
+// CreateInTx creates a device within an existing transaction.
+func (r *MobileDeviceRepository) CreateInTx(tx *gorm.DB, device *model.MobileDevice) error {
+	return tx.Create(device).Error
+}
+
+// DB returns the underlying gorm.DB for transaction use.
+func (r *MobileDeviceRepository) DB() *gorm.DB {
+	return r.db
+}

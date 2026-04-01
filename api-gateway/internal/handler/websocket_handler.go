@@ -31,6 +31,8 @@ type wsConnection struct {
 	conn     *websocket.Conn
 	deviceID string
 	lastPong time.Time
+	writeMu  sync.Mutex // protects concurrent writes to the same connection
+	done     chan struct{}
 }
 
 func NewWebSocketHandler(authClient authpb.AuthServiceClient) *WebSocketHandler {
@@ -86,16 +88,20 @@ func (h *WebSocketHandler) HandleConnect(c *gin.Context) {
 
 	userID := resp.UserId
 
-	// Replace existing connection for this user
-	h.mu.Lock()
-	if existing, ok := h.connections[userID]; ok {
-		existing.conn.Close()
-	}
-	h.connections[userID] = &wsConnection{
+	ws := &wsConnection{
 		conn:     conn,
 		deviceID: deviceID,
 		lastPong: time.Now(),
+		done:     make(chan struct{}),
 	}
+
+	// Replace existing connection for this user — close old one and signal its goroutines
+	h.mu.Lock()
+	if existing, ok := h.connections[userID]; ok {
+		close(existing.done) // signal old pingLoop to exit
+		existing.conn.Close()
+	}
+	h.connections[userID] = ws
 	h.mu.Unlock()
 
 	log.Printf("websocket: user %d connected (device %s)", userID, deviceID)
@@ -103,15 +109,15 @@ func (h *WebSocketHandler) HandleConnect(c *gin.Context) {
 	// Handle pong responses
 	conn.SetPongHandler(func(string) error {
 		h.mu.Lock()
-		if ws, ok := h.connections[userID]; ok {
-			ws.lastPong = time.Now()
+		if current, ok := h.connections[userID]; ok && current == ws {
+			current.lastPong = time.Now()
 		}
 		h.mu.Unlock()
 		return nil
 	})
 
-	// Start ping loop
-	go h.pingLoop(userID, conn)
+	// Start ping loop — uses ws reference (not stale conn), stops on ws.done
+	go h.pingLoop(userID, ws)
 
 	// Read loop (to detect disconnection)
 	for {
@@ -121,40 +127,62 @@ func (h *WebSocketHandler) HandleConnect(c *gin.Context) {
 		}
 	}
 
-	// Cleanup on disconnect
+	// Cleanup on disconnect — only remove if this is still the current connection
 	h.mu.Lock()
-	delete(h.connections, userID)
+	if current, ok := h.connections[userID]; ok && current == ws {
+		delete(h.connections, userID)
+	}
 	h.mu.Unlock()
+	close(ws.done)
 	conn.Close()
 	log.Printf("websocket: user %d disconnected", userID)
 }
 
-func (h *WebSocketHandler) pingLoop(userID int64, conn *websocket.Conn) {
+// pingLoop sends periodic pings and removes dead connections.
+// Uses the wsConnection reference (not a bare *websocket.Conn) to avoid stale references.
+// Exits when ws.done is closed (connection replaced or disconnected).
+func (h *WebSocketHandler) pingLoop(userID int64, ws *wsConnection) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		select {
+		case <-ws.done:
+			return
+		case <-ticker.C:
+		}
+
 		h.mu.RLock()
-		ws, ok := h.connections[userID]
+		current, ok := h.connections[userID]
 		h.mu.RUnlock()
-		if !ok {
+		// If this connection was replaced, stop
+		if !ok || current != ws {
 			return
 		}
+
 		// Check for dead connection (no pong in 60s)
 		if time.Since(ws.lastPong) > 60*time.Second {
 			h.mu.Lock()
-			delete(h.connections, userID)
+			if cur, ok := h.connections[userID]; ok && cur == ws {
+				delete(h.connections, userID)
+			}
 			h.mu.Unlock()
-			conn.Close()
+			ws.conn.Close()
 			log.Printf("websocket: user %d timed out (no pong)", userID)
 			return
 		}
-		if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+
+		// Write ping with per-connection mutex to prevent concurrent writes
+		ws.writeMu.Lock()
+		err := ws.conn.WriteMessage(websocket.PingMessage, nil)
+		ws.writeMu.Unlock()
+		if err != nil {
 			return
 		}
 	}
 }
 
 // PushToUser sends a message to a connected user's WebSocket.
+// Uses per-connection write mutex to prevent concurrent writes with pingLoop.
 func (h *WebSocketHandler) PushToUser(userID int64, message interface{}) {
 	h.mu.RLock()
 	ws, ok := h.connections[userID]
@@ -166,7 +194,10 @@ func (h *WebSocketHandler) PushToUser(userID int64, message interface{}) {
 	if err != nil {
 		return
 	}
-	if err := ws.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+	ws.writeMu.Lock()
+	err = ws.conn.WriteMessage(websocket.TextMessage, data)
+	ws.writeMu.Unlock()
+	if err != nil {
 		log.Printf("websocket: push to user %d failed: %v", userID, err)
 	}
 }

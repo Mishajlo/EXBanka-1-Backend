@@ -14,10 +14,10 @@ import (
 
 	"gorm.io/gorm"
 
-	kafkamsg "github.com/exbanka/contract/kafka"
 	kafkaprod "github.com/exbanka/auth-service/internal/kafka"
 	"github.com/exbanka/auth-service/internal/model"
 	"github.com/exbanka/auth-service/internal/repository"
+	kafkamsg "github.com/exbanka/contract/kafka"
 )
 
 type MobileDeviceService struct {
@@ -89,63 +89,83 @@ func (s *MobileDeviceService) RequestActivation(ctx context.Context, email strin
 }
 
 // ActivateDevice validates the activation code and creates a device-bound token pair.
+// The entire activation code validation + device creation is wrapped in a transaction
+// with SELECT FOR UPDATE to prevent race conditions on concurrent activation attempts.
 func (s *MobileDeviceService) ActivateDevice(ctx context.Context, email, code, deviceName string) (accessToken, refreshToken, deviceID, deviceSecret string, err error) {
-	// Validate activation code
-	activationCode, err := s.activationRepo.GetLatestByEmail(email)
-	if err != nil {
-		return "", "", "", "", errors.New("activation code not found")
-	}
-	if activationCode.Used {
-		return "", "", "", "", errors.New("activation code already used")
-	}
-	if time.Now().After(activationCode.ExpiresAt) {
-		return "", "", "", "", errors.New("activation code expired")
-	}
-	if activationCode.Attempts >= 3 {
-		return "", "", "", "", errors.New("max attempts exceeded for activation code")
-	}
-
-	_ = s.activationRepo.IncrementAttempts(activationCode.ID)
-
-	if activationCode.Code != code {
-		remaining := 2 - activationCode.Attempts // already incremented
-		if remaining <= 0 {
-			return "", "", "", "", errors.New("max attempts exceeded for activation code")
-		}
-		return "", "", "", "", fmt.Errorf("invalid activation code, %d attempts remaining", remaining)
-	}
-
-	_ = s.activationRepo.MarkUsed(activationCode.ID)
-
-	// Look up account
+	// Look up account first (read-only, no lock needed)
 	account, err := s.accountRepo.GetByEmail(email)
 	if err != nil {
 		return "", "", "", "", errors.New("account not found")
 	}
 
-	// Deactivate existing devices for this user
-	_ = s.deviceRepo.DeactivateAllForUser(account.PrincipalID)
-
-	// Generate device credentials
+	// Generate device credentials outside the transaction
 	deviceID = generateDeviceID()
 	deviceSecret = generateDeviceSecret()
-	now := time.Now()
 
-	device := &model.MobileDevice{
-		UserID:       account.PrincipalID,
-		SystemType:   account.PrincipalType,
-		DeviceID:     deviceID,
-		DeviceSecret: deviceSecret,
-		DeviceName:   deviceName,
-		Status:       "active",
-		ActivatedAt:  &now,
-		LastSeenAt:   now,
-	}
-	if err := s.deviceRepo.Create(device); err != nil {
-		return "", "", "", "", fmt.Errorf("failed to create device: %w", err)
+	// Wrap code validation + device creation in a single transaction
+	db := s.activationRepo.DB()
+	err = db.Transaction(func(tx *gorm.DB) error {
+		// SELECT FOR UPDATE on activation code — prevents concurrent validation
+		activationCode, err := s.activationRepo.GetLatestByEmailForUpdate(tx, email)
+		if err != nil {
+			return errors.New("activation code not found")
+		}
+		if activationCode.Used {
+			return errors.New("activation code already used")
+		}
+		if time.Now().After(activationCode.ExpiresAt) {
+			return errors.New("activation code expired")
+		}
+		if activationCode.Attempts >= 3 {
+			return errors.New("max attempts exceeded for activation code")
+		}
+
+		// Increment attempts atomically within the transaction
+		if err := s.activationRepo.IncrementAttemptsInTx(tx, activationCode.ID); err != nil {
+			return fmt.Errorf("failed to increment attempts: %w", err)
+		}
+
+		if activationCode.Code != code {
+			remaining := 2 - activationCode.Attempts
+			if remaining <= 0 {
+				return errors.New("max attempts exceeded for activation code")
+			}
+			return fmt.Errorf("invalid activation code, %d attempts remaining", remaining)
+		}
+
+		// Mark code as used within the same transaction
+		if err := s.activationRepo.MarkUsedInTx(tx, activationCode.ID); err != nil {
+			return fmt.Errorf("failed to mark code used: %w", err)
+		}
+
+		// Deactivate existing devices atomically within the transaction
+		if err := s.deviceRepo.DeactivateAllForUserInTx(tx, account.PrincipalID); err != nil {
+			return fmt.Errorf("failed to deactivate existing devices: %w", err)
+		}
+
+		// Create new device within the same transaction
+		now := time.Now()
+		device := &model.MobileDevice{
+			UserID:       account.PrincipalID,
+			SystemType:   account.PrincipalType,
+			DeviceID:     deviceID,
+			DeviceSecret: deviceSecret,
+			DeviceName:   deviceName,
+			Status:       "active",
+			ActivatedAt:  &now,
+			LastSeenAt:   now,
+		}
+		if err := s.deviceRepo.CreateInTx(tx, device); err != nil {
+			return fmt.Errorf("failed to create device: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return "", "", "", "", err
 	}
 
-	// Fetch roles/permissions for the token
+	// Token generation happens after the DB transaction commits successfully
 	roles := []string{account.PrincipalType}
 	permissions := []string{}
 
@@ -157,7 +177,6 @@ func (s *MobileDeviceService) ActivateDevice(ctx context.Context, email, code, d
 		return "", "", "", "", fmt.Errorf("failed to generate access token: %w", err)
 	}
 
-	// Create refresh token
 	refreshTokenStr, err := generateToken()
 	if err != nil {
 		return "", "", "", "", fmt.Errorf("failed to generate refresh token: %w", err)
@@ -172,7 +191,7 @@ func (s *MobileDeviceService) ActivateDevice(ctx context.Context, email, code, d
 		return "", "", "", "", fmt.Errorf("failed to create refresh token: %w", err)
 	}
 
-	// Publish event
+	// Publish event AFTER transaction commits
 	_ = s.producer.Publish(ctx, kafkamsg.TopicAuthMobileDeviceActivated, map[string]interface{}{
 		"user_id":     account.PrincipalID,
 		"device_id":   deviceID,
