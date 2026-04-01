@@ -23,6 +23,7 @@ type OrderExecutionEngine struct {
 	listingRepo ListingRepo
 	settingRepo SettingRepo
 	producer    OrderFilledPublisher
+	fillHandler FillHandler // processes fills (holdings + account)
 	mu          sync.Mutex
 	activeJobs  map[uint64]context.CancelFunc // orderID -> cancel
 }
@@ -33,6 +34,7 @@ func NewOrderExecutionEngine(
 	listingRepo ListingRepo,
 	settingRepo SettingRepo,
 	producer OrderFilledPublisher,
+	fillHandler FillHandler,
 ) *OrderExecutionEngine {
 	return &OrderExecutionEngine{
 		orderRepo:   orderRepo,
@@ -40,6 +42,7 @@ func NewOrderExecutionEngine(
 		listingRepo: listingRepo,
 		settingRepo: settingRepo,
 		producer:    producer,
+		fillHandler: fillHandler,
 		activeJobs:  make(map[uint64]context.CancelFunc),
 	}
 }
@@ -161,6 +164,19 @@ func (e *OrderExecutionEngine) executeOrder(ctx context.Context, orderID uint64)
 		if err := e.txRepo.Create(txn); err != nil {
 			log.Printf("WARN: order engine: failed to record txn for order %d: %v", orderID, err)
 			continue
+		}
+
+		// Process fill: update holdings and account balance
+		if e.fillHandler != nil {
+			if order.Direction == "buy" {
+				if fillErr := e.fillHandler.ProcessBuyFill(order, txn); fillErr != nil {
+					log.Printf("WARN: order engine: buy fill processing failed for order %d: %v", orderID, fillErr)
+				}
+			} else {
+				if fillErr := e.fillHandler.ProcessSellFill(order, txn); fillErr != nil {
+					log.Printf("WARN: order engine: sell fill processing failed for order %d: %v", orderID, fillErr)
+				}
+			}
 		}
 
 		// Update order

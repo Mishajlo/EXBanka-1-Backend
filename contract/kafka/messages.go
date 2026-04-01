@@ -344,6 +344,12 @@ const (
 	TopicOrderDeclined  = "stock.order-declined"
 	TopicOrderFilled    = "stock.order-filled"
 	TopicOrderCancelled = "stock.order-cancelled"
+
+	// Portfolio, OTC, and tax events
+	TopicHoldingUpdated   = "stock.holding-updated"
+	TopicOTCTradeExecuted = "stock.otc-trade-executed"
+	TopicTaxCollected     = "stock.tax-collected"
+	TopicOptionExercised  = "stock.option-exercised"
 )
 
 type OrderEventMessage struct {
@@ -355,6 +361,43 @@ type OrderEventMessage struct {
 	Ticker       string `json:"ticker"`
 	Quantity     int64  `json:"quantity"`
 	Status       string `json:"status"`
+	Timestamp    int64  `json:"timestamp"`
+}
+
+type HoldingUpdatedMessage struct {
+	HoldingID    uint64 `json:"holding_id"`
+	UserID       uint64 `json:"user_id"`
+	SecurityType string `json:"security_type"`
+	Ticker       string `json:"ticker"`
+	Quantity     int64  `json:"quantity"`
+	Direction    string `json:"direction"` // "buy" or "sell"
+	Timestamp    int64  `json:"timestamp"`
+}
+
+type OTCTradeMessage struct {
+	SellerID     uint64 `json:"seller_id"`
+	BuyerID      uint64 `json:"buyer_id"`
+	Ticker       string `json:"ticker"`
+	Quantity     int64  `json:"quantity"`
+	PricePerUnit string `json:"price_per_unit"`
+	TotalPrice   string `json:"total_price"`
+	Timestamp    int64  `json:"timestamp"`
+}
+
+type TaxCollectedMessage struct {
+	UserID       uint64 `json:"user_id"`
+	Year         int    `json:"year"`
+	Month        int    `json:"month"`
+	TaxAmountRSD string `json:"tax_amount_rsd"`
+	Timestamp    int64  `json:"timestamp"`
+}
+
+type OptionExercisedMessage struct {
+	UserID       uint64 `json:"user_id"`
+	OptionTicker string `json:"option_ticker"`
+	OptionType   string `json:"option_type"` // "call" or "put"
+	Quantity     int64  `json:"quantity"`
+	Profit       string `json:"profit"`
 	Timestamp    int64  `json:"timestamp"`
 }
 

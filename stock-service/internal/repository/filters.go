@@ -63,3 +63,38 @@ type OrderFilter struct {
 	Page       int
 	PageSize   int
 }
+
+type HoldingFilter struct {
+	SecurityType string
+	Page         int
+	PageSize     int
+}
+
+type OTCFilter struct {
+	SecurityType string
+	Ticker       string
+	Page         int
+	PageSize     int
+}
+
+type TaxFilter struct {
+	UserType string // "client", "actuary"
+	Search   string
+	Page     int
+	PageSize int
+}
+
+type AccountGainSummary struct {
+	AccountID uint64
+	Currency  string
+	TotalGain decimal.Decimal
+}
+
+type TaxUserSummary struct {
+	UserID         uint64
+	SystemType     string
+	UserFirstName  string
+	UserLastName   string
+	TotalDebtRSD   decimal.Decimal
+	LastCollection *time.Time
+}

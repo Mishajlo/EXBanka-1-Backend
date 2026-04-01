@@ -19,10 +19,13 @@ type Config struct {
 	UserGRPCAddr     string
 	AccountGRPCAddr  string
 	ExchangeGRPCAddr string
+	ClientGRPCAddr   string
 	ExchangeCSVPath  string
 	// Securities sync
 	AlphaVantageAPIKey       string
 	SecuritySyncIntervalMins int
+	// Tax
+	StateAccountNo string
 }
 
 func Load() *Config {
@@ -44,9 +47,11 @@ func Load() *Config {
 		UserGRPCAddr:             getEnv("USER_GRPC_ADDR", "localhost:50052"),
 		AccountGRPCAddr:          getEnv("ACCOUNT_GRPC_ADDR", "localhost:50055"),
 		ExchangeGRPCAddr:         getEnv("EXCHANGE_GRPC_ADDR", "localhost:50059"),
+		ClientGRPCAddr:           getEnv("CLIENT_GRPC_ADDR", "localhost:50054"),
 		ExchangeCSVPath:          getEnv("EXCHANGE_CSV_PATH", "data/exchanges.csv"),
 		AlphaVantageAPIKey:       getEnv("ALPHAVANTAGE_API_KEY", ""),
 		SecuritySyncIntervalMins: syncMins,
+		StateAccountNo:           getEnv("STATE_ACCOUNT_NUMBER", "0000000000000099"),
 	}
 }
 

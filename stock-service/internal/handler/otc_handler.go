@@ -20,11 +20,71 @@ func NewOTCHandler(otcSvc *service.OTCService) *OTCHandler {
 }
 
 func (h *OTCHandler) ListOffers(ctx context.Context, req *pb.ListOTCOffersRequest) (*pb.ListOTCOffersResponse, error) {
-	// Stub: fully implemented in Plan 6 (Portfolio & Holdings)
-	return nil, status.Error(codes.Unimplemented, "OTC offers: pending Plan 6 implementation")
+	filter := service.OTCFilter{
+		SecurityType: req.SecurityType,
+		Ticker:       req.Ticker,
+		Page:         int(req.Page),
+		PageSize:     int(req.PageSize),
+	}
+
+	holdings, total, err := h.otcSvc.ListOffers(filter)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	offers := make([]*pb.OTCOffer, len(holdings))
+	for i, hld := range holdings {
+		offers[i] = &pb.OTCOffer{
+			Id:           hld.ID,
+			SellerId:     hld.UserID,
+			SellerName:   hld.UserFirstName + " " + hld.UserLastName,
+			SecurityType: hld.SecurityType,
+			Ticker:       hld.Ticker,
+			Name:         hld.Name,
+			Quantity:     hld.PublicQuantity,
+			PricePerUnit: hld.AveragePrice.StringFixed(2),
+			CreatedAt:    hld.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		}
+	}
+
+	return &pb.ListOTCOffersResponse{
+		Offers:     offers,
+		TotalCount: total,
+	}, nil
 }
 
 func (h *OTCHandler) BuyOffer(ctx context.Context, req *pb.BuyOTCOfferRequest) (*pb.OTCTransaction, error) {
-	// Stub: fully implemented in Plan 6 (Portfolio & Holdings)
-	return nil, status.Error(codes.Unimplemented, "OTC buy: pending Plan 6 implementation")
+	result, err := h.otcSvc.BuyOffer(
+		req.OfferId,
+		req.BuyerId,
+		req.SystemType,
+		req.Quantity,
+		req.AccountId,
+	)
+	if err != nil {
+		return nil, mapOTCError(err)
+	}
+
+	return &pb.OTCTransaction{
+		Id:           result.ID,
+		OfferId:      result.OfferID,
+		Quantity:     result.Quantity,
+		PricePerUnit: result.PricePerUnit.StringFixed(2),
+		TotalPrice:   result.TotalPrice.StringFixed(2),
+		Commission:   result.Commission.StringFixed(2),
+	}, nil
+}
+
+func mapOTCError(err error) error {
+	switch err.Error() {
+	case "OTC offer not found":
+		return status.Error(codes.NotFound, err.Error())
+	case "cannot buy your own OTC offer":
+		return status.Error(codes.PermissionDenied, err.Error())
+	case "insufficient public quantity for OTC purchase",
+		"buyer account not found", "seller account not found":
+		return status.Error(codes.FailedPrecondition, err.Error())
+	default:
+		return status.Error(codes.Internal, err.Error())
+	}
 }

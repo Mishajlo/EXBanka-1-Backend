@@ -151,7 +151,7 @@ func main() {
 				AccountKind:    "current",
 				AccountType:    "standard",
 				IsBankAccount:  false,
-				AccountNumber:  service.GenerateAccountNumber("current"),
+				AccountNumber:  "0000000000000099", // well-known state account number for tax deposits
 				ExpiresAt:      time.Now().AddDate(50, 0, 0),
 				MaintenanceFee: decimal.Zero,
 				CompanyID:      &stateCompany.ID,

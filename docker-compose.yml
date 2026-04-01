@@ -442,6 +442,8 @@ services:
       USER_GRPC_ADDR: "user-service:50052"
       ACCOUNT_GRPC_ADDR: "account-service:50055"
       EXCHANGE_GRPC_ADDR: "exchange-service:50059"
+      CLIENT_GRPC_ADDR: "client-service:50054"
+      STATE_ACCOUNT_NUMBER: "0000000000000099"
       ALPHAVANTAGE_API_KEY: ${ALPHAVANTAGE_API_KEY:-}
       SECURITY_SYNC_INTERVAL_MINUTES: "15"
     ports:
@@ -456,6 +458,8 @@ services:
       account-service:
         condition: service_started
       exchange-service:
+        condition: service_started
+      client-service:
         condition: service_started
 
   # ─── API Gateway ──────────────────────────────────────────────────────────

@@ -3,6 +3,8 @@ package service
 import (
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/exbanka/stock-service/internal/model"
 	"github.com/exbanka/stock-service/internal/repository"
 )
@@ -87,3 +89,49 @@ type OrderTransactionRepo interface {
 	Create(tx *model.OrderTransaction) error
 	ListByOrderID(orderID uint64) ([]model.OrderTransaction, error)
 }
+
+// --- Portfolio ---
+
+// Type aliases for filter/summary types defined in repository package.
+type HoldingFilter = repository.HoldingFilter
+type OTCFilter = repository.OTCFilter
+type TaxFilter = repository.TaxFilter
+type AccountGainSummary = repository.AccountGainSummary
+type TaxUserSummary = repository.TaxUserSummary
+
+type HoldingRepo interface {
+	Upsert(holding *model.Holding) error // INSERT or UPDATE (weighted average)
+	GetByID(id uint64) (*model.Holding, error)
+	Update(holding *model.Holding) error
+	Delete(id uint64) error
+	GetByUserAndSecurity(userID uint64, securityType string, securityID uint64, accountID uint64) (*model.Holding, error)
+	ListByUser(userID uint64, filter HoldingFilter) ([]model.Holding, int64, error)
+	ListPublicOffers(filter OTCFilter) ([]model.Holding, int64, error)
+}
+
+// --- Tax ---
+
+type CapitalGainRepo interface {
+	Create(gain *model.CapitalGain) error
+	SumByUserMonth(userID uint64, year, month int) ([]AccountGainSummary, error) // grouped by account_id, currency
+	SumByUserYear(userID uint64, year int) ([]AccountGainSummary, error)
+}
+
+type TaxCollectionRepo interface {
+	Create(collection *model.TaxCollection) error
+	SumByUserYear(userID uint64, year int) (decimal.Decimal, error) // total RSD collected
+	SumByUserMonth(userID uint64, year, month int) (decimal.Decimal, error)
+	GetLastCollection(userID uint64) (*model.TaxCollection, error)
+	ListUsersWithGains(year, month int, filter TaxFilter) ([]TaxUserSummary, int64, error)
+}
+
+// --- Fill Handler (for order execution integration) ---
+
+type FillHandler interface {
+	ProcessBuyFill(order *model.Order, txn *model.OrderTransaction) error
+	ProcessSellFill(order *model.Order, txn *model.OrderTransaction) error
+}
+
+// --- Name Resolver (for user name lookup) ---
+
+type UserNameResolver func(userID uint64, systemType string) (firstName, lastName string, err error)

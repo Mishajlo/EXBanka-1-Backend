@@ -60,6 +60,22 @@ func (p *Producer) PublishOrderCancelled(ctx context.Context, msg interface{}) e
 	return p.Publish(ctx, contract.TopicOrderCancelled, msg)
 }
 
+func (p *Producer) PublishHoldingUpdated(ctx context.Context, msg contract.HoldingUpdatedMessage) error {
+	return p.Publish(ctx, contract.TopicHoldingUpdated, msg)
+}
+
+func (p *Producer) PublishOTCTradeExecuted(ctx context.Context, msg contract.OTCTradeMessage) error {
+	return p.Publish(ctx, contract.TopicOTCTradeExecuted, msg)
+}
+
+func (p *Producer) PublishTaxCollected(ctx context.Context, msg contract.TaxCollectedMessage) error {
+	return p.Publish(ctx, contract.TopicTaxCollected, msg)
+}
+
+func (p *Producer) PublishOptionExercised(ctx context.Context, msg contract.OptionExercisedMessage) error {
+	return p.Publish(ctx, contract.TopicOptionExercised, msg)
+}
+
 func (p *Producer) Close() error {
 	return p.writer.Close()
 }
