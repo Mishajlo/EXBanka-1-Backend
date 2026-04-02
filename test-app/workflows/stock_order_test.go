@@ -152,6 +152,105 @@ func TestOrder_ListMyOrders(t *testing.T) {
 	helpers.RequireField(t, resp, "total_count")
 }
 
+func TestOrder_GetMyOrder(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	_, agentC, _ := setupAgentEmployee(t, adminC)
+	_, listingID := getFirstStockListingID(t, agentC)
+
+	bankAcctResp, err := adminC.GET("/api/bank-accounts")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, bankAcctResp, 200)
+	accts := bankAcctResp.Body["accounts"].([]interface{})
+	acctID := uint64(accts[0].(map[string]interface{})["id"].(float64))
+
+	createResp, err := agentC.POST("/api/me/orders", map[string]interface{}{
+		"listing_id":  listingID,
+		"direction":   "buy",
+		"order_type":  "market",
+		"quantity":    1,
+		"all_or_none": false,
+		"margin":      false,
+		"account_id":  acctID,
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, createResp, 201)
+	orderID := int(helpers.GetNumberField(t, createResp, "id"))
+
+	resp, err := agentC.GET("/api/me/orders/" + helpers.FormatID(orderID))
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 200)
+	helpers.RequireField(t, resp, "id")
+	helpers.RequireField(t, resp, "direction")
+	helpers.RequireField(t, resp, "order_type")
+}
+
+func TestOrder_GetMyOrder_NotFound(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	_, agentC, _ := setupAgentEmployee(t, adminC)
+
+	resp, err := agentC.GET("/api/me/orders/999999")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 404)
+}
+
+func TestOrder_CancelOrder(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	_, agentC, _ := setupAgentEmployee(t, adminC)
+	_, listingID := getFirstStockListingID(t, agentC)
+
+	bankAcctResp, err := adminC.GET("/api/bank-accounts")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, bankAcctResp, 200)
+	accts := bankAcctResp.Body["accounts"].([]interface{})
+	acctID := uint64(accts[0].(map[string]interface{})["id"].(float64))
+
+	createResp, err := agentC.POST("/api/me/orders", map[string]interface{}{
+		"listing_id":  listingID,
+		"direction":   "buy",
+		"order_type":  "limit",
+		"quantity":    1,
+		"limit_value": 1.00,
+		"all_or_none": false,
+		"margin":      false,
+		"account_id":  acctID,
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, createResp, 201)
+	orderID := int(helpers.GetNumberField(t, createResp, "id"))
+
+	resp, err := agentC.POST("/api/me/orders/"+helpers.FormatID(orderID)+"/cancel", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	// Accept either 200 (cancelled) or 409 (already executed/cancelled)
+	if resp.StatusCode != 200 && resp.StatusCode != 409 {
+		t.Fatalf("expected 200 or 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestOrder_CancelOrder_NotFound(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	_, agentC, _ := setupAgentEmployee(t, adminC)
+
+	resp, err := agentC.POST("/api/me/orders/999999/cancel", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 404)
+}
+
 func TestOrder_ListOrders_RequiresSupervisor(t *testing.T) {
 	adminC := loginAsAdmin(t)
 	_, agentC, _ := setupAgentEmployee(t, adminC)

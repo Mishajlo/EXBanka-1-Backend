@@ -115,3 +115,51 @@ func getFirstStockListingID(t *testing.T, c *client.APIClient) (stockID uint64, 
 	listingID = uint64(listing["id"].(float64))
 	return
 }
+
+// getFirstFuturesID fetches futures and returns the first futures contract's ID.
+func getFirstFuturesID(t *testing.T, c *client.APIClient) uint64 {
+	t.Helper()
+	resp, err := c.GET("/api/securities/futures?page=1&page_size=1")
+	if err != nil {
+		t.Fatalf("getFirstFuturesID: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 200)
+
+	futures, ok := resp.Body["futures"].([]interface{})
+	if !ok || len(futures) == 0 {
+		t.Skip("no futures contracts found — skipping")
+	}
+	return uint64(futures[0].(map[string]interface{})["id"].(float64))
+}
+
+// getFirstForexPairID fetches forex pairs and returns the first pair's ID.
+func getFirstForexPairID(t *testing.T, c *client.APIClient) uint64 {
+	t.Helper()
+	resp, err := c.GET("/api/securities/forex?page=1&page_size=1")
+	if err != nil {
+		t.Fatalf("getFirstForexPairID: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 200)
+
+	pairs, ok := resp.Body["forex_pairs"].([]interface{})
+	if !ok || len(pairs) == 0 {
+		t.Skip("no forex pairs found — skipping")
+	}
+	return uint64(pairs[0].(map[string]interface{})["id"].(float64))
+}
+
+// getFirstOptionID fetches options for a stock and returns the first option's ID.
+func getFirstOptionID(t *testing.T, c *client.APIClient, stockID uint64) uint64 {
+	t.Helper()
+	resp, err := c.GET("/api/securities/options?stock_id=" + helpers.FormatID(int(stockID)) + "&page_size=1")
+	if err != nil {
+		t.Fatalf("getFirstOptionID: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 200)
+
+	options, ok := resp.Body["options"].([]interface{})
+	if !ok || len(options) == 0 {
+		t.Skip("no options found for stock — skipping")
+	}
+	return uint64(options[0].(map[string]interface{})["id"].(float64))
+}

@@ -113,6 +113,39 @@ func TestSecurities_ListFutures_SettlementDateFilter(t *testing.T) {
 	helpers.RequireStatus(t, resp, 200)
 }
 
+func TestSecurities_GetFutures(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	futuresID := getFirstFuturesID(t, adminC)
+
+	resp, err := adminC.GET("/api/securities/futures/" + helpers.FormatID(int(futuresID)))
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 200)
+	helpers.RequireField(t, resp, "contract_name")
+}
+
+func TestSecurities_GetFutures_NotFound(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	resp, err := adminC.GET("/api/securities/futures/999999")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 404)
+}
+
+func TestSecurities_GetFuturesHistory(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	futuresID := getFirstFuturesID(t, adminC)
+
+	resp, err := adminC.GET("/api/securities/futures/" + helpers.FormatID(int(futuresID)) + "/history?period=month")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 200)
+	helpers.RequireField(t, resp, "history")
+}
+
 // --- Forex ---
 
 func TestSecurities_ListForexPairs(t *testing.T) {
@@ -141,6 +174,40 @@ func TestSecurities_ListForexPairs_InvalidLiquidity(t *testing.T) {
 		t.Fatalf("error: %v", err)
 	}
 	helpers.RequireStatus(t, resp, 400)
+}
+
+func TestSecurities_GetForexPair(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	pairID := getFirstForexPairID(t, adminC)
+
+	resp, err := adminC.GET("/api/securities/forex/" + helpers.FormatID(int(pairID)))
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 200)
+	helpers.RequireField(t, resp, "base_currency")
+	helpers.RequireField(t, resp, "quote_currency")
+}
+
+func TestSecurities_GetForexPair_NotFound(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	resp, err := adminC.GET("/api/securities/forex/999999")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 404)
+}
+
+func TestSecurities_GetForexPairHistory(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	pairID := getFirstForexPairID(t, adminC)
+
+	resp, err := adminC.GET("/api/securities/forex/" + helpers.FormatID(int(pairID)) + "/history?period=month")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 200)
+	helpers.RequireField(t, resp, "history")
 }
 
 // --- Options ---
@@ -175,6 +242,29 @@ func TestSecurities_ListOptions_FilterByType(t *testing.T) {
 		t.Fatalf("error: %v", err)
 	}
 	helpers.RequireStatus(t, resp, 200)
+}
+
+func TestSecurities_GetOption(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	stockID, _ := getFirstStockListingID(t, adminC)
+	optionID := getFirstOptionID(t, adminC, stockID)
+
+	resp, err := adminC.GET("/api/securities/options/" + helpers.FormatID(int(optionID)))
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 200)
+	helpers.RequireField(t, resp, "option_type")
+	helpers.RequireField(t, resp, "strike_price")
+}
+
+func TestSecurities_GetOption_NotFound(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	resp, err := adminC.GET("/api/securities/options/999999")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 404)
 }
 
 // --- Client access ---

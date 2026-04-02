@@ -77,3 +77,23 @@ func TestPortfolio_MakePublic_InvalidQuantity(t *testing.T) {
 	}
 	helpers.RequireStatus(t, resp, 400)
 }
+
+func TestPortfolio_ExerciseOption_NotFound(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	_, agentC, _ := setupAgentEmployee(t, adminC)
+
+	resp, err := agentC.POST("/api/me/portfolio/999999/exercise", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 404)
+}
+
+func TestPortfolio_ExerciseOption_Unauthenticated(t *testing.T) {
+	c := newClient()
+	resp, err := c.POST("/api/me/portfolio/1/exercise", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	helpers.RequireStatus(t, resp, 401)
+}
