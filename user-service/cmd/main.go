@@ -37,6 +37,7 @@ func main() {
 		&model.Employee{},
 		&model.EmployeeLimit{},
 		&model.LimitTemplate{},
+		&model.ActuaryLimit{},
 	); err != nil {
 		log.Fatalf("failed to migrate: %v", err)
 	}
@@ -53,6 +54,7 @@ func main() {
 		"user.limit-template-created",
 		"user.limit-template-updated",
 		"user.limit-template-deleted",
+		"user.actuary-limit-updated",
 		"notification.send-email",
 	)
 
@@ -91,6 +93,13 @@ func main() {
 	limitCron := service.NewLimitCronService(employeeLimitRepo)
 	limitCron.Start(ctx)
 
+	actuaryRepo := repository.NewActuaryRepository(db)
+	actuarySvc := service.NewActuaryService(actuaryRepo, repo, producer)
+	actuaryHandler := handler.NewActuaryGRPCHandler(actuarySvc)
+
+	actuaryCron := service.NewActuaryCronService(actuaryRepo)
+	actuaryCron.Start(ctx)
+
 	grpcHandler := handler.NewUserGRPCHandler(empService, roleSvc)
 	limitHandler := handler.NewLimitGRPCHandler(limitSvc)
 
@@ -102,6 +111,7 @@ func main() {
 	s := grpc.NewServer()
 	pb.RegisterUserServiceServer(s, grpcHandler)
 	pb.RegisterEmployeeLimitServiceServer(s, limitHandler)
+	pb.RegisterActuaryServiceServer(s, actuaryHandler)
 	shared.RegisterHealthCheck(s, "user-service")
 
 	// Start gRPC server in goroutine

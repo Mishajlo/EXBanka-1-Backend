@@ -19,6 +19,7 @@ import (
 	exchangepb "github.com/exbanka/contract/exchangepb"
 	shared "github.com/exbanka/contract/shared"
 	pb "github.com/exbanka/contract/transactionpb"
+	verificationpb "github.com/exbanka/contract/verificationpb"
 	"github.com/exbanka/transaction-service/internal/cache"
 	"github.com/exbanka/transaction-service/internal/config"
 	"github.com/exbanka/transaction-service/internal/handler"
@@ -40,7 +41,6 @@ func main() {
 		&model.Payment{},
 		&model.Transfer{},
 		&model.PaymentRecipient{},
-		&model.VerificationCode{},
 		&model.TransferFee{},
 		&model.SagaLog{},
 	); err != nil {
@@ -89,10 +89,17 @@ func main() {
 	exchangeGRPCClient := exchangepb.NewExchangeServiceClient(exchangeConn)
 	exchangeClient := service.NewGRPCExchangeClient(exchangeGRPCClient)
 
+	// Connect to verification-service
+	verificationConn, err := grpc.NewClient(cfg.VerificationGRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("failed to connect to verification service: %v", err)
+	}
+	defer verificationConn.Close()
+	verificationClient := verificationpb.NewVerificationGRPCServiceClient(verificationConn)
+
 	paymentRepo := repository.NewPaymentRepository(db)
 	transferRepo := repository.NewTransferRepository(db)
 	recipientRepo := repository.NewPaymentRecipientRepository(db)
-	vcRepo := repository.NewVerificationCodeRepository(db)
 	sagaLogRepo := repository.NewSagaLogRepository(db)
 
 	feeRepo := repository.NewTransferFeeRepository(db)
@@ -130,13 +137,12 @@ func main() {
 	transferSvc := service.NewTransferService(transferRepo, exchangeClient, accountClient, bankClient, feeSvc, producer, sagaLogRepo)
 	transferSvc.StartCompensationRecovery(ctx)
 	recipientSvc := service.NewPaymentRecipientService(recipientRepo)
-	verificationSvc := service.NewVerificationService(vcRepo, paymentRepo, transferRepo)
 
 	grpcHandler := handler.NewTransactionGRPCHandler(
 		paymentSvc,
 		transferSvc,
 		recipientSvc,
-		verificationSvc,
+		verificationClient,
 		producer,
 	)
 

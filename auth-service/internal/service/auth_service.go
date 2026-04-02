@@ -31,6 +31,7 @@ type AuthService struct {
 	producer         *kafkaprod.Producer
 	cache            *cache.RedisCache
 	refreshExp       time.Duration
+	mobileRefreshExp time.Duration
 	frontendBaseURL  string
 	pepper           string
 }
@@ -46,6 +47,7 @@ func NewAuthService(
 	producer *kafkaprod.Producer,
 	cache *cache.RedisCache,
 	refreshExp time.Duration,
+	mobileRefreshExp time.Duration,
 	frontendBaseURL string,
 	pepper string,
 ) *AuthService {
@@ -60,6 +62,7 @@ func NewAuthService(
 		producer:         producer,
 		cache:            cache,
 		refreshExp:       refreshExp,
+		mobileRefreshExp: mobileRefreshExp,
 		frontendBaseURL:  frontendBaseURL,
 		pepper:           pepper,
 	}
@@ -320,6 +323,101 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshTokenStr string) 
 	}
 
 	return accessToken, newRefreshToken, nil
+}
+
+// ValidateRefreshToken returns the refresh token record if valid.
+func (s *AuthService) ValidateRefreshToken(token string) (*model.RefreshToken, error) {
+	rt, err := s.tokenRepo.GetRefreshToken(token)
+	if err != nil {
+		return nil, errors.New("invalid refresh token")
+	}
+	if rt.Revoked {
+		return nil, errors.New("refresh token revoked")
+	}
+	if time.Now().After(rt.ExpiresAt) {
+		return nil, errors.New("refresh token expired")
+	}
+	return rt, nil
+}
+
+// RefreshTokenForMobile validates the refresh token, verifies the device is active and matches,
+// revokes the old token, and issues a new mobile token pair.
+func (s *AuthService) RefreshTokenForMobile(ctx context.Context, oldRefreshToken, deviceID string, mobileSvc *MobileDeviceService) (string, string, error) {
+	rt, err := s.tokenRepo.GetRefreshToken(oldRefreshToken)
+	if err != nil {
+		return "", "", errors.New("invalid refresh token")
+	}
+	if rt.Revoked {
+		return "", "", errors.New("refresh token revoked")
+	}
+	if time.Now().After(rt.ExpiresAt) {
+		return "", "", errors.New("refresh token expired")
+	}
+
+	// Get account to resolve PrincipalID (the actual user ID used in MobileDevice)
+	var acct model.Account
+	if err := s.accountRepo.GetByID(rt.AccountID, &acct); err != nil {
+		return "", "", errors.New("account not found")
+	}
+	if acct.Status != model.AccountStatusActive {
+		return "", "", errors.New("account is not active")
+	}
+
+	// Verify device is active and matches the provided deviceID
+	device, err := mobileSvc.GetDeviceInfo(acct.PrincipalID)
+	if err != nil {
+		return "", "", errors.New("device not found or deactivated, please re-activate")
+	}
+	if device.DeviceID != deviceID {
+		return "", "", errors.New("device ID mismatch — permission denied")
+	}
+
+	// Revoke old token
+	_ = s.tokenRepo.RevokeRefreshToken(oldRefreshToken)
+
+	// Fetch roles/permissions
+	var roles []string
+	var permissions []string
+	systemType := rt.SystemType
+	if systemType == "" {
+		systemType = "employee"
+	}
+
+	if systemType == "employee" {
+		emp, err := s.userClient.GetEmployee(ctx, &userpb.GetEmployeeRequest{Id: acct.PrincipalID})
+		if err == nil {
+			roles = emp.Roles
+			permissions = emp.Permissions
+		}
+	} else {
+		roles = []string{"client"}
+	}
+
+	// Generate new access token with device claims
+	access, err := s.jwtService.GenerateMobileAccessToken(
+		acct.PrincipalID, acct.Email, roles, permissions,
+		systemType, "mobile", deviceID,
+	)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Generate new refresh token
+	newRefreshStr, err := generateToken()
+	if err != nil {
+		return "", "", err
+	}
+	newRT := &model.RefreshToken{
+		AccountID:  acct.ID,
+		Token:      newRefreshStr,
+		ExpiresAt:  time.Now().Add(s.mobileRefreshExp),
+		SystemType: systemType,
+	}
+	if err := s.tokenRepo.CreateRefreshToken(newRT); err != nil {
+		return "", "", err
+	}
+
+	return access, newRefreshStr, nil
 }
 
 func (s *AuthService) Logout(ctx context.Context, refreshTokenStr string) error {
