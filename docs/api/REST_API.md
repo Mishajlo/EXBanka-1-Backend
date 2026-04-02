@@ -49,16 +49,15 @@ Access tokens expire after 15 minutes. Use the refresh token to obtain a new pai
 19. [Me (Self-Service)](#19-me-self-service)
 20. [Mobile Auth](#20-mobile-auth)
 21. [Mobile Device Management](#21-mobile-device-management)
-22. [Mobile Verification](#22-mobile-verification)
-23. [Browser Verification](#23-browser-verification)
-24. [WebSocket](#24-websocket)
-25. [Stock Exchanges](#25-stock-exchanges)
-26. [Securities](#26-securities)
-27. [Orders](#27-orders)
-28. [Portfolio](#28-portfolio)
-29. [OTC Offers](#29-otc-offers)
-30. [Actuaries](#30-actuaries)
-31. [Tax](#31-tax)
+22. [Verification](#22-verification)
+23. [WebSocket](#23-websocket)
+24. [Stock Exchanges](#24-stock-exchanges)
+25. [Securities](#25-securities)
+26. [Orders](#26-orders)
+27. [Portfolio](#27-portfolio)
+28. [OTC Offers](#28-otc-offers)
+29. [Actuaries](#29-actuaries)
+30. [Tax](#30-tax)
 
 ---
 
@@ -675,12 +674,6 @@ Get a single client by ID.
 
 ---
 
-### ~~GET /api/clients/me~~ (removed — use GET /api/me)
-
-> **Removed.** Use `GET /api/me` instead. The new endpoint accepts both employee and client JWTs and returns the current principal's profile.
-
----
-
 ### PUT /api/clients/:id
 
 Partially update a client record.
@@ -837,12 +830,6 @@ Get an account by its account number.
 
 **Response 200:** Account object
 **Response 404:** `{"error": "account not found"}`
-
----
-
-### ~~GET /api/accounts/client/:client_id~~ (removed)
-
-> **Removed.** Employees should use `GET /api/accounts?client_id=X`. Clients should use `GET /api/me/accounts`.
 
 ---
 
@@ -1063,18 +1050,6 @@ Get a card by ID.
 
 ---
 
-### ~~GET /api/cards/account/:account_number~~ (removed)
-
-> **Removed.** Use `GET /api/cards?account_number=X` instead.
-
----
-
-### ~~GET /api/cards/client/:client_id~~ (removed)
-
-> **Removed.** Employees should use `GET /api/cards?client_id=X`. Clients should use `GET /api/me/cards`.
-
----
-
 ### GET /api/cards
 
 List cards with optional filters. Employees can filter by `client_id` or `account_number`. Exactly one filter should be provided; if neither is provided, all cards visible to the employee are returned.
@@ -1188,12 +1163,6 @@ Create an authorized person who can also hold a card linked to an existing accou
 
 ---
 
-### ~~POST /api/cards/virtual~~ (moved — use POST /api/me/cards/virtual)
-
-> **Moved to `/api/me/*`.** See `POST /api/me/cards/virtual` in the [Me — Self-Service](#20-me-self-service) section.
-
-The documentation below is preserved for reference; the request/response shape is unchanged.
-
 ### POST /api/me/cards/virtual
 
 Create a virtual card for a client account. Virtual cards can be single-use or multi-use and expire after 1-3 months.
@@ -1252,10 +1221,6 @@ Create a virtual card for a client account. Virtual cards can be single-use or m
 
 ---
 
-### ~~POST /api/cards/:id/pin~~ (moved — use POST /api/me/cards/:id/pin)
-
-> **Moved to `/api/me/*`.** See `POST /api/me/cards/:id/pin` in the [Me — Self-Service](#20-me-self-service) section. Request/response shape is unchanged.
-
 ### POST /api/me/cards/:id/pin
 
 Set the 4-digit PIN for a card.
@@ -1298,10 +1263,6 @@ Set the 4-digit PIN for a card.
 
 ---
 
-### ~~POST /api/cards/:id/verify-pin~~ (moved — use POST /api/me/cards/:id/verify-pin)
-
-> **Moved to `/api/me/*`.** See `POST /api/me/cards/:id/verify-pin` in the [Me — Self-Service](#20-me-self-service) section.
-
 ### POST /api/me/cards/:id/verify-pin
 
 Verify the 4-digit PIN for a card. The card is permanently blocked after 3 consecutive failed attempts.
@@ -1343,10 +1304,6 @@ Verify the 4-digit PIN for a card. The card is permanently blocked after 3 conse
 | 500 | Internal error |
 
 ---
-
-### ~~POST /api/cards/:id/temporary-block~~ (moved — use POST /api/me/cards/:id/temporary-block)
-
-> **Moved to `/api/me/*`.** See `POST /api/me/cards/:id/temporary-block` in the [Me — Self-Service](#20-me-self-service) section.
 
 ### POST /api/me/cards/:id/temporary-block
 
@@ -1392,10 +1349,6 @@ Payments are domestic/foreign transfers from one account to another with optiona
 
 ---
 
-### ~~POST /api/payments~~ (moved — use POST /api/me/payments)
-
-> **Moved to `/api/me/*`.** See `POST /api/me/payments` in the [Me — Self-Service](#20-me-self-service) section.
-
 ### POST /api/me/payments
 
 Initiate a new payment from a client account.
@@ -1413,7 +1366,6 @@ Initiate a new payment from a client account.
 | `payment_code` | string | No | Payment code (e.g., `"289"`) |
 | `reference_number` | string | No | Reference/model number |
 | `payment_purpose` | string | No | Description or purpose of payment |
-| `method` | string | No | Verification method: `code_pull` (default), `qr_scan`, `number_match`. Ignored if user has no mobile device (falls back to `email`). |
 
 **Example Request:**
 ```json
@@ -1424,8 +1376,7 @@ Initiate a new payment from a client account.
   "recipient_name": "EX Tech d.o.o.",
   "payment_code": "289",
   "reference_number": "97 123456789",
-  "payment_purpose": "Invoice #INV-2026-001",
-  "method": "code_pull"
+  "payment_purpose": "Invoice #INV-2026-001"
 }
 ```
 
@@ -1502,10 +1453,6 @@ List payments for a specific account with filters.
 
 ---
 
-### ~~POST /api/payments/:id/execute~~ (moved — use POST /api/me/payments/:id/execute)
-
-> **Moved to `/api/me/*`.** See `POST /api/me/payments/:id/execute` in the [Me — Self-Service](#20-me-self-service) section.
-
 ### POST /api/me/payments/:id/execute
 
 Execute a pending payment after verification. The payment must have been created previously via `POST /api/me/payments`. Verification is handled by the verification-service — pass the `challenge_id` from the completed verification challenge.
@@ -1560,12 +1507,6 @@ Execute a pending payment after verification. The payment must have been created
 
 ---
 
-### ~~GET /api/payments/client/:client_id~~ (removed)
-
-> **Removed.** Employees should use `GET /api/payments?client_id=X`. Clients should use `GET /api/me/payments`.
-
----
-
 ### GET /api/payments
 
 List payments with optional filters. For employees, pass `client_id` or `account_number` to filter. This endpoint replaces the old path-based `GET /api/payments/client/:client_id` and `GET /api/payments/account/:account_number`.
@@ -1602,10 +1543,6 @@ Transfers are inter-account currency exchanges (can be same currency or cross-cu
 
 ---
 
-### ~~POST /api/transfers~~ (moved — use POST /api/me/transfers)
-
-> **Moved to `/api/me/*`.** See `POST /api/me/transfers` in the [Me — Self-Service](#20-me-self-service) section.
-
 ### POST /api/me/transfers
 
 Initiate a currency transfer between accounts.
@@ -1619,15 +1556,13 @@ Initiate a currency transfer between accounts.
 | `from_account_number` | string | Yes | Source account number |
 | `to_account_number` | string | Yes | Destination account number |
 | `amount` | float64 | Yes | Amount to transfer (in source currency) |
-| `method` | string | No | Verification method: `code_pull` (default), `qr_scan`, `number_match`. Ignored if user has no mobile device (falls back to `email`). |
 
 **Example Request:**
 ```json
 {
   "from_account_number": "265-1234567890123-56",
   "to_account_number": "265-1234500000EUR-78",
-  "amount": 1000.00,
-  "method": "code_pull"
+  "amount": 1000.00
 }
 ```
 
@@ -1667,12 +1602,6 @@ Get a transfer by ID.
 
 ---
 
-### ~~GET /api/transfers/client/:client_id~~ (removed)
-
-> **Removed.** Employees should use `GET /api/transfers?client_id=X`. Clients should use `GET /api/me/transfers`.
-
----
-
 ### GET /api/transfers
 
 List transfers with optional filters. Pass `client_id` to filter by owner.
@@ -1696,10 +1625,6 @@ List transfers with optional filters. Pass `client_id` to filter by owner.
 ```
 
 ---
-
-### ~~POST /api/transfers/:id/execute~~ (moved — use POST /api/me/transfers/:id/execute)
-
-> **Moved to `/api/me/*`.** See `POST /api/me/transfers/:id/execute` in the [Me — Self-Service](#20-me-self-service) section.
 
 ### POST /api/me/transfers/:id/execute
 
@@ -1758,10 +1683,6 @@ Saved payment recipients (favorites) for a client.
 
 ---
 
-### ~~POST /api/payment-recipients~~ (moved — use POST /api/me/payment-recipients)
-
-> **Moved to `/api/me/*`.** See `POST /api/me/payment-recipients` in the [Me — Self-Service](#20-me-self-service) section.
-
 ### POST /api/me/payment-recipients
 
 Save a new payment recipient.
@@ -1795,12 +1716,6 @@ Save a new payment recipient.
   "created_at": "2026-03-13T10:00:00Z"
 }
 ```
-
----
-
-### ~~GET /api/payment-recipients/:client_id~~ (removed — use GET /api/me/payment-recipients)
-
-> **Removed.** Use `GET /api/me/payment-recipients` instead. Identity is inferred from the JWT — no `client_id` path segment needed.
 
 ---
 
@@ -1959,10 +1874,6 @@ Loan request management has been promoted to its own top-level section — see [
 
 ---
 
-### ~~POST /api/loans/requests~~ (moved — use POST /api/me/loan-requests)
-
-> **Moved.** Clients should use `POST /api/me/loan-requests`. See the [Me — Self-Service](#20-me-self-service) section.
-
 ### POST /api/me/loan-requests
 
 Submit a new loan application.
@@ -2027,30 +1938,6 @@ Submit a new loan application.
 
 ---
 
-### ~~GET /api/loans/requests~~ (moved — use GET /api/loan-requests)
-
-> **Moved to top-level.** See `GET /api/loan-requests` in [Section 13: Loan Requests](#13-loan-requests).
-
-### ~~GET /api/loans/requests/:id~~ (moved — use GET /api/loan-requests/:id)
-
-> **Moved to top-level.** See `GET /api/loan-requests/:id` in [Section 13: Loan Requests](#13-loan-requests).
-
-### ~~PUT /api/loans/requests/:id/approve~~ (moved and method changed — use POST /api/loan-requests/:id/approve)
-
-> **Moved and method changed to POST.** See `POST /api/loan-requests/:id/approve` in [Section 13: Loan Requests](#13-loan-requests).
-
-### ~~PUT /api/loans/requests/:id/reject~~ (moved and method changed — use POST /api/loan-requests/:id/reject)
-
-> **Moved and method changed to POST.** See `POST /api/loan-requests/:id/reject` in [Section 13: Loan Requests](#13-loan-requests).
-
----
-
-### ~~GET /api/loans/requests/client/:client_id~~ (removed — use GET /api/me/loan-requests)
-
-> **Removed.** Clients should use `GET /api/me/loan-requests`. Employees should use `GET /api/loan-requests?client_id=X`.
-
----
-
 ### GET /api/loans
 
 List loans (employee view). Pass `client_id` to filter loans for a specific client — this replaces the old `GET /api/loans/client/:client_id`. Clients should use `GET /api/me/loans`.
@@ -2092,18 +1979,6 @@ Get a single loan by ID.
 
 **Response 200:** Loan object
 **Response 404:** `{"error": "loan not found"}`
-
----
-
-### ~~GET /api/loans/client/:client_id~~ (removed)
-
-> **Removed.** Employees should use `GET /api/loans?client_id=X`. Clients should use `GET /api/me/loans`.
-
----
-
-### ~~GET /api/loans/requests/client/:client_id~~ (removed)
-
-> **Removed.** Clients should use `GET /api/me/loan-requests`. Employees should use `GET /api/loan-requests?client_id=X`.
 
 ---
 
@@ -3115,10 +2990,6 @@ Card requests allow clients to request a card for one of their accounts. Employe
 
 ---
 
-### ~~POST /api/cards/requests~~ (moved — use POST /api/me/cards/requests)
-
-> **Moved to `/api/me/*`.** See `POST /api/me/cards/requests` in [Section 20: Me — Self-Service](#20-me-self-service).
-
 ### POST /api/me/cards/requests
 
 Client submits a request to obtain a card for one of their accounts.
@@ -3169,10 +3040,6 @@ Client submits a request to obtain a card for one of their accounts.
 | 500 | Internal server error |
 
 ---
-
-### ~~GET /api/cards/requests/me~~ (moved — use GET /api/me/cards/requests)
-
-> **Moved to `/api/me/*`.** See `GET /api/me/cards/requests` in [Section 20: Me — Self-Service](#20-me-self-service).
 
 ### GET /api/me/cards/requests
 
@@ -3927,125 +3794,41 @@ Deactivate the current device and send a new activation code to the specified em
 
 ---
 
-## 22. Mobile Verification
+## 22. Verification
 
-Mobile-side verification endpoints. Requires `MobileAuthMiddleware` + `RequireDeviceSignature` (HMAC-SHA256).
+The verification service provides two-factor authentication for payments and transfers. Challenges expire after 5 minutes and allow a maximum of 3 attempts. Employees with `verification.skip` permission bypass verification entirely.
 
-See the [Mobile App Integration Guide](../mobile/MOBILE_APP_INTEGRATION.md) for request signing details.
+**Verification methods:**
 
----
-
-### GET /api/mobile/verifications/pending
-
-Poll for pending verification items delivered to this device.
-
-**Authentication:** Mobile JWT + `X-Device-ID` + Device Signature
-
-**Response 200:**
-```json
-{
-  "items": [
-    {
-      "id": 1,
-      "challenge_id": 123,
-      "method": "code_pull",
-      "display_data": { "code": "482916" },
-      "expires_at": "2026-04-01T12:05:00Z"
-    }
-  ]
-}
-```
-
-The `display_data` contents depend on the verification method:
-- **code_pull:** `{ "code": "482916" }` — display the code to the user so they can type it into the browser
-
-> **Note:** `qr_scan` and `number_match` methods are planned but not yet available.
-
----
-
-### POST /api/mobile/verifications/:challenge_id/submit
-
-Submit a verification response from the mobile app.
-
-**Authentication:** Mobile JWT + `X-Device-ID` + Device Signature
-
-**Path Parameters:**
-
-| Parameter | Type | Description |
+| Method | Status | Description |
 |---|---|---|
-| `challenge_id` | int | Verification challenge ID |
+| `code_pull` | **Active** (default) | 6-digit code delivered to the client's mobile app; client types it into the browser |
+| `email` | **Active** | 6-digit code sent to the client's email; fallback when no mobile device is registered |
+| `qr_scan` | **Not available** | Planned — selecting this returns 400 |
+| `number_match` | **Not available** | Planned — selecting this returns 400 |
 
-**Request Body:**
+**Recommended usage order:**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `response` | string | Yes | The verification response (6-digit code for code_pull) |
+1. `POST /api/me/payments` or `POST /api/me/transfers` — creates the transaction in `pending_verification` status
+2. `POST /api/verifications` — creates a verification challenge for the pending transaction
+3. `GET /api/verifications/:id/status` — browser polls until `status = "verified"`
+4. On mobile: `GET /api/mobile/verifications/pending` — mobile app polls for pending challenges
+5. Client submits code via `POST /api/verifications/:id/code` (browser) or `POST /api/mobile/verifications/:challenge_id/submit` (mobile)
+6. `POST /api/me/payments/:id/execute` or `POST /api/me/transfers/:id/execute` — executes the transaction with the verified `challenge_id`
 
-**Example Request (code_pull):**
-```json
-{
-  "response": "482916"
-}
-```
+**VerificationChallenge model:**
 
-> **Note:** Currently only `code_pull` responses are supported on mobile. `number_match` is planned for a future release.
-
-**Response 200:**
-```json
-{
-  "success": true,
-  "remaining_attempts": 2
-}
-```
-
-| Status | Description |
-|---|---|
-| 200 | Submission accepted (check `success` field) |
-| 400 | Invalid challenge ID or missing response |
-| 404 | Challenge not found |
-| 409 | Challenge expired or max attempts exceeded |
-
----
-
-### POST /api/verify/:challenge_id
-
-> **Note:** This endpoint is for the `qr_scan` method which is not yet available. Documented for future reference.
-
-QR code verification endpoint. The mobile app scans a QR code displayed on the browser, extracts the URL and token, and POSTs here.
-
-**Authentication:** Mobile JWT + `X-Device-ID` + Device Signature
-
-**Path Parameters:**
-
-| Parameter | Type | Description |
+| Field | Type | Description |
 |---|---|---|
-| `challenge_id` | int | Verification challenge ID |
-
-**Query Parameters:**
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `token` | string | Yes | QR verification token (64-char hex) |
-
-**Response 200:**
-```json
-{
-  "success": true
-}
-```
-
-| Status | Description |
-|---|---|
-| 200 | QR verification successful |
-| 400 | Missing token or invalid challenge ID |
-| 404 | Challenge not found |
-| 409 | Token mismatch, challenge expired, or already verified |
-
----
-
-## 23. Browser Verification
-
-Browser-facing verification endpoints for creating and checking verification challenges. Requires `AnyAuthMiddleware`.
+| `id` | uint64 | Challenge ID |
+| `user_id` | uint64 | Owner of the challenge |
+| `source_service` | string | `transaction`, `payment`, or `transfer` |
+| `source_id` | uint64 | The payment/transfer ID |
+| `method` | string | `code_pull`, `email` (active); `qr_scan`, `number_match` (planned) |
+| `status` | string | `pending`, `verified`, `expired`, `failed` |
+| `attempts` | int | Current attempt count (max 3) |
+| `expires_at` | timestamp | Challenge expiry (5 minutes from creation) |
+| `verified_at` | timestamp | When verification succeeded (nullable) |
 
 ---
 
@@ -4059,14 +3842,14 @@ Create a new verification challenge for a pending transaction.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `source_service` | string | Yes | Source service: `transaction`, `payment`, `transfer` |
-| `source_id` | uint64 | Yes | The payment/transfer ID that triggered verification |
-| `method` | string | No | `code_pull` (default) or `email`. Other methods (`qr_scan`, `number_match`) are not yet available. |
+| `source_service` | string | Yes | `transaction`, `payment`, or `transfer` |
+| `source_id` | uint64 | Yes | The payment/transfer ID |
+| `method` | string | No | `code_pull` (default) or `email`. `qr_scan` and `number_match` are not yet available. |
 
 **Example Request:**
 ```json
 {
-  "source_service": "transaction",
+  "source_service": "payment",
   "source_id": 456,
   "method": "code_pull"
 }
@@ -4081,11 +3864,9 @@ Create a new verification challenge for a pending transaction.
 }
 ```
 
-The `challenge_data` contents depend on the method:
-- **code_pull:** `{}` (code is delivered to mobile app; if no mobile app registered, use `email` method instead)
-- **email:** `{}` (code is sent via email to the user's registered address)
-
-> **Note:** `qr_scan` and `number_match` methods are planned but not yet available.
+`challenge_data` depends on method:
+- **code_pull:** `{}` — code is delivered to mobile app
+- **email:** `{}` — code is sent via email
 
 | Status | Description |
 |---|---|
@@ -4096,7 +3877,7 @@ The `challenge_data` contents depend on the method:
 
 ### GET /api/verifications/:id/status
 
-Poll the status of a verification challenge. The browser polls this endpoint until status becomes `verified`.
+Poll the status of a verification challenge until `verified`.
 
 **Authentication:** Any JWT (AnyAuthMiddleware)
 
@@ -4122,7 +3903,7 @@ Possible `status` values: `pending`, `verified`, `expired`, `failed`.
 
 ### POST /api/verifications/:id/code
 
-Submit a verification code from the browser (for `code_pull` and `email` methods where the user types the code into the browser).
+Submit a verification code from the browser (for `code_pull` and `email` methods).
 
 **Authentication:** Any JWT (AnyAuthMiddleware)
 
@@ -4162,7 +3943,111 @@ Submit a verification code from the browser (for `code_pull` and `email` methods
 
 ---
 
-## 24. WebSocket
+### GET /api/mobile/verifications/pending
+
+Poll for pending verification challenges delivered to this device.
+
+**Authentication:** Mobile JWT + `X-Device-ID` + Device Signature (see [Mobile App Integration Guide](../mobile/MOBILE_APP_INTEGRATION.md))
+
+**Response 200:**
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "challenge_id": 123,
+      "method": "code_pull",
+      "display_data": { "code": "482916" },
+      "expires_at": "2026-04-01T12:05:00Z"
+    }
+  ]
+}
+```
+
+`display_data` depends on method:
+- **code_pull:** `{ "code": "482916" }` — display the code so the user can type it into the browser
+
+---
+
+### POST /api/mobile/verifications/:challenge_id/submit
+
+Submit a verification response from the mobile app.
+
+**Authentication:** Mobile JWT + `X-Device-ID` + Device Signature
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `challenge_id` | int | Verification challenge ID |
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `response` | string | Yes | The verification response (6-digit code for `code_pull`) |
+
+**Example Request:**
+```json
+{
+  "response": "482916"
+}
+```
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "remaining_attempts": 2
+}
+```
+
+| Status | Description |
+|---|---|
+| 200 | Submission accepted (check `success` field) |
+| 400 | Invalid challenge ID or missing response |
+| 404 | Challenge not found |
+| 409 | Challenge expired or max attempts exceeded |
+
+---
+
+### POST /api/verify/:challenge_id
+
+> **Not available.** This endpoint is for the `qr_scan` method which is not yet implemented.
+
+QR code verification. The mobile app scans a QR code displayed in the browser, extracts the URL and token, and POSTs here.
+
+**Authentication:** Mobile JWT + `X-Device-ID` + Device Signature
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `challenge_id` | int | Verification challenge ID |
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `token` | string | Yes | QR verification token (64-char hex) |
+
+**Response 200:**
+```json
+{
+  "success": true
+}
+```
+
+| Status | Description |
+|---|---|
+| 200 | QR verification successful |
+| 400 | Missing token or invalid challenge ID |
+| 404 | Challenge not found |
+| 409 | Token mismatch, challenge expired, or already verified |
+
+---
+
+## 23. WebSocket
 
 Real-time push notifications for mobile devices.
 
@@ -4198,7 +4083,7 @@ X-Device-ID: <device_id>
 
 ---
 
-## 25. Stock Exchanges
+## 24. Stock Exchanges
 
 ### GET /api/stock-exchanges
 
@@ -4276,7 +4161,7 @@ Get current testing mode status.
 
 ---
 
-## 26. Securities
+## 25. Securities
 
 All securities endpoints require any valid JWT (AnyAuthMiddleware).
 
@@ -4479,7 +4364,7 @@ Get a specific options contract.
 
 ---
 
-## 27. Orders
+## 26. Orders
 
 ### POST /api/me/orders
 
@@ -4637,7 +4522,7 @@ Decline a pending order.
 
 ---
 
-## 28. Portfolio
+## 27. Portfolio
 
 ### GET /api/me/portfolio
 
@@ -4711,7 +4596,7 @@ Exercise an options contract.
 
 ---
 
-## 29. OTC Offers
+## 28. OTC Offers
 
 ### GET /api/otc/offers
 
@@ -4761,7 +4646,7 @@ Purchase an OTC offer.
 
 ---
 
-## 30. Actuaries
+## 29. Actuaries
 
 ### GET /api/actuaries
 
@@ -4848,7 +4733,7 @@ Set whether an actuary's orders require supervisor approval.
 
 ---
 
-## 31. Tax
+## 30. Tax
 
 ### GET /api/tax
 
