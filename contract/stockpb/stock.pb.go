@@ -4757,6 +4757,258 @@ func (x *CollectTaxResponse) GetFailedCount() int64 {
 	return 0
 }
 
+type ListUserTaxRecordsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        uint64                 `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Page          int32                  `protobuf:"varint,2,opt,name=page,proto3" json:"page,omitempty"`
+	PageSize      int32                  `protobuf:"varint,3,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListUserTaxRecordsRequest) Reset() {
+	*x = ListUserTaxRecordsRequest{}
+	mi := &file_stock_stock_proto_msgTypes[62]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUserTaxRecordsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUserTaxRecordsRequest) ProtoMessage() {}
+
+func (x *ListUserTaxRecordsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stock_stock_proto_msgTypes[62]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUserTaxRecordsRequest.ProtoReflect.Descriptor instead.
+func (*ListUserTaxRecordsRequest) Descriptor() ([]byte, []int) {
+	return file_stock_stock_proto_rawDescGZIP(), []int{62}
+}
+
+func (x *ListUserTaxRecordsRequest) GetUserId() uint64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *ListUserTaxRecordsRequest) GetPage() int32 {
+	if x != nil {
+		return x.Page
+	}
+	return 0
+}
+
+func (x *ListUserTaxRecordsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+type UserTaxRecord struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Id               uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	SecurityType     string                 `protobuf:"bytes,2,opt,name=security_type,json=securityType,proto3" json:"security_type,omitempty"`
+	Ticker           string                 `protobuf:"bytes,3,opt,name=ticker,proto3" json:"ticker,omitempty"`
+	Quantity         int64                  `protobuf:"varint,4,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	BuyPricePerUnit  string                 `protobuf:"bytes,5,opt,name=buy_price_per_unit,json=buyPricePerUnit,proto3" json:"buy_price_per_unit,omitempty"`
+	SellPricePerUnit string                 `protobuf:"bytes,6,opt,name=sell_price_per_unit,json=sellPricePerUnit,proto3" json:"sell_price_per_unit,omitempty"`
+	TotalGain        string                 `protobuf:"bytes,7,opt,name=total_gain,json=totalGain,proto3" json:"total_gain,omitempty"`
+	Currency         string                 `protobuf:"bytes,8,opt,name=currency,proto3" json:"currency,omitempty"`
+	TaxYear          int32                  `protobuf:"varint,9,opt,name=tax_year,json=taxYear,proto3" json:"tax_year,omitempty"`
+	TaxMonth         int32                  `protobuf:"varint,10,opt,name=tax_month,json=taxMonth,proto3" json:"tax_month,omitempty"`
+	CreatedAt        string                 `protobuf:"bytes,11,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *UserTaxRecord) Reset() {
+	*x = UserTaxRecord{}
+	mi := &file_stock_stock_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserTaxRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserTaxRecord) ProtoMessage() {}
+
+func (x *UserTaxRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_stock_stock_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserTaxRecord.ProtoReflect.Descriptor instead.
+func (*UserTaxRecord) Descriptor() ([]byte, []int) {
+	return file_stock_stock_proto_rawDescGZIP(), []int{63}
+}
+
+func (x *UserTaxRecord) GetId() uint64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *UserTaxRecord) GetSecurityType() string {
+	if x != nil {
+		return x.SecurityType
+	}
+	return ""
+}
+
+func (x *UserTaxRecord) GetTicker() string {
+	if x != nil {
+		return x.Ticker
+	}
+	return ""
+}
+
+func (x *UserTaxRecord) GetQuantity() int64 {
+	if x != nil {
+		return x.Quantity
+	}
+	return 0
+}
+
+func (x *UserTaxRecord) GetBuyPricePerUnit() string {
+	if x != nil {
+		return x.BuyPricePerUnit
+	}
+	return ""
+}
+
+func (x *UserTaxRecord) GetSellPricePerUnit() string {
+	if x != nil {
+		return x.SellPricePerUnit
+	}
+	return ""
+}
+
+func (x *UserTaxRecord) GetTotalGain() string {
+	if x != nil {
+		return x.TotalGain
+	}
+	return ""
+}
+
+func (x *UserTaxRecord) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *UserTaxRecord) GetTaxYear() int32 {
+	if x != nil {
+		return x.TaxYear
+	}
+	return 0
+}
+
+func (x *UserTaxRecord) GetTaxMonth() int32 {
+	if x != nil {
+		return x.TaxMonth
+	}
+	return 0
+}
+
+func (x *UserTaxRecord) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+type ListUserTaxRecordsResponse struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Records            []*UserTaxRecord       `protobuf:"bytes,1,rep,name=records,proto3" json:"records,omitempty"`
+	TotalCount         int64                  `protobuf:"varint,2,opt,name=total_count,json=totalCount,proto3" json:"total_count,omitempty"`
+	TaxPaidThisYear    string                 `protobuf:"bytes,3,opt,name=tax_paid_this_year,json=taxPaidThisYear,proto3" json:"tax_paid_this_year,omitempty"`
+	TaxUnpaidThisMonth string                 `protobuf:"bytes,4,opt,name=tax_unpaid_this_month,json=taxUnpaidThisMonth,proto3" json:"tax_unpaid_this_month,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *ListUserTaxRecordsResponse) Reset() {
+	*x = ListUserTaxRecordsResponse{}
+	mi := &file_stock_stock_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUserTaxRecordsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUserTaxRecordsResponse) ProtoMessage() {}
+
+func (x *ListUserTaxRecordsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_stock_stock_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUserTaxRecordsResponse.ProtoReflect.Descriptor instead.
+func (*ListUserTaxRecordsResponse) Descriptor() ([]byte, []int) {
+	return file_stock_stock_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *ListUserTaxRecordsResponse) GetRecords() []*UserTaxRecord {
+	if x != nil {
+		return x.Records
+	}
+	return nil
+}
+
+func (x *ListUserTaxRecordsResponse) GetTotalCount() int64 {
+	if x != nil {
+		return x.TotalCount
+	}
+	return 0
+}
+
+func (x *ListUserTaxRecordsResponse) GetTaxPaidThisYear() string {
+	if x != nil {
+		return x.TaxPaidThisYear
+	}
+	return ""
+}
+
+func (x *ListUserTaxRecordsResponse) GetTaxUnpaidThisMonth() string {
+	if x != nil {
+		return x.TaxUnpaidThisMonth
+	}
+	return ""
+}
+
 var File_stock_stock_proto protoreflect.FileDescriptor
 
 const file_stock_stock_proto_rawDesc = "" +
@@ -5213,7 +5465,32 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x12CollectTaxResponse\x12'\n" +
 	"\x0fcollected_count\x18\x01 \x01(\x03R\x0ecollectedCount\x12.\n" +
 	"\x13total_collected_rsd\x18\x02 \x01(\tR\x11totalCollectedRsd\x12!\n" +
-	"\ffailed_count\x18\x03 \x01(\x03R\vfailedCount2\xbf\x02\n" +
+	"\ffailed_count\x18\x03 \x01(\x03R\vfailedCount\"e\n" +
+	"\x19ListUserTaxRecordsRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x04R\x06userId\x12\x12\n" +
+	"\x04page\x18\x02 \x01(\x05R\x04page\x12\x1b\n" +
+	"\tpage_size\x18\x03 \x01(\x05R\bpageSize\"\xe6\x02\n" +
+	"\rUserTaxRecord\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x04R\x02id\x12#\n" +
+	"\rsecurity_type\x18\x02 \x01(\tR\fsecurityType\x12\x16\n" +
+	"\x06ticker\x18\x03 \x01(\tR\x06ticker\x12\x1a\n" +
+	"\bquantity\x18\x04 \x01(\x03R\bquantity\x12+\n" +
+	"\x12buy_price_per_unit\x18\x05 \x01(\tR\x0fbuyPricePerUnit\x12-\n" +
+	"\x13sell_price_per_unit\x18\x06 \x01(\tR\x10sellPricePerUnit\x12\x1d\n" +
+	"\n" +
+	"total_gain\x18\a \x01(\tR\ttotalGain\x12\x1a\n" +
+	"\bcurrency\x18\b \x01(\tR\bcurrency\x12\x19\n" +
+	"\btax_year\x18\t \x01(\x05R\ataxYear\x12\x1b\n" +
+	"\ttax_month\x18\n" +
+	" \x01(\x05R\btaxMonth\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\v \x01(\tR\tcreatedAt\"\xcd\x01\n" +
+	"\x1aListUserTaxRecordsResponse\x12.\n" +
+	"\arecords\x18\x01 \x03(\v2\x14.stock.UserTaxRecordR\arecords\x12\x1f\n" +
+	"\vtotal_count\x18\x02 \x01(\x03R\n" +
+	"totalCount\x12+\n" +
+	"\x12tax_paid_this_year\x18\x03 \x01(\tR\x0ftaxPaidThisYear\x121\n" +
+	"\x15tax_unpaid_this_month\x18\x04 \x01(\tR\x12taxUnpaidThisMonth2\xbf\x02\n" +
 	"\x18StockExchangeGRPCService\x12J\n" +
 	"\rListExchanges\x12\x1b.stock.ListExchangesRequest\x1a\x1c.stock.ListExchangesResponse\x129\n" +
 	"\vGetExchange\x12\x19.stock.GetExchangeRequest\x1a\x0f.stock.Exchange\x12M\n" +
@@ -5251,11 +5528,12 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x0eOTCGRPCService\x12G\n" +
 	"\n" +
 	"ListOffers\x12\x1b.stock.ListOTCOffersRequest\x1a\x1c.stock.ListOTCOffersResponse\x12<\n" +
-	"\bBuyOffer\x12\x19.stock.BuyOTCOfferRequest\x1a\x15.stock.OTCTransaction2\xa2\x01\n" +
+	"\bBuyOffer\x12\x19.stock.BuyOTCOfferRequest\x1a\x15.stock.OTCTransaction2\xfd\x01\n" +
 	"\x0eTaxGRPCService\x12M\n" +
 	"\x0eListTaxRecords\x12\x1c.stock.ListTaxRecordsRequest\x1a\x1d.stock.ListTaxRecordsResponse\x12A\n" +
 	"\n" +
-	"CollectTax\x12\x18.stock.CollectTaxRequest\x1a\x19.stock.CollectTaxResponseB-Z+github.com/exbanka/contract/stockpb;stockpbb\x06proto3"
+	"CollectTax\x12\x18.stock.CollectTaxRequest\x1a\x19.stock.CollectTaxResponse\x12Y\n" +
+	"\x12ListUserTaxRecords\x12 .stock.ListUserTaxRecordsRequest\x1a!.stock.ListUserTaxRecordsResponseB-Z+github.com/exbanka/contract/stockpb;stockpbb\x06proto3"
 
 var (
 	file_stock_stock_proto_rawDescOnce sync.Once
@@ -5269,7 +5547,7 @@ func file_stock_stock_proto_rawDescGZIP() []byte {
 	return file_stock_stock_proto_rawDescData
 }
 
-var file_stock_stock_proto_msgTypes = make([]protoimpl.MessageInfo, 62)
+var file_stock_stock_proto_msgTypes = make([]protoimpl.MessageInfo, 65)
 var file_stock_stock_proto_goTypes = []any{
 	(*Exchange)(nil),                   // 0: stock.Exchange
 	(*ListExchangesRequest)(nil),       // 1: stock.ListExchangesRequest
@@ -5333,6 +5611,9 @@ var file_stock_stock_proto_goTypes = []any{
 	(*ListTaxRecordsResponse)(nil),     // 59: stock.ListTaxRecordsResponse
 	(*CollectTaxRequest)(nil),          // 60: stock.CollectTaxRequest
 	(*CollectTaxResponse)(nil),         // 61: stock.CollectTaxResponse
+	(*ListUserTaxRecordsRequest)(nil),  // 62: stock.ListUserTaxRecordsRequest
+	(*UserTaxRecord)(nil),              // 63: stock.UserTaxRecord
+	(*ListUserTaxRecordsResponse)(nil), // 64: stock.ListUserTaxRecordsResponse
 }
 var file_stock_stock_proto_depIdxs = []int32{
 	0,  // 0: stock.ListExchangesResponse.exchanges:type_name -> stock.Exchange
@@ -5354,71 +5635,74 @@ var file_stock_stock_proto_depIdxs = []int32{
 	44, // 16: stock.ListHoldingsResponse.holdings:type_name -> stock.Holding
 	52, // 17: stock.ListOTCOffersResponse.offers:type_name -> stock.OTCOffer
 	57, // 18: stock.ListTaxRecordsResponse.tax_records:type_name -> stock.TaxRecord
-	1,  // 19: stock.StockExchangeGRPCService.ListExchanges:input_type -> stock.ListExchangesRequest
-	3,  // 20: stock.StockExchangeGRPCService.GetExchange:input_type -> stock.GetExchangeRequest
-	4,  // 21: stock.StockExchangeGRPCService.SetTestingMode:input_type -> stock.SetTestingModeRequest
-	6,  // 22: stock.StockExchangeGRPCService.GetTestingMode:input_type -> stock.GetTestingModeRequest
-	15, // 23: stock.SecurityGRPCService.ListStocks:input_type -> stock.ListStocksRequest
-	17, // 24: stock.SecurityGRPCService.GetStock:input_type -> stock.GetStockRequest
-	11, // 25: stock.SecurityGRPCService.GetStockHistory:input_type -> stock.GetPriceHistoryRequest
-	20, // 26: stock.SecurityGRPCService.ListFutures:input_type -> stock.ListFuturesRequest
-	22, // 27: stock.SecurityGRPCService.GetFutures:input_type -> stock.GetFuturesRequest
-	11, // 28: stock.SecurityGRPCService.GetFuturesHistory:input_type -> stock.GetPriceHistoryRequest
-	25, // 29: stock.SecurityGRPCService.ListForexPairs:input_type -> stock.ListForexPairsRequest
-	27, // 30: stock.SecurityGRPCService.GetForexPair:input_type -> stock.GetForexPairRequest
-	11, // 31: stock.SecurityGRPCService.GetForexPairHistory:input_type -> stock.GetPriceHistoryRequest
-	30, // 32: stock.SecurityGRPCService.ListOptions:input_type -> stock.ListOptionsRequest
-	32, // 33: stock.SecurityGRPCService.GetOption:input_type -> stock.GetOptionRequest
-	36, // 34: stock.OrderGRPCService.CreateOrder:input_type -> stock.CreateOrderRequest
-	37, // 35: stock.OrderGRPCService.GetOrder:input_type -> stock.GetOrderRequest
-	38, // 36: stock.OrderGRPCService.ListMyOrders:input_type -> stock.ListMyOrdersRequest
-	41, // 37: stock.OrderGRPCService.CancelOrder:input_type -> stock.CancelOrderRequest
-	39, // 38: stock.OrderGRPCService.ListOrders:input_type -> stock.ListOrdersRequest
-	42, // 39: stock.OrderGRPCService.ApproveOrder:input_type -> stock.ApproveOrderRequest
-	43, // 40: stock.OrderGRPCService.DeclineOrder:input_type -> stock.DeclineOrderRequest
-	45, // 41: stock.PortfolioGRPCService.ListHoldings:input_type -> stock.ListHoldingsRequest
-	47, // 42: stock.PortfolioGRPCService.GetPortfolioSummary:input_type -> stock.GetPortfolioSummaryRequest
-	49, // 43: stock.PortfolioGRPCService.MakePublic:input_type -> stock.MakePublicRequest
-	50, // 44: stock.PortfolioGRPCService.ExerciseOption:input_type -> stock.ExerciseOptionRequest
-	53, // 45: stock.OTCGRPCService.ListOffers:input_type -> stock.ListOTCOffersRequest
-	55, // 46: stock.OTCGRPCService.BuyOffer:input_type -> stock.BuyOTCOfferRequest
-	58, // 47: stock.TaxGRPCService.ListTaxRecords:input_type -> stock.ListTaxRecordsRequest
-	60, // 48: stock.TaxGRPCService.CollectTax:input_type -> stock.CollectTaxRequest
-	2,  // 49: stock.StockExchangeGRPCService.ListExchanges:output_type -> stock.ListExchangesResponse
-	0,  // 50: stock.StockExchangeGRPCService.GetExchange:output_type -> stock.Exchange
-	5,  // 51: stock.StockExchangeGRPCService.SetTestingMode:output_type -> stock.SetTestingModeResponse
-	7,  // 52: stock.StockExchangeGRPCService.GetTestingMode:output_type -> stock.GetTestingModeResponse
-	16, // 53: stock.SecurityGRPCService.ListStocks:output_type -> stock.ListStocksResponse
-	14, // 54: stock.SecurityGRPCService.GetStock:output_type -> stock.StockDetail
-	12, // 55: stock.SecurityGRPCService.GetStockHistory:output_type -> stock.PriceHistoryResponse
-	21, // 56: stock.SecurityGRPCService.ListFutures:output_type -> stock.ListFuturesResponse
-	19, // 57: stock.SecurityGRPCService.GetFutures:output_type -> stock.FuturesDetail
-	12, // 58: stock.SecurityGRPCService.GetFuturesHistory:output_type -> stock.PriceHistoryResponse
-	26, // 59: stock.SecurityGRPCService.ListForexPairs:output_type -> stock.ListForexPairsResponse
-	24, // 60: stock.SecurityGRPCService.GetForexPair:output_type -> stock.ForexPairDetail
-	12, // 61: stock.SecurityGRPCService.GetForexPairHistory:output_type -> stock.PriceHistoryResponse
-	31, // 62: stock.SecurityGRPCService.ListOptions:output_type -> stock.ListOptionsResponse
-	29, // 63: stock.SecurityGRPCService.GetOption:output_type -> stock.OptionDetail
-	33, // 64: stock.OrderGRPCService.CreateOrder:output_type -> stock.Order
-	35, // 65: stock.OrderGRPCService.GetOrder:output_type -> stock.OrderDetail
-	40, // 66: stock.OrderGRPCService.ListMyOrders:output_type -> stock.ListOrdersResponse
-	33, // 67: stock.OrderGRPCService.CancelOrder:output_type -> stock.Order
-	40, // 68: stock.OrderGRPCService.ListOrders:output_type -> stock.ListOrdersResponse
-	33, // 69: stock.OrderGRPCService.ApproveOrder:output_type -> stock.Order
-	33, // 70: stock.OrderGRPCService.DeclineOrder:output_type -> stock.Order
-	46, // 71: stock.PortfolioGRPCService.ListHoldings:output_type -> stock.ListHoldingsResponse
-	48, // 72: stock.PortfolioGRPCService.GetPortfolioSummary:output_type -> stock.PortfolioSummary
-	44, // 73: stock.PortfolioGRPCService.MakePublic:output_type -> stock.Holding
-	51, // 74: stock.PortfolioGRPCService.ExerciseOption:output_type -> stock.ExerciseResult
-	54, // 75: stock.OTCGRPCService.ListOffers:output_type -> stock.ListOTCOffersResponse
-	56, // 76: stock.OTCGRPCService.BuyOffer:output_type -> stock.OTCTransaction
-	59, // 77: stock.TaxGRPCService.ListTaxRecords:output_type -> stock.ListTaxRecordsResponse
-	61, // 78: stock.TaxGRPCService.CollectTax:output_type -> stock.CollectTaxResponse
-	49, // [49:79] is the sub-list for method output_type
-	19, // [19:49] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	63, // 19: stock.ListUserTaxRecordsResponse.records:type_name -> stock.UserTaxRecord
+	1,  // 20: stock.StockExchangeGRPCService.ListExchanges:input_type -> stock.ListExchangesRequest
+	3,  // 21: stock.StockExchangeGRPCService.GetExchange:input_type -> stock.GetExchangeRequest
+	4,  // 22: stock.StockExchangeGRPCService.SetTestingMode:input_type -> stock.SetTestingModeRequest
+	6,  // 23: stock.StockExchangeGRPCService.GetTestingMode:input_type -> stock.GetTestingModeRequest
+	15, // 24: stock.SecurityGRPCService.ListStocks:input_type -> stock.ListStocksRequest
+	17, // 25: stock.SecurityGRPCService.GetStock:input_type -> stock.GetStockRequest
+	11, // 26: stock.SecurityGRPCService.GetStockHistory:input_type -> stock.GetPriceHistoryRequest
+	20, // 27: stock.SecurityGRPCService.ListFutures:input_type -> stock.ListFuturesRequest
+	22, // 28: stock.SecurityGRPCService.GetFutures:input_type -> stock.GetFuturesRequest
+	11, // 29: stock.SecurityGRPCService.GetFuturesHistory:input_type -> stock.GetPriceHistoryRequest
+	25, // 30: stock.SecurityGRPCService.ListForexPairs:input_type -> stock.ListForexPairsRequest
+	27, // 31: stock.SecurityGRPCService.GetForexPair:input_type -> stock.GetForexPairRequest
+	11, // 32: stock.SecurityGRPCService.GetForexPairHistory:input_type -> stock.GetPriceHistoryRequest
+	30, // 33: stock.SecurityGRPCService.ListOptions:input_type -> stock.ListOptionsRequest
+	32, // 34: stock.SecurityGRPCService.GetOption:input_type -> stock.GetOptionRequest
+	36, // 35: stock.OrderGRPCService.CreateOrder:input_type -> stock.CreateOrderRequest
+	37, // 36: stock.OrderGRPCService.GetOrder:input_type -> stock.GetOrderRequest
+	38, // 37: stock.OrderGRPCService.ListMyOrders:input_type -> stock.ListMyOrdersRequest
+	41, // 38: stock.OrderGRPCService.CancelOrder:input_type -> stock.CancelOrderRequest
+	39, // 39: stock.OrderGRPCService.ListOrders:input_type -> stock.ListOrdersRequest
+	42, // 40: stock.OrderGRPCService.ApproveOrder:input_type -> stock.ApproveOrderRequest
+	43, // 41: stock.OrderGRPCService.DeclineOrder:input_type -> stock.DeclineOrderRequest
+	45, // 42: stock.PortfolioGRPCService.ListHoldings:input_type -> stock.ListHoldingsRequest
+	47, // 43: stock.PortfolioGRPCService.GetPortfolioSummary:input_type -> stock.GetPortfolioSummaryRequest
+	49, // 44: stock.PortfolioGRPCService.MakePublic:input_type -> stock.MakePublicRequest
+	50, // 45: stock.PortfolioGRPCService.ExerciseOption:input_type -> stock.ExerciseOptionRequest
+	53, // 46: stock.OTCGRPCService.ListOffers:input_type -> stock.ListOTCOffersRequest
+	55, // 47: stock.OTCGRPCService.BuyOffer:input_type -> stock.BuyOTCOfferRequest
+	58, // 48: stock.TaxGRPCService.ListTaxRecords:input_type -> stock.ListTaxRecordsRequest
+	60, // 49: stock.TaxGRPCService.CollectTax:input_type -> stock.CollectTaxRequest
+	62, // 50: stock.TaxGRPCService.ListUserTaxRecords:input_type -> stock.ListUserTaxRecordsRequest
+	2,  // 51: stock.StockExchangeGRPCService.ListExchanges:output_type -> stock.ListExchangesResponse
+	0,  // 52: stock.StockExchangeGRPCService.GetExchange:output_type -> stock.Exchange
+	5,  // 53: stock.StockExchangeGRPCService.SetTestingMode:output_type -> stock.SetTestingModeResponse
+	7,  // 54: stock.StockExchangeGRPCService.GetTestingMode:output_type -> stock.GetTestingModeResponse
+	16, // 55: stock.SecurityGRPCService.ListStocks:output_type -> stock.ListStocksResponse
+	14, // 56: stock.SecurityGRPCService.GetStock:output_type -> stock.StockDetail
+	12, // 57: stock.SecurityGRPCService.GetStockHistory:output_type -> stock.PriceHistoryResponse
+	21, // 58: stock.SecurityGRPCService.ListFutures:output_type -> stock.ListFuturesResponse
+	19, // 59: stock.SecurityGRPCService.GetFutures:output_type -> stock.FuturesDetail
+	12, // 60: stock.SecurityGRPCService.GetFuturesHistory:output_type -> stock.PriceHistoryResponse
+	26, // 61: stock.SecurityGRPCService.ListForexPairs:output_type -> stock.ListForexPairsResponse
+	24, // 62: stock.SecurityGRPCService.GetForexPair:output_type -> stock.ForexPairDetail
+	12, // 63: stock.SecurityGRPCService.GetForexPairHistory:output_type -> stock.PriceHistoryResponse
+	31, // 64: stock.SecurityGRPCService.ListOptions:output_type -> stock.ListOptionsResponse
+	29, // 65: stock.SecurityGRPCService.GetOption:output_type -> stock.OptionDetail
+	33, // 66: stock.OrderGRPCService.CreateOrder:output_type -> stock.Order
+	35, // 67: stock.OrderGRPCService.GetOrder:output_type -> stock.OrderDetail
+	40, // 68: stock.OrderGRPCService.ListMyOrders:output_type -> stock.ListOrdersResponse
+	33, // 69: stock.OrderGRPCService.CancelOrder:output_type -> stock.Order
+	40, // 70: stock.OrderGRPCService.ListOrders:output_type -> stock.ListOrdersResponse
+	33, // 71: stock.OrderGRPCService.ApproveOrder:output_type -> stock.Order
+	33, // 72: stock.OrderGRPCService.DeclineOrder:output_type -> stock.Order
+	46, // 73: stock.PortfolioGRPCService.ListHoldings:output_type -> stock.ListHoldingsResponse
+	48, // 74: stock.PortfolioGRPCService.GetPortfolioSummary:output_type -> stock.PortfolioSummary
+	44, // 75: stock.PortfolioGRPCService.MakePublic:output_type -> stock.Holding
+	51, // 76: stock.PortfolioGRPCService.ExerciseOption:output_type -> stock.ExerciseResult
+	54, // 77: stock.OTCGRPCService.ListOffers:output_type -> stock.ListOTCOffersResponse
+	56, // 78: stock.OTCGRPCService.BuyOffer:output_type -> stock.OTCTransaction
+	59, // 79: stock.TaxGRPCService.ListTaxRecords:output_type -> stock.ListTaxRecordsResponse
+	61, // 80: stock.TaxGRPCService.CollectTax:output_type -> stock.CollectTaxResponse
+	64, // 81: stock.TaxGRPCService.ListUserTaxRecords:output_type -> stock.ListUserTaxRecordsResponse
+	51, // [51:82] is the sub-list for method output_type
+	20, // [20:51] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_stock_stock_proto_init() }
@@ -5434,7 +5718,7 @@ func file_stock_stock_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stock_stock_proto_rawDesc), len(file_stock_stock_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   62,
+			NumMessages:   65,
 			NumExtensions: 0,
 			NumServices:   6,
 		},

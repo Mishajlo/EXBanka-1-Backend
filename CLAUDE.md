@@ -175,7 +175,7 @@ The Notification Service has a PostgreSQL database (`notification_db`, port 5441
 - Configurable fee rules stored in `transfer_fees` table (type: `percentage` or `fixed`, with `min_amount` threshold and `max_fee` cap).
 - Multiple matching rules are cumulative (stack).
 - Fee lookup failure (DB error) REJECTS the transaction (not silently ignored).
-- Default seed: 0.1% percentage fee for all transactions >= 1000 RSD.
+- Default seeds: (1) 0.1% percentage fee for all transactions >= 1000 RSD; (2) 5% commission for all transactions >= 5000 RSD.
 - Collected fees are credited to the bank's own RSD account after each transaction.
 
 **Auth token system type** (auth-service):

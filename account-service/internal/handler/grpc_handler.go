@@ -11,12 +11,12 @@ import (
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
-	pb "github.com/exbanka/contract/accountpb"
-	clientpb "github.com/exbanka/contract/clientpb"
-	kafkamsg "github.com/exbanka/contract/kafka"
 	kafkaprod "github.com/exbanka/account-service/internal/kafka"
 	"github.com/exbanka/account-service/internal/model"
 	"github.com/exbanka/account-service/internal/service"
+	pb "github.com/exbanka/contract/accountpb"
+	clientpb "github.com/exbanka/contract/clientpb"
+	kafkamsg "github.com/exbanka/contract/kafka"
 )
 
 // mapServiceError maps service-layer error messages to appropriate gRPC status codes.
@@ -152,7 +152,7 @@ func (h *AccountGRPCHandler) ListAccountsByClient(ctx context.Context, req *pb.L
 		return nil, status.Errorf(mapServiceError(err), "failed to list accounts: %v", err)
 	}
 
-	resp := &pb.ListAccountsResponse{Total: total}
+	resp := &pb.ListAccountsResponse{Total: total, Accounts: make([]*pb.AccountResponse, 0, len(accounts))}
 	for _, a := range accounts {
 		a := a
 		resp.Accounts = append(resp.Accounts, toAccountResponse(&a))
@@ -169,7 +169,7 @@ func (h *AccountGRPCHandler) ListAllAccounts(ctx context.Context, req *pb.ListAl
 		return nil, status.Errorf(mapServiceError(err), "failed to list accounts: %v", err)
 	}
 
-	resp := &pb.ListAccountsResponse{Total: total}
+	resp := &pb.ListAccountsResponse{Total: total, Accounts: make([]*pb.AccountResponse, 0, len(accounts))}
 	for _, a := range accounts {
 		a := a
 		resp.Accounts = append(resp.Accounts, toAccountResponse(&a))
@@ -305,7 +305,7 @@ func (h *AccountGRPCHandler) ListCurrencies(ctx context.Context, req *pb.ListCur
 		return nil, status.Errorf(mapServiceError(err), "failed to list currencies: %v", err)
 	}
 
-	resp := &pb.ListCurrenciesResponse{}
+	resp := &pb.ListCurrenciesResponse{Currencies: make([]*pb.CurrencyResponse, 0, len(currencies))}
 	for _, c := range currencies {
 		c := c
 		resp.Currencies = append(resp.Currencies, toCurrencyResponse(&c))
@@ -339,7 +339,7 @@ func (h *AccountGRPCHandler) GetLedgerEntries(ctx context.Context, req *pb.GetLe
 		return nil, status.Errorf(mapServiceError(err), "failed to get ledger entries: %v", err)
 	}
 
-	resp := &pb.GetLedgerEntriesResponse{TotalCount: total}
+	resp := &pb.GetLedgerEntriesResponse{TotalCount: total, Entries: make([]*pb.LedgerEntryResponse, 0, len(entries))}
 	for _, e := range entries {
 		resp.Entries = append(resp.Entries, &pb.LedgerEntryResponse{
 			Id:            e.ID,

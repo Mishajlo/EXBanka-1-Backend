@@ -10,12 +10,12 @@ import (
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
-	pb "github.com/exbanka/contract/cardpb"
-	clientpb "github.com/exbanka/contract/clientpb"
-	kafkamsg "github.com/exbanka/contract/kafka"
 	kafkaprod "github.com/exbanka/card-service/internal/kafka"
 	"github.com/exbanka/card-service/internal/model"
 	"github.com/exbanka/card-service/internal/service"
+	pb "github.com/exbanka/contract/cardpb"
+	clientpb "github.com/exbanka/contract/clientpb"
+	kafkamsg "github.com/exbanka/contract/kafka"
 )
 
 // mapServiceError maps service-layer error messages to appropriate gRPC status codes.
@@ -94,7 +94,7 @@ func (h *CardGRPCHandler) ListCardsByAccount(ctx context.Context, req *pb.ListCa
 	if err != nil {
 		return nil, status.Errorf(mapServiceError(err), "failed to list cards: %v", err)
 	}
-	resp := &pb.ListCardsResponse{}
+	resp := &pb.ListCardsResponse{Cards: make([]*pb.CardResponse, 0, len(cards))}
 	for _, c := range cards {
 		c := c
 		resp.Cards = append(resp.Cards, toCardResponse(&c))
@@ -107,7 +107,7 @@ func (h *CardGRPCHandler) ListCardsByClient(ctx context.Context, req *pb.ListCar
 	if err != nil {
 		return nil, status.Errorf(mapServiceError(err), "failed to list cards: %v", err)
 	}
-	resp := &pb.ListCardsResponse{}
+	resp := &pb.ListCardsResponse{Cards: make([]*pb.CardResponse, 0, len(cards))}
 	for _, c := range cards {
 		c := c
 		resp.Cards = append(resp.Cards, toCardResponse(&c))

@@ -149,6 +149,9 @@ func Setup(
 			me.GET("/portfolio/summary", portfolioHandler.GetPortfolioSummary)
 			me.POST("/portfolio/:id/make-public", portfolioHandler.MakePublic)
 			me.POST("/portfolio/:id/exercise", portfolioHandler.ExerciseOption)
+
+			// Tax
+			me.GET("/tax", taxHandler.ListMyTaxRecords)
 		}
 
 		// Stock exchanges — accessible to any authenticated user

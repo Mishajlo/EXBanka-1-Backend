@@ -105,7 +105,7 @@ func main() {
 	feeRepo := repository.NewTransferFeeRepository(db)
 	feeSvc := service.NewFeeService(feeRepo)
 
-	// Seed default fee rule if none exist
+	// Seed default fee rules if none exist
 	existingFees, _ := feeSvc.ListFees()
 	if len(existingFees) == 0 {
 		_ = feeSvc.CreateFee(&model.TransferFee{
@@ -117,6 +117,15 @@ func main() {
 			Active:          true,
 		})
 		log.Println("Seeded default payment fee (0.1%)")
+		_ = feeSvc.CreateFee(&model.TransferFee{
+			Name:            "Default Commission",
+			FeeType:         "percentage",
+			FeeValue:        decimal.NewFromFloat(5.0),
+			MinAmount:       decimal.NewFromInt(5000),
+			TransactionType: "all",
+			Active:          true,
+		})
+		log.Println("Seeded default commission (5% for transactions >= 5000 RSD)")
 	}
 
 	// Reuse existing account connection for BankAccountServiceClient

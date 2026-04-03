@@ -100,7 +100,7 @@ func (h *UserGRPCHandler) ListEmployees(ctx context.Context, req *pb.ListEmploye
 		return nil, status.Errorf(mapServiceError(err), "failed to list employees: %v", err)
 	}
 
-	resp := &pb.ListEmployeesResponse{TotalCount: int32(total)}
+	resp := &pb.ListEmployeesResponse{TotalCount: int32(total), Employees: make([]*pb.EmployeeResponse, 0, len(employees))}
 	for _, emp := range employees {
 		resp.Employees = append(resp.Employees, toEmployeeResponse(&emp, h.empService))
 	}
@@ -147,7 +147,7 @@ func (h *UserGRPCHandler) ListRoles(ctx context.Context, req *pb.ListRolesReques
 	if err != nil {
 		return nil, status.Errorf(mapServiceError(err), "failed to list roles: %v", err)
 	}
-	var pbRoles []*pb.RoleResponse
+	pbRoles := make([]*pb.RoleResponse, 0, len(roles))
 	for _, r := range roles {
 		pbRoles = append(pbRoles, toRoleResponse(&r))
 	}
@@ -190,7 +190,7 @@ func (h *UserGRPCHandler) ListPermissions(ctx context.Context, req *pb.ListPermi
 	if err != nil {
 		return nil, status.Errorf(mapServiceError(err), "failed to list permissions: %v", err)
 	}
-	var pbPerms []*pb.PermissionResponse
+	pbPerms := make([]*pb.PermissionResponse, 0, len(perms))
 	for _, p := range perms {
 		pbPerms = append(pbPerms, &pb.PermissionResponse{
 			Id:          p.ID,

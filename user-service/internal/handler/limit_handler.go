@@ -81,7 +81,7 @@ func (h *LimitGRPCHandler) ListLimitTemplates(ctx context.Context, req *pb.ListL
 	if err != nil {
 		return nil, status.Errorf(mapServiceError(err), "failed to list limit templates: %v", err)
 	}
-	resp := &pb.ListLimitTemplatesResponse{}
+	resp := &pb.ListLimitTemplatesResponse{Templates: make([]*pb.LimitTemplateResponse, 0, len(templates))}
 	for _, t := range templates {
 		t := t
 		resp.Templates = append(resp.Templates, toLimitTemplateResponse(&t))
