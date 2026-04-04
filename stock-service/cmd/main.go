@@ -17,6 +17,7 @@ import (
 	accountpb "github.com/exbanka/contract/accountpb"
 	clientpb "github.com/exbanka/contract/clientpb"
 	exchangepb "github.com/exbanka/contract/exchangepb"
+	"github.com/exbanka/contract/metrics"
 	shared "github.com/exbanka/contract/shared"
 	pb "github.com/exbanka/contract/stockpb"
 	userpb "github.com/exbanka/contract/userpb"
@@ -241,7 +242,10 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(metrics.GRPCUnaryServerInterceptor()),
+		grpc.ChainStreamInterceptor(metrics.GRPCStreamServerInterceptor()),
+	)
 
 	// Register handlers
 	exchangeHandler := handler.NewExchangeGRPCHandler(exchangeSvc)
@@ -266,6 +270,9 @@ func main() {
 	pb.RegisterTaxGRPCServiceServer(grpcServer, taxHandler)
 
 	shared.RegisterHealthCheck(grpcServer, "stock-service")
+	metrics.InitializeGRPCMetrics(grpcServer)
+	metricsShutdown := metrics.StartMetricsServer(cfg.MetricsPort)
+	defer metricsShutdown(context.Background())
 
 	// --- Graceful shutdown ---
 	sigCh := make(chan os.Signal, 1)

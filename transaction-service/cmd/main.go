@@ -17,6 +17,7 @@ import (
 
 	accountpb "github.com/exbanka/contract/accountpb"
 	exchangepb "github.com/exbanka/contract/exchangepb"
+	"github.com/exbanka/contract/metrics"
 	shared "github.com/exbanka/contract/shared"
 	pb "github.com/exbanka/contract/transactionpb"
 	verificationpb "github.com/exbanka/contract/verificationpb"
@@ -162,10 +163,16 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(metrics.GRPCUnaryServerInterceptor()),
+		grpc.ChainStreamInterceptor(metrics.GRPCStreamServerInterceptor()),
+	)
 	pb.RegisterTransactionServiceServer(s, grpcHandler)
 	pb.RegisterFeeServiceServer(s, feeHandler)
 	shared.RegisterHealthCheck(s, "transaction-service")
+	metrics.InitializeGRPCMetrics(s)
+	metricsShutdown := metrics.StartMetricsServer(cfg.MetricsPort)
+	defer metricsShutdown(context.Background())
 
 	// Start gRPC server in goroutine
 	go func() {

@@ -31,6 +31,7 @@ type Config struct {
 	AlpacaAPIKey    string
 	AlpacaAPISecret string
 	FinnhubAPIKey   string
+	MetricsPort     string
 }
 
 func Load() *Config {
@@ -61,6 +62,7 @@ func Load() *Config {
 		AlpacaAPIKey:             getEnv("ALPACA_API_KEY", ""),
 		AlpacaAPISecret:          getEnv("ALPACA_API_SECRET", ""),
 		FinnhubAPIKey:            getEnv("FINNHUB_API_KEY", ""),
+		MetricsPort:              getEnv("METRICS_PORT", "9110"),
 	}
 }
 

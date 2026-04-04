@@ -13,6 +13,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
+	"github.com/exbanka/contract/metrics"
 	shared "github.com/exbanka/contract/shared"
 	pb "github.com/exbanka/contract/userpb"
 	"github.com/exbanka/user-service/internal/cache"
@@ -108,11 +109,17 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(metrics.GRPCUnaryServerInterceptor()),
+		grpc.ChainStreamInterceptor(metrics.GRPCStreamServerInterceptor()),
+	)
 	pb.RegisterUserServiceServer(s, grpcHandler)
 	pb.RegisterEmployeeLimitServiceServer(s, limitHandler)
 	pb.RegisterActuaryServiceServer(s, actuaryHandler)
 	shared.RegisterHealthCheck(s, "user-service")
+	metrics.InitializeGRPCMetrics(s)
+	metricsShutdown := metrics.StartMetricsServer(cfg.MetricsPort)
+	defer metricsShutdown(context.Background())
 
 	// Start gRPC server in goroutine
 	go func() {

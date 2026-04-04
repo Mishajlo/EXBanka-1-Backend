@@ -7,6 +7,7 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 
 	"github.com/exbanka/api-gateway/internal/handler"
+	apimetrics "github.com/exbanka/api-gateway/internal/metrics"
 	"github.com/exbanka/api-gateway/internal/middleware"
 	accountpb "github.com/exbanka/contract/accountpb"
 	authpb "github.com/exbanka/contract/authpb"
@@ -48,6 +49,7 @@ func Setup(
 	wsHandler *handler.WebSocketHandler,
 ) *gin.Engine {
 	r := gin.Default()
+	r.Use(apimetrics.GinMiddleware())
 	r.Use(cors.New(cors.Config{
 		AllowAllOrigins:  true,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},

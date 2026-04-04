@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	pb "github.com/exbanka/contract/exchangepb"
+	"github.com/exbanka/contract/metrics"
 	shared "github.com/exbanka/contract/shared"
 	"github.com/exbanka/exchange-service/internal/config"
 	"github.com/exbanka/exchange-service/internal/handler"
@@ -83,9 +84,15 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(metrics.GRPCUnaryServerInterceptor()),
+		grpc.ChainStreamInterceptor(metrics.GRPCStreamServerInterceptor()),
+	)
 	pb.RegisterExchangeServiceServer(s, handler.NewExchangeGRPCHandler(svc))
 	shared.RegisterHealthCheck(s, "exchange-service")
+	metrics.InitializeGRPCMetrics(s)
+	metricsShutdown := metrics.StartMetricsServer(cfg.MetricsPort)
+	defer metricsShutdown(context.Background())
 
 	go func() {
 		log.Printf("exchange-service listening on %s", cfg.GRPCAddr)

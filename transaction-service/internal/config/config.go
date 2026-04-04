@@ -16,6 +16,7 @@ type Config struct {
 	AccountGRPCAddr      string
 	ExchangeGRPCAddr     string
 	VerificationGRPCAddr string
+	MetricsPort          string
 }
 
 func Load() *Config {
@@ -31,6 +32,7 @@ func Load() *Config {
 		AccountGRPCAddr:  getEnv("ACCOUNT_GRPC_ADDR", "localhost:50055"),
 		ExchangeGRPCAddr:     getEnv("EXCHANGE_GRPC_ADDR", "localhost:50059"),
 		VerificationGRPCAddr: getEnv("VERIFICATION_GRPC_ADDR", "localhost:50061"),
+		MetricsPort:          getEnv("METRICS_PORT", "9107"),
 	}
 }
 
