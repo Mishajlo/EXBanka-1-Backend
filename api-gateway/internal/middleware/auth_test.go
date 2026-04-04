@@ -81,6 +81,18 @@ func (m *mockAuthClient) ValidateDeviceSignature(_ context.Context, _ *authpb.Va
 func (m *mockAuthClient) GetDeviceInfo(_ context.Context, _ *authpb.GetDeviceInfoRequest, _ ...grpc.CallOption) (*authpb.GetDeviceInfoResponse, error) {
 	panic("not implemented")
 }
+func (m *mockAuthClient) ListSessions(_ context.Context, _ *authpb.ListSessionsRequest, _ ...grpc.CallOption) (*authpb.ListSessionsResponse, error) {
+	panic("not implemented")
+}
+func (m *mockAuthClient) RevokeSession(_ context.Context, _ *authpb.RevokeSessionRequest, _ ...grpc.CallOption) (*authpb.RevokeSessionResponse, error) {
+	panic("not implemented")
+}
+func (m *mockAuthClient) RevokeAllSessions(_ context.Context, _ *authpb.RevokeAllSessionsRequest, _ ...grpc.CallOption) (*authpb.RevokeAllSessionsResponse, error) {
+	panic("not implemented")
+}
+func (m *mockAuthClient) GetLoginHistory(_ context.Context, _ *authpb.LoginHistoryRequest, _ ...grpc.CallOption) (*authpb.LoginHistoryResponse, error) {
+	panic("not implemented")
+}
 
 // ---------------------------------------------------------------------------
 // helper

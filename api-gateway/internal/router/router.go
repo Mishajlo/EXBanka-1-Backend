@@ -69,6 +69,7 @@ func Setup(
 	exchangeHandler := handler.NewExchangeHandler(exchangeClient)
 	creditHandler := handler.NewCreditHandler(creditClient)
 	meHandler := handler.NewMeHandler(clientClient, userClient, authClient)
+	sessionHandler := handler.NewSessionHandler(authClient)
 	stockExchangeHandler := handler.NewStockExchangeHandler(stockExchangeClient)
 	securitiesHandler := handler.NewSecuritiesHandler(securityClient)
 	stockOrderHandler := handler.NewStockOrderHandler(orderClient)
@@ -154,6 +155,12 @@ func Setup(
 
 			// Tax
 			me.GET("/tax", taxHandler.ListMyTaxRecords)
+
+			// Sessions
+			me.GET("/sessions", sessionHandler.ListMySessions)
+			me.POST("/sessions/revoke", sessionHandler.RevokeSession)
+			me.POST("/sessions/revoke-others", sessionHandler.RevokeAllSessions)
+			me.GET("/login-history", sessionHandler.GetMyLoginHistory)
 		}
 
 		// Stock exchanges — accessible to any authenticated user
@@ -179,6 +186,8 @@ func Setup(
 			securities.GET("/forex/:id/history", securitiesHandler.GetForexPairHistory)
 			securities.GET("/options", securitiesHandler.ListOptions)
 			securities.GET("/options/:id", securitiesHandler.GetOption)
+			// Candles (InfluxDB time-series)
+			securities.GET("/candles", securitiesHandler.GetCandles)
 		}
 
 		// OTC — accessible to any authenticated user

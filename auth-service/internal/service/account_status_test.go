@@ -45,6 +45,7 @@ func setupAccountStatusTestDB(t *testing.T) *gorm.DB {
 		&model.LoginAttempt{},
 		&model.AccountLock{},
 		&model.TOTPSecret{},
+		&model.ActiveSession{},
 	))
 	return db
 }
@@ -52,6 +53,7 @@ func setupAccountStatusTestDB(t *testing.T) *gorm.DB {
 func buildAuthServiceForStatusTests(t *testing.T, db *gorm.DB) *AuthService {
 	t.Helper()
 	tokenRepo := repository.NewTokenRepository(db)
+	sessionRepo := repository.NewSessionRepository(db)
 	loginRepo := repository.NewLoginAttemptRepository(db)
 	totpRepo := repository.NewTOTPRepository(db)
 	totpSvc := NewTOTPService()
@@ -59,7 +61,7 @@ func buildAuthServiceForStatusTests(t *testing.T, db *gorm.DB) *AuthService {
 	accountRepo := repository.NewAccountRepository(db)
 
 	return NewAuthService(
-		tokenRepo, loginRepo, totpRepo, totpSvc, jwtSvc,
+		tokenRepo, sessionRepo, loginRepo, totpRepo, totpSvc, jwtSvc,
 		accountRepo, nil, stubProducer(), nil,
 		168*time.Hour, 720*time.Hour,
 		"http://localhost:3000", "test-pepper",
