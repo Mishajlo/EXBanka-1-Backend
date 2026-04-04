@@ -164,6 +164,9 @@ func main() {
 		}
 	}
 
+	reconcileSvc := service.NewReconciliationService(db, ledgerService)
+	reconcileSvc.CheckAllBalances(ctx)
+
 	grpcHandler := handler.NewAccountGRPCHandler(accountService, companyService, currencyService, ledgerService, producer, clientClient)
 	bankAccountHandler := handler.NewBankAccountGRPCHandler(accountService, producer)
 
