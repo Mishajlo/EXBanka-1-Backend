@@ -93,6 +93,15 @@ func (m *mockAuthClient) RevokeAllSessions(_ context.Context, _ *authpb.RevokeAl
 func (m *mockAuthClient) GetLoginHistory(_ context.Context, _ *authpb.LoginHistoryRequest, _ ...grpc.CallOption) (*authpb.LoginHistoryResponse, error) {
 	panic("not implemented")
 }
+func (m *mockAuthClient) SetBiometricsEnabled(_ context.Context, _ *authpb.SetBiometricsRequest, _ ...grpc.CallOption) (*authpb.SetBiometricsResponse, error) {
+	panic("not implemented")
+}
+func (m *mockAuthClient) GetBiometricsEnabled(_ context.Context, _ *authpb.GetBiometricsRequest, _ ...grpc.CallOption) (*authpb.GetBiometricsResponse, error) {
+	panic("not implemented")
+}
+func (m *mockAuthClient) CheckBiometricsEnabled(_ context.Context, _ *authpb.CheckBiometricsRequest, _ ...grpc.CallOption) (*authpb.CheckBiometricsResponse, error) {
+	panic("not implemented")
+}
 
 // ---------------------------------------------------------------------------
 // helper

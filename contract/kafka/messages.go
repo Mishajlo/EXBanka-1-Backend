@@ -403,6 +403,23 @@ type OptionExercisedMessage struct {
 	Timestamp    int64  `json:"timestamp"`
 }
 
+// Blueprint event topic constants
+const (
+	TopicBlueprintCreated = "user.blueprint-created"
+	TopicBlueprintUpdated = "user.blueprint-updated"
+	TopicBlueprintDeleted = "user.blueprint-deleted"
+	TopicBlueprintApplied = "user.blueprint-applied"
+)
+
+// BlueprintMessage is published for all blueprint lifecycle events.
+type BlueprintMessage struct {
+	BlueprintID   uint64 `json:"blueprint_id"`
+	BlueprintName string `json:"blueprint_name"`
+	BlueprintType string `json:"blueprint_type"` // "employee", "actuary", "client"
+	TargetID      int64  `json:"target_id,omitempty"`
+	Action        string `json:"action"` // "created", "updated", "deleted", "applied"
+}
+
 // Actuary events
 const (
 	TopicActuaryLimitUpdated = "user.actuary-limit-updated"
@@ -459,7 +476,7 @@ type VerificationChallengeFailedMessage struct {
 type MobilePushMessage struct {
 	UserID   uint64 `json:"user_id"`
 	DeviceID string `json:"device_id"`
-	Type     string `json:"type"` // "verification_challenge"
+	Type     string `json:"type"`    // "verification_challenge"
 	Payload  string `json:"payload"` // JSON string
 }
 

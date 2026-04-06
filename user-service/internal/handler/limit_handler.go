@@ -71,7 +71,8 @@ func (h *LimitGRPCHandler) SetEmployeeLimits(ctx context.Context, req *pb.SetEmp
 }
 
 func (h *LimitGRPCHandler) ApplyLimitTemplate(ctx context.Context, req *pb.ApplyLimitTemplateRequest) (*pb.EmployeeLimitResponse, error) {
-	result, err := h.limitSvc.ApplyTemplate(ctx, req.EmployeeId, req.TemplateName)
+	changedBy := changelog.ExtractChangedBy(ctx)
+	result, err := h.limitSvc.ApplyTemplate(ctx, req.EmployeeId, req.TemplateName, changedBy)
 	if err != nil {
 		return nil, status.Errorf(mapServiceError(err), "failed to apply limit template: %v", err)
 	}

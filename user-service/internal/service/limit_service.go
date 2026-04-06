@@ -18,14 +18,16 @@ import (
 type LimitService struct {
 	limitRepo     EmployeeLimitRepo
 	templateRepo  LimitTemplateRepo
+	empRepo       HierarchyEmpRepo
 	producer      *kafkaprod.Producer
 	changelogRepo ChangelogRepo
 }
 
-func NewLimitService(limitRepo EmployeeLimitRepo, templateRepo LimitTemplateRepo, producer *kafkaprod.Producer, changelogRepo ...ChangelogRepo) *LimitService {
+func NewLimitService(limitRepo EmployeeLimitRepo, templateRepo LimitTemplateRepo, empRepo HierarchyEmpRepo, producer *kafkaprod.Producer, changelogRepo ...ChangelogRepo) *LimitService {
 	svc := &LimitService{
 		limitRepo:    limitRepo,
 		templateRepo: templateRepo,
+		empRepo:      empRepo,
 		producer:     producer,
 	}
 	if len(changelogRepo) > 0 {
@@ -41,6 +43,11 @@ func (s *LimitService) GetEmployeeLimits(employeeID int64) (*model.EmployeeLimit
 
 // SetEmployeeLimits creates or updates the limits for an employee.
 func (s *LimitService) SetEmployeeLimits(ctx context.Context, limit model.EmployeeLimit, changedBy int64) (*model.EmployeeLimit, error) {
+	// Hierarchy enforcement: caller must outrank target.
+	if err := checkHierarchy(s.empRepo, changedBy, limit.EmployeeID); err != nil {
+		return nil, err
+	}
+
 	// Fetch old limits for changelog.
 	oldLimit, _ := s.limitRepo.GetByEmployeeID(limit.EmployeeID)
 
@@ -79,7 +86,12 @@ func (s *LimitService) SetEmployeeLimits(ctx context.Context, limit model.Employ
 }
 
 // ApplyTemplate copies template values to an employee's limit record.
-func (s *LimitService) ApplyTemplate(ctx context.Context, employeeID int64, templateName string) (*model.EmployeeLimit, error) {
+func (s *LimitService) ApplyTemplate(ctx context.Context, employeeID int64, templateName string, changedBy int64) (*model.EmployeeLimit, error) {
+	// Hierarchy enforcement: caller must outrank target.
+	if err := checkHierarchy(s.empRepo, changedBy, employeeID); err != nil {
+		return nil, err
+	}
+
 	tmpl, err := s.templateRepo.GetByName(templateName)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

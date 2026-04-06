@@ -2601,6 +2601,294 @@ func (x *LoginHistoryResponse) GetEntries() []*LoginHistoryEntry {
 	return nil
 }
 
+type SetBiometricsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	DeviceId      string                 `protobuf:"bytes,2,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	Enabled       bool                   `protobuf:"varint,3,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetBiometricsRequest) Reset() {
+	*x = SetBiometricsRequest{}
+	mi := &file_auth_auth_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetBiometricsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetBiometricsRequest) ProtoMessage() {}
+
+func (x *SetBiometricsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_auth_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetBiometricsRequest.ProtoReflect.Descriptor instead.
+func (*SetBiometricsRequest) Descriptor() ([]byte, []int) {
+	return file_auth_auth_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *SetBiometricsRequest) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *SetBiometricsRequest) GetDeviceId() string {
+	if x != nil {
+		return x.DeviceId
+	}
+	return ""
+}
+
+func (x *SetBiometricsRequest) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+type SetBiometricsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetBiometricsResponse) Reset() {
+	*x = SetBiometricsResponse{}
+	mi := &file_auth_auth_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetBiometricsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetBiometricsResponse) ProtoMessage() {}
+
+func (x *SetBiometricsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_auth_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetBiometricsResponse.ProtoReflect.Descriptor instead.
+func (*SetBiometricsResponse) Descriptor() ([]byte, []int) {
+	return file_auth_auth_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *SetBiometricsResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+type GetBiometricsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	DeviceId      string                 `protobuf:"bytes,2,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetBiometricsRequest) Reset() {
+	*x = GetBiometricsRequest{}
+	mi := &file_auth_auth_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetBiometricsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetBiometricsRequest) ProtoMessage() {}
+
+func (x *GetBiometricsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_auth_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetBiometricsRequest.ProtoReflect.Descriptor instead.
+func (*GetBiometricsRequest) Descriptor() ([]byte, []int) {
+	return file_auth_auth_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *GetBiometricsRequest) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *GetBiometricsRequest) GetDeviceId() string {
+	if x != nil {
+		return x.DeviceId
+	}
+	return ""
+}
+
+type GetBiometricsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Enabled       bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetBiometricsResponse) Reset() {
+	*x = GetBiometricsResponse{}
+	mi := &file_auth_auth_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetBiometricsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetBiometricsResponse) ProtoMessage() {}
+
+func (x *GetBiometricsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_auth_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetBiometricsResponse.ProtoReflect.Descriptor instead.
+func (*GetBiometricsResponse) Descriptor() ([]byte, []int) {
+	return file_auth_auth_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *GetBiometricsResponse) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+type CheckBiometricsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DeviceId      string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckBiometricsRequest) Reset() {
+	*x = CheckBiometricsRequest{}
+	mi := &file_auth_auth_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckBiometricsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckBiometricsRequest) ProtoMessage() {}
+
+func (x *CheckBiometricsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_auth_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckBiometricsRequest.ProtoReflect.Descriptor instead.
+func (*CheckBiometricsRequest) Descriptor() ([]byte, []int) {
+	return file_auth_auth_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *CheckBiometricsRequest) GetDeviceId() string {
+	if x != nil {
+		return x.DeviceId
+	}
+	return ""
+}
+
+type CheckBiometricsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Enabled       bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckBiometricsResponse) Reset() {
+	*x = CheckBiometricsResponse{}
+	mi := &file_auth_auth_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckBiometricsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckBiometricsResponse) ProtoMessage() {}
+
+func (x *CheckBiometricsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_auth_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckBiometricsResponse.ProtoReflect.Descriptor instead.
+func (*CheckBiometricsResponse) Descriptor() ([]byte, []int) {
+	return file_auth_auth_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *CheckBiometricsResponse) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
 var File_auth_auth_proto protoreflect.FileDescriptor
 
 const file_auth_auth_proto_rawDesc = "" +
@@ -2781,7 +3069,22 @@ const file_auth_auth_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\a \x01(\tR\tcreatedAt\"I\n" +
 	"\x14LoginHistoryResponse\x121\n" +
-	"\aentries\x18\x01 \x03(\v2\x17.auth.LoginHistoryEntryR\aentries2\xd7\r\n" +
+	"\aentries\x18\x01 \x03(\v2\x17.auth.LoginHistoryEntryR\aentries\"f\n" +
+	"\x14SetBiometricsRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x1b\n" +
+	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x18\n" +
+	"\aenabled\x18\x03 \x01(\bR\aenabled\"1\n" +
+	"\x15SetBiometricsResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\"L\n" +
+	"\x14GetBiometricsRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x1b\n" +
+	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\"1\n" +
+	"\x15GetBiometricsResponse\x12\x18\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabled\"5\n" +
+	"\x16CheckBiometricsRequest\x12\x1b\n" +
+	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\"3\n" +
+	"\x17CheckBiometricsResponse\x12\x18\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabled2\xd0\x0f\n" +
 	"\vAuthService\x120\n" +
 	"\x05Login\x12\x12.auth.LoginRequest\x1a\x13.auth.LoginResponse\x12H\n" +
 	"\rValidateToken\x12\x1a.auth.ValidateTokenRequest\x1a\x1b.auth.ValidateTokenResponse\x12E\n" +
@@ -2800,7 +3103,10 @@ const file_auth_auth_proto_rawDesc = "" +
 	"\x10DeactivateDevice\x12\x1d.auth.DeactivateDeviceRequest\x1a\x1e.auth.DeactivateDeviceResponse\x12K\n" +
 	"\x0eTransferDevice\x12\x1b.auth.TransferDeviceRequest\x1a\x1c.auth.TransferDeviceResponse\x12f\n" +
 	"\x17ValidateDeviceSignature\x12$.auth.ValidateDeviceSignatureRequest\x1a%.auth.ValidateDeviceSignatureResponse\x12H\n" +
-	"\rGetDeviceInfo\x12\x1a.auth.GetDeviceInfoRequest\x1a\x1b.auth.GetDeviceInfoResponse\x12E\n" +
+	"\rGetDeviceInfo\x12\x1a.auth.GetDeviceInfoRequest\x1a\x1b.auth.GetDeviceInfoResponse\x12O\n" +
+	"\x14SetBiometricsEnabled\x12\x1a.auth.SetBiometricsRequest\x1a\x1b.auth.SetBiometricsResponse\x12O\n" +
+	"\x14GetBiometricsEnabled\x12\x1a.auth.GetBiometricsRequest\x1a\x1b.auth.GetBiometricsResponse\x12U\n" +
+	"\x16CheckBiometricsEnabled\x12\x1c.auth.CheckBiometricsRequest\x1a\x1d.auth.CheckBiometricsResponse\x12E\n" +
 	"\fListSessions\x12\x19.auth.ListSessionsRequest\x1a\x1a.auth.ListSessionsResponse\x12H\n" +
 	"\rRevokeSession\x12\x1a.auth.RevokeSessionRequest\x1a\x1b.auth.RevokeSessionResponse\x12T\n" +
 	"\x11RevokeAllSessions\x12\x1e.auth.RevokeAllSessionsRequest\x1a\x1f.auth.RevokeAllSessionsResponse\x12H\n" +
@@ -2818,7 +3124,7 @@ func file_auth_auth_proto_rawDescGZIP() []byte {
 	return file_auth_auth_proto_rawDescData
 }
 
-var file_auth_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
+var file_auth_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 53)
 var file_auth_auth_proto_goTypes = []any{
 	(*LoginRequest)(nil),                    // 0: auth.LoginRequest
 	(*LoginResponse)(nil),                   // 1: auth.LoginResponse
@@ -2867,6 +3173,12 @@ var file_auth_auth_proto_goTypes = []any{
 	(*LoginHistoryRequest)(nil),             // 44: auth.LoginHistoryRequest
 	(*LoginHistoryEntry)(nil),               // 45: auth.LoginHistoryEntry
 	(*LoginHistoryResponse)(nil),            // 46: auth.LoginHistoryResponse
+	(*SetBiometricsRequest)(nil),            // 47: auth.SetBiometricsRequest
+	(*SetBiometricsResponse)(nil),           // 48: auth.SetBiometricsResponse
+	(*GetBiometricsRequest)(nil),            // 49: auth.GetBiometricsRequest
+	(*GetBiometricsResponse)(nil),           // 50: auth.GetBiometricsResponse
+	(*CheckBiometricsRequest)(nil),          // 51: auth.CheckBiometricsRequest
+	(*CheckBiometricsResponse)(nil),         // 52: auth.CheckBiometricsResponse
 }
 var file_auth_auth_proto_depIdxs = []int32{
 	19, // 0: auth.GetAccountStatusBatchResponse.entries:type_name -> auth.AccountStatusEntry
@@ -2890,34 +3202,40 @@ var file_auth_auth_proto_depIdxs = []int32{
 	31, // 18: auth.AuthService.TransferDevice:input_type -> auth.TransferDeviceRequest
 	33, // 19: auth.AuthService.ValidateDeviceSignature:input_type -> auth.ValidateDeviceSignatureRequest
 	35, // 20: auth.AuthService.GetDeviceInfo:input_type -> auth.GetDeviceInfoRequest
-	37, // 21: auth.AuthService.ListSessions:input_type -> auth.ListSessionsRequest
-	40, // 22: auth.AuthService.RevokeSession:input_type -> auth.RevokeSessionRequest
-	42, // 23: auth.AuthService.RevokeAllSessions:input_type -> auth.RevokeAllSessionsRequest
-	44, // 24: auth.AuthService.GetLoginHistory:input_type -> auth.LoginHistoryRequest
-	1,  // 25: auth.AuthService.Login:output_type -> auth.LoginResponse
-	3,  // 26: auth.AuthService.ValidateToken:output_type -> auth.ValidateTokenResponse
-	5,  // 27: auth.AuthService.RefreshToken:output_type -> auth.RefreshTokenResponse
-	13, // 28: auth.AuthService.Logout:output_type -> auth.LogoutResponse
-	7,  // 29: auth.AuthService.RequestPasswordReset:output_type -> auth.PasswordResetResponse
-	9,  // 30: auth.AuthService.ResetPassword:output_type -> auth.ResetPasswordResponse
-	11, // 31: auth.AuthService.ActivateAccount:output_type -> auth.ActivateAccountResponse
-	15, // 32: auth.AuthService.SetAccountStatus:output_type -> auth.SetAccountStatusResponse
-	17, // 33: auth.AuthService.GetAccountStatus:output_type -> auth.GetAccountStatusResponse
-	20, // 34: auth.AuthService.GetAccountStatusBatch:output_type -> auth.GetAccountStatusBatchResponse
-	22, // 35: auth.AuthService.CreateAccount:output_type -> auth.CreateAccountResponse
-	24, // 36: auth.AuthService.RequestMobileActivation:output_type -> auth.MobileActivationResponse
-	26, // 37: auth.AuthService.ActivateMobileDevice:output_type -> auth.ActivateMobileDeviceResponse
-	28, // 38: auth.AuthService.RefreshMobileToken:output_type -> auth.RefreshMobileTokenResponse
-	30, // 39: auth.AuthService.DeactivateDevice:output_type -> auth.DeactivateDeviceResponse
-	32, // 40: auth.AuthService.TransferDevice:output_type -> auth.TransferDeviceResponse
-	34, // 41: auth.AuthService.ValidateDeviceSignature:output_type -> auth.ValidateDeviceSignatureResponse
-	36, // 42: auth.AuthService.GetDeviceInfo:output_type -> auth.GetDeviceInfoResponse
-	39, // 43: auth.AuthService.ListSessions:output_type -> auth.ListSessionsResponse
-	41, // 44: auth.AuthService.RevokeSession:output_type -> auth.RevokeSessionResponse
-	43, // 45: auth.AuthService.RevokeAllSessions:output_type -> auth.RevokeAllSessionsResponse
-	46, // 46: auth.AuthService.GetLoginHistory:output_type -> auth.LoginHistoryResponse
-	25, // [25:47] is the sub-list for method output_type
-	3,  // [3:25] is the sub-list for method input_type
+	47, // 21: auth.AuthService.SetBiometricsEnabled:input_type -> auth.SetBiometricsRequest
+	49, // 22: auth.AuthService.GetBiometricsEnabled:input_type -> auth.GetBiometricsRequest
+	51, // 23: auth.AuthService.CheckBiometricsEnabled:input_type -> auth.CheckBiometricsRequest
+	37, // 24: auth.AuthService.ListSessions:input_type -> auth.ListSessionsRequest
+	40, // 25: auth.AuthService.RevokeSession:input_type -> auth.RevokeSessionRequest
+	42, // 26: auth.AuthService.RevokeAllSessions:input_type -> auth.RevokeAllSessionsRequest
+	44, // 27: auth.AuthService.GetLoginHistory:input_type -> auth.LoginHistoryRequest
+	1,  // 28: auth.AuthService.Login:output_type -> auth.LoginResponse
+	3,  // 29: auth.AuthService.ValidateToken:output_type -> auth.ValidateTokenResponse
+	5,  // 30: auth.AuthService.RefreshToken:output_type -> auth.RefreshTokenResponse
+	13, // 31: auth.AuthService.Logout:output_type -> auth.LogoutResponse
+	7,  // 32: auth.AuthService.RequestPasswordReset:output_type -> auth.PasswordResetResponse
+	9,  // 33: auth.AuthService.ResetPassword:output_type -> auth.ResetPasswordResponse
+	11, // 34: auth.AuthService.ActivateAccount:output_type -> auth.ActivateAccountResponse
+	15, // 35: auth.AuthService.SetAccountStatus:output_type -> auth.SetAccountStatusResponse
+	17, // 36: auth.AuthService.GetAccountStatus:output_type -> auth.GetAccountStatusResponse
+	20, // 37: auth.AuthService.GetAccountStatusBatch:output_type -> auth.GetAccountStatusBatchResponse
+	22, // 38: auth.AuthService.CreateAccount:output_type -> auth.CreateAccountResponse
+	24, // 39: auth.AuthService.RequestMobileActivation:output_type -> auth.MobileActivationResponse
+	26, // 40: auth.AuthService.ActivateMobileDevice:output_type -> auth.ActivateMobileDeviceResponse
+	28, // 41: auth.AuthService.RefreshMobileToken:output_type -> auth.RefreshMobileTokenResponse
+	30, // 42: auth.AuthService.DeactivateDevice:output_type -> auth.DeactivateDeviceResponse
+	32, // 43: auth.AuthService.TransferDevice:output_type -> auth.TransferDeviceResponse
+	34, // 44: auth.AuthService.ValidateDeviceSignature:output_type -> auth.ValidateDeviceSignatureResponse
+	36, // 45: auth.AuthService.GetDeviceInfo:output_type -> auth.GetDeviceInfoResponse
+	48, // 46: auth.AuthService.SetBiometricsEnabled:output_type -> auth.SetBiometricsResponse
+	50, // 47: auth.AuthService.GetBiometricsEnabled:output_type -> auth.GetBiometricsResponse
+	52, // 48: auth.AuthService.CheckBiometricsEnabled:output_type -> auth.CheckBiometricsResponse
+	39, // 49: auth.AuthService.ListSessions:output_type -> auth.ListSessionsResponse
+	41, // 50: auth.AuthService.RevokeSession:output_type -> auth.RevokeSessionResponse
+	43, // 51: auth.AuthService.RevokeAllSessions:output_type -> auth.RevokeAllSessionsResponse
+	46, // 52: auth.AuthService.GetLoginHistory:output_type -> auth.LoginHistoryResponse
+	28, // [28:53] is the sub-list for method output_type
+	3,  // [3:28] is the sub-list for method input_type
 	3,  // [3:3] is the sub-list for extension type_name
 	3,  // [3:3] is the sub-list for extension extendee
 	0,  // [0:3] is the sub-list for field type_name
@@ -2934,7 +3252,7 @@ func file_auth_auth_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_auth_auth_proto_rawDesc), len(file_auth_auth_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   47,
+			NumMessages:   53,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

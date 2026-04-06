@@ -106,6 +106,22 @@ func TestGetPendingByUser_ExpiredNotReturned(t *testing.T) {
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
+// TestGetPendingByUser_FindsChallengeWithEmptyDeviceID verifies that the mobile app
+// can find challenges created from the browser (which have empty device_id).
+func TestGetPendingByUser_FindsChallengeWithEmptyDeviceID(t *testing.T) {
+	repo, _ := setupTestRepo(t)
+
+	future := time.Now().Add(10 * time.Minute)
+	// Challenge created from browser — no device_id
+	browserChallenge := newChallenge(500, "", "pending", future)
+	require.NoError(t, repo.Create(browserChallenge))
+
+	// Mobile app queries with its device_id — should still find browser challenge
+	got, err := repo.GetPendingByUser(500, "mobile-device-xyz")
+	require.NoError(t, err)
+	assert.Equal(t, browserChallenge.ID, got.ID)
+}
+
 // TestExpireOld verifies that only past-due pending challenges are transitioned to "expired".
 func TestExpireOld(t *testing.T) {
 	repo, db := setupTestRepo(t)

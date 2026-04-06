@@ -26,6 +26,11 @@ service AuthService {
   rpc ValidateDeviceSignature(ValidateDeviceSignatureRequest) returns (ValidateDeviceSignatureResponse);
   rpc GetDeviceInfo(GetDeviceInfoRequest) returns (GetDeviceInfoResponse);
 
+  // Biometrics management
+  rpc SetBiometricsEnabled(SetBiometricsRequest) returns (SetBiometricsResponse);
+  rpc GetBiometricsEnabled(GetBiometricsRequest) returns (GetBiometricsResponse);
+  rpc CheckBiometricsEnabled(CheckBiometricsRequest) returns (CheckBiometricsResponse);
+
   // Session management
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc RevokeSession(RevokeSessionRequest) returns (RevokeSessionResponse);
@@ -287,4 +292,33 @@ message LoginHistoryEntry {
 
 message LoginHistoryResponse {
   repeated LoginHistoryEntry entries = 1;
+}
+
+// --- Biometrics messages ---
+
+message SetBiometricsRequest {
+  int64 user_id = 1;
+  string device_id = 2;
+  bool enabled = 3;
+}
+
+message SetBiometricsResponse {
+  bool success = 1;
+}
+
+message GetBiometricsRequest {
+  int64 user_id = 1;
+  string device_id = 2;
+}
+
+message GetBiometricsResponse {
+  bool enabled = 1;
+}
+
+message CheckBiometricsRequest {
+  string device_id = 1;
+}
+
+message CheckBiometricsResponse {
+  bool enabled = 1;
 }

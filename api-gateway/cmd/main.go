@@ -156,6 +156,13 @@ func main() {
 	}
 	defer taxConn.Close()
 
+	// Blueprint service reuses the user-service connection
+	blueprintClient, blueprintConn, err := grpcclients.NewBlueprintClient(cfg.UserGRPCAddr)
+	if err != nil {
+		log.Fatalf("failed to connect to blueprint service: %v", err)
+	}
+	defer blueprintConn.Close()
+
 	// Actuary service reuses user-service connection
 	actuaryClient, actuaryConn, err := grpcclients.NewActuaryClient(cfg.UserGRPCAddr)
 	if err != nil {
@@ -183,10 +190,10 @@ func main() {
 	metricsShutdown := metrics.StartMetricsServer(cfg.MetricsPort)
 	defer metricsShutdown(context.Background())
 
-	r := router.Setup(authClient, userClient, clientClient, accountClient, cardClient, txClient, creditClient, empLimitClient, clientLimitClient, virtualCardClient, bankAccountClient, feeClient, cardRequestClient, exchangeClient, stockExchangeClient, securityClient, orderClient, portfolioClient, otcClient, taxClient, actuaryClient, verificationClient, notificationClient, wsHandler)
+	r := router.Setup(authClient, userClient, clientClient, accountClient, cardClient, txClient, creditClient, empLimitClient, clientLimitClient, virtualCardClient, bankAccountClient, feeClient, cardRequestClient, exchangeClient, stockExchangeClient, securityClient, orderClient, portfolioClient, otcClient, taxClient, actuaryClient, blueprintClient, verificationClient, notificationClient, wsHandler)
 
 	// Register versioned API routes
-	router.SetupV1Routes(r, authClient, userClient, clientClient, accountClient, cardClient, txClient, creditClient, empLimitClient, clientLimitClient, virtualCardClient, bankAccountClient, feeClient, cardRequestClient, exchangeClient, stockExchangeClient, securityClient, orderClient, portfolioClient, otcClient, taxClient, actuaryClient, verificationClient, notificationClient, wsHandler)
+	router.SetupV1Routes(r, authClient, userClient, clientClient, accountClient, cardClient, txClient, creditClient, empLimitClient, clientLimitClient, virtualCardClient, bankAccountClient, feeClient, cardRequestClient, exchangeClient, stockExchangeClient, securityClient, orderClient, portfolioClient, otcClient, taxClient, actuaryClient, blueprintClient, verificationClient, notificationClient, wsHandler)
 	router.SetupLatestRoutes(r)
 
 	srv := &http.Server{

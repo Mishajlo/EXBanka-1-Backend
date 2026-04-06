@@ -44,6 +44,7 @@ func Setup(
 	otcClient stockpb.OTCGRPCServiceClient,
 	taxClient stockpb.TaxGRPCServiceClient,
 	actuaryClient userpb.ActuaryServiceClient,
+	blueprintClient userpb.BlueprintServiceClient,
 	verificationClient verificationpb.VerificationGRPCServiceClient,
 	notificationClient notificationpb.NotificationServiceClient,
 	wsHandler *handler.WebSocketHandler,

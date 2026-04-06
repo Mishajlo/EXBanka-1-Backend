@@ -277,6 +277,7 @@ services:
       REDIS_ADDR: redis:6379
       USER_DB_SSLMODE: disable
       METRICS_PORT: "9102"
+      CLIENT_GRPC_ADDR: "client-service:50054"
     ports:
       - "50052:50052"
       - "9102:9102"
@@ -287,6 +288,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+#      client-service:
+#        condition: service_started
 
   auth-service:
     build:
@@ -343,6 +346,7 @@ services:
       NOTIFICATION_DB_NAME: notification_db
       NOTIFICATION_DB_SSLMODE: disable
       METRICS_PORT: "9103"
+      AUTH_GRPC_ADDR: "auth-service:50051"
     ports:
       - "50053:50053"
       - "9103:9103"
@@ -351,6 +355,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      auth-service:
+        condition: service_started
 
   client-service:
     build:
@@ -599,6 +605,7 @@ services:
       VERIFICATION_CHALLENGE_EXPIRY: "5m"
       VERIFICATION_MAX_ATTEMPTS: "3"
       METRICS_PORT: "9111"
+      AUTH_GRPC_ADDR: "auth-service:50051"
     ports:
       - "50061:50061"
       - "9111:9111"
@@ -607,6 +614,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      auth-service:
+        condition: service_started
 
   # ─── API Gateway ──────────────────────────────────────────────────────────
 

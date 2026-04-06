@@ -158,7 +158,7 @@ func (h *LimitHandler) ApplyLimitTemplate(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.empLimitClient.ApplyLimitTemplate(c.Request.Context(), &userpb.ApplyLimitTemplateRequest{
+	resp, err := h.empLimitClient.ApplyLimitTemplate(middleware.GRPCContextWithChangedBy(c), &userpb.ApplyLimitTemplateRequest{
 		EmployeeId:   id,
 		TemplateName: body.TemplateName,
 	})

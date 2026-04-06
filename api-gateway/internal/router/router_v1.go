@@ -108,6 +108,7 @@ func SetupV1Routes(
 	otcClient stockpb.OTCGRPCServiceClient,
 	taxClient stockpb.TaxGRPCServiceClient,
 	actuaryClient userpb.ActuaryServiceClient,
+	blueprintClient userpb.BlueprintServiceClient,
 	verificationClient verificationpb.VerificationGRPCServiceClient,
 	notificationClient notificationpb.NotificationServiceClient,
 	wsHandler *handler.WebSocketHandler,
@@ -130,6 +131,7 @@ func SetupV1Routes(
 	stockOrderHandler := handler.NewStockOrderHandler(orderClient)
 	portfolioHandler := handler.NewPortfolioHandler(portfolioClient, otcClient)
 	actuaryHandler := handler.NewActuaryHandler(actuaryClient)
+	blueprintHandler := handler.NewBlueprintHandler(blueprintClient)
 	taxHandler := handler.NewTaxHandler(taxClient)
 
 	// ── /api/v1 root group ──────────────────────────────────────────────
@@ -272,6 +274,16 @@ func SetupV1Routes(
 			mobileDevice.POST("/transfer", mobileAuthHandler.TransferDevice)
 		}
 
+		// ── Mobile device settings (MobileAuth + DeviceSignature) ────
+		mobileDeviceSettings := v1.Group("/mobile/device")
+		mobileDeviceSettings.Use(middleware.MobileAuthMiddleware(authClient))
+		mobileDeviceSettings.Use(middleware.RequireDeviceSignature(authClient))
+		{
+			mobileAuthSettingsHandler := handler.NewMobileAuthHandler(authClient)
+			mobileDeviceSettings.POST("/biometrics", mobileAuthSettingsHandler.SetBiometrics)
+			mobileDeviceSettings.GET("/biometrics", mobileAuthSettingsHandler.GetBiometrics)
+		}
+
 		// ── Mobile verifications (MobileAuth + DeviceSignature) ─────
 		mobileVerify := v1.Group("/mobile/verifications")
 		mobileVerify.Use(middleware.MobileAuthMiddleware(authClient))
@@ -280,6 +292,7 @@ func SetupV1Routes(
 			verifyHandler := handler.NewVerificationHandler(verificationClient, notificationClient)
 			mobileVerify.GET("/pending", verifyHandler.GetPendingVerifications)
 			mobileVerify.POST("/:challenge_id/submit", verifyHandler.SubmitMobileVerification)
+			mobileVerify.POST("/:challenge_id/biometric", verifyHandler.BiometricVerify)
 		}
 
 		// ── QR verification (MobileAuth + DeviceSignature) ──────────
@@ -350,6 +363,18 @@ func SetupV1Routes(
 				limitsEmployee.POST("/limits/templates", limitHandler.CreateLimitTemplate)
 				limitsEmployee.GET("/clients/:id/limits", limitHandler.GetClientLimits)
 				limitsEmployee.PUT("/clients/:id/limits", limitHandler.SetClientLimits)
+			}
+
+			// Limit blueprint management
+			blueprintsAdmin := protected.Group("/blueprints")
+			blueprintsAdmin.Use(middleware.RequirePermission("limits.manage"))
+			{
+				blueprintsAdmin.GET("", blueprintHandler.ListBlueprints)
+				blueprintsAdmin.POST("", blueprintHandler.CreateBlueprint)
+				blueprintsAdmin.GET("/:id", blueprintHandler.GetBlueprint)
+				blueprintsAdmin.PUT("/:id", blueprintHandler.UpdateBlueprint)
+				blueprintsAdmin.DELETE("/:id", blueprintHandler.DeleteBlueprint)
+				blueprintsAdmin.POST("/:id/apply", blueprintHandler.ApplyBlueprint)
 			}
 
 			// Client management

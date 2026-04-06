@@ -350,10 +350,10 @@ func TestGetPendingChallenge_ReturnsForUserAndDevice(t *testing.T) {
 	assert.Equal(t, "pending", vc.Status)
 }
 
-func TestGetPendingChallenge_NoneForWrongDevice(t *testing.T) {
+func TestGetPendingChallenge_FoundRegardlessOfDevice(t *testing.T) {
 	svc, db := setupTestVerificationService(t)
 
-	seedChallenge(t, db, &model.VerificationChallenge{
+	vc := seedChallenge(t, db, &model.VerificationChallenge{
 		UserID:        20,
 		SourceService: "payment",
 		SourceID:      700,
@@ -367,6 +367,8 @@ func TestGetPendingChallenge_NoneForWrongDevice(t *testing.T) {
 		Version:       1,
 	})
 
-	_, err := svc.GetPendingChallenge(20, "device-xyz")
-	require.Error(t, err)
+	// Mobile app with different device_id should still find the challenge (user_id match)
+	got, err := svc.GetPendingChallenge(20, "device-xyz")
+	require.NoError(t, err)
+	assert.Equal(t, vc.ID, got.ID)
 }

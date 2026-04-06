@@ -242,6 +242,31 @@ func (h *AuthGRPCHandler) GetDeviceInfo(ctx context.Context, req *pb.GetDeviceIn
 	return resp, nil
 }
 
+// --- Biometrics RPC methods ---
+
+func (h *AuthGRPCHandler) SetBiometricsEnabled(ctx context.Context, req *pb.SetBiometricsRequest) (*pb.SetBiometricsResponse, error) {
+	if err := h.mobileSvc.SetBiometricsEnabled(req.UserId, req.DeviceId, req.Enabled); err != nil {
+		return nil, status.Errorf(mapServiceError(err), "%v", err)
+	}
+	return &pb.SetBiometricsResponse{Success: true}, nil
+}
+
+func (h *AuthGRPCHandler) GetBiometricsEnabled(ctx context.Context, req *pb.GetBiometricsRequest) (*pb.GetBiometricsResponse, error) {
+	enabled, err := h.mobileSvc.GetBiometricsEnabled(req.UserId, req.DeviceId)
+	if err != nil {
+		return nil, status.Errorf(mapServiceError(err), "%v", err)
+	}
+	return &pb.GetBiometricsResponse{Enabled: enabled}, nil
+}
+
+func (h *AuthGRPCHandler) CheckBiometricsEnabled(ctx context.Context, req *pb.CheckBiometricsRequest) (*pb.CheckBiometricsResponse, error) {
+	enabled, err := h.mobileSvc.CheckBiometricsEnabled(req.DeviceId)
+	if err != nil {
+		return nil, status.Errorf(mapServiceError(err), "%v", err)
+	}
+	return &pb.CheckBiometricsResponse{Enabled: enabled}, nil
+}
+
 // --- Session management RPC methods ---
 
 func (h *AuthGRPCHandler) ListSessions(ctx context.Context, req *pb.ListSessionsRequest) (*pb.ListSessionsResponse, error) {

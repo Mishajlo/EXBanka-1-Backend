@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
+	authpb "github.com/exbanka/contract/authpb"
 	kafkamsg "github.com/exbanka/contract/kafka"
 	"github.com/exbanka/contract/metrics"
 	shared "github.com/exbanka/contract/shared"
@@ -47,11 +49,19 @@ func main() {
 	producer := kafkaprod.NewProducer(cfg.KafkaBrokers)
 	defer producer.Close()
 
+	// Connect to auth-service for biometrics checks
+	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("failed to connect to auth service: %v", err)
+	}
+	defer authConn.Close()
+	authClient := authpb.NewAuthServiceClient(authConn)
+
 	// 4. Create repository
 	repo := repository.NewVerificationChallengeRepository(db)
 
 	// 5. Create service
-	svc := service.NewVerificationService(repo, producer, db, cfg.ChallengeExpiry, cfg.MaxAttempts)
+	svc := service.NewVerificationService(repo, producer, db, authClient, cfg.ChallengeExpiry, cfg.MaxAttempts)
 
 	// 6. Create gRPC handler
 	grpcHandler := handler.NewVerificationGRPCHandler(svc)

@@ -121,6 +121,35 @@ func TestGetPendingByUserAndDevice_ExcludesDeliveredItems(t *testing.T) {
 	assert.Empty(t, items)
 }
 
+func TestGetPendingByUser_FindsItemsAcrossDevices(t *testing.T) {
+	db := newInboxTestDB(t)
+	repo := NewMobileInboxRepository(db)
+
+	seedInboxItem(t, db, model.MobileInboxItem{
+		UserID:      10,
+		DeviceID:    "device-abc",
+		ChallengeID: 100,
+		Method:      "code_pull",
+	})
+	seedInboxItem(t, db, model.MobileInboxItem{
+		UserID:      10,
+		DeviceID:    "device-def",
+		ChallengeID: 101,
+		Method:      "code_pull",
+	})
+	// Different user — should NOT appear
+	seedInboxItem(t, db, model.MobileInboxItem{
+		UserID:      99,
+		DeviceID:    "device-abc",
+		ChallengeID: 102,
+		Method:      "code_pull",
+	})
+
+	items, err := repo.GetPendingByUser(10)
+	require.NoError(t, err)
+	assert.Len(t, items, 2)
+}
+
 // TestMarkDelivered_MarksItemAsDelivered verifies that MarkDelivered sets the
 // status to "delivered" and records a DeliveredAt timestamp.
 func TestMarkDelivered_MarksItemAsDelivered(t *testing.T) {

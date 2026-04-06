@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	authpb "github.com/exbanka/contract/authpb"
 	kafkamsg "github.com/exbanka/contract/kafka"
 	kafkaprod "github.com/exbanka/notification-service/internal/kafka"
 	"github.com/exbanka/notification-service/internal/model"
@@ -18,13 +19,14 @@ import (
 )
 
 type VerificationConsumer struct {
-	reader    *kafkago.Reader
-	sender    *sender.EmailSender
-	producer  *kafkaprod.Producer
-	inboxRepo *repository.MobileInboxRepository
+	reader     *kafkago.Reader
+	sender     *sender.EmailSender
+	producer   *kafkaprod.Producer
+	inboxRepo  *repository.MobileInboxRepository
+	authClient authpb.AuthServiceClient
 }
 
-func NewVerificationConsumer(brokers string, emailSender *sender.EmailSender, producer *kafkaprod.Producer, inboxRepo *repository.MobileInboxRepository) *VerificationConsumer {
+func NewVerificationConsumer(brokers string, emailSender *sender.EmailSender, producer *kafkaprod.Producer, inboxRepo *repository.MobileInboxRepository, authClient authpb.AuthServiceClient) *VerificationConsumer {
 	reader := kafkago.NewReader(kafkago.ReaderConfig{
 		Brokers:  strings.Split(brokers, ","),
 		Topic:    kafkamsg.TopicVerificationChallengeCreated,
@@ -33,10 +35,11 @@ func NewVerificationConsumer(brokers string, emailSender *sender.EmailSender, pr
 		MaxBytes: 10e6,
 	})
 	return &VerificationConsumer{
-		reader:    reader,
-		sender:    emailSender,
-		producer:  producer,
-		inboxRepo: inboxRepo,
+		reader:     reader,
+		sender:     emailSender,
+		producer:   producer,
+		inboxRepo:  inboxRepo,
+		authClient: authClient,
 	}
 }
 
@@ -105,6 +108,20 @@ func (c *VerificationConsumer) handleEmailDelivery(event kafkamsg.VerificationCh
 }
 
 func (c *VerificationConsumer) handleMobileDelivery(ctx context.Context, event kafkamsg.VerificationChallengeCreatedMessage) {
+	// Resolve device_id if empty (challenge created from browser)
+	deviceID := event.DeviceID
+	if deviceID == "" && c.authClient != nil {
+		devResp, err := c.authClient.GetDeviceInfo(ctx, &authpb.GetDeviceInfoRequest{
+			UserId: int64(event.UserID),
+		})
+		if err == nil && devResp.DeviceId != "" && devResp.Status == "active" {
+			deviceID = devResp.DeviceId
+		} else {
+			log.Printf("verification consumer: no active device for user %d, skipping mobile delivery for challenge %d", event.UserID, event.ChallengeID)
+			return
+		}
+	}
+
 	expiresAt, err := time.Parse(time.RFC3339, event.ExpiresAt)
 	if err != nil {
 		log.Printf("verification consumer: invalid expires_at: %v", err)
@@ -113,7 +130,7 @@ func (c *VerificationConsumer) handleMobileDelivery(ctx context.Context, event k
 
 	item := &model.MobileInboxItem{
 		UserID:      event.UserID,
-		DeviceID:    event.DeviceID,
+		DeviceID:    deviceID,
 		ChallengeID: event.ChallengeID,
 		Method:      event.Method,
 		DisplayData: datatypes.JSON(event.DisplayData),
@@ -133,7 +150,7 @@ func (c *VerificationConsumer) handleMobileDelivery(ctx context.Context, event k
 	})
 	pushMsg := kafkamsg.MobilePushMessage{
 		UserID:   event.UserID,
-		DeviceID: event.DeviceID,
+		DeviceID: deviceID,
 		Type:     "verification_challenge",
 		Payload:  string(payloadJSON),
 	}

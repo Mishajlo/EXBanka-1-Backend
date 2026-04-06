@@ -15,10 +15,10 @@ import (
 // --- Mock ActuaryRepo ---
 
 type mockActuaryRepo struct {
-	limits   map[int64]*model.ActuaryLimit
-	byEmpID  map[int64]*model.ActuaryLimit
-	nextID   int64
-	saveErr  error
+	limits  map[int64]*model.ActuaryLimit
+	byEmpID map[int64]*model.ActuaryLimit
+	nextID  int64
+	saveErr error
 }
 
 func newMockActuaryRepo() *mockActuaryRepo {
@@ -64,6 +64,15 @@ func (m *mockActuaryRepo) Save(limit *model.ActuaryLimit) error {
 
 func (m *mockActuaryRepo) ListActuaries(search, position string, page, pageSize int) ([]model.ActuaryRow, int64, error) {
 	return nil, 0, nil
+}
+
+func (m *mockActuaryRepo) Upsert(limit *model.ActuaryLimit) error {
+	if existing, ok := m.byEmpID[limit.EmployeeID]; ok {
+		existing.Limit = limit.Limit
+		existing.NeedApproval = limit.NeedApproval
+		return nil
+	}
+	return m.Create(limit)
 }
 
 // --- Mock ActuaryEmpRepo ---
@@ -116,7 +125,7 @@ func TestSetActuaryLimit_Persisted(t *testing.T) {
 
 	svc := NewActuaryService(actuaryRepo, empRepo, nil)
 
-	limit, err := svc.SetActuaryLimit(context.Background(), 10, decimal.NewFromInt(5000))
+	limit, err := svc.SetActuaryLimit(context.Background(), 10, decimal.NewFromInt(5000), 0)
 	assert.NoError(t, err)
 	assert.NotNil(t, limit)
 	assert.Equal(t, int64(10), limit.EmployeeID)
@@ -136,7 +145,7 @@ func TestSetActuaryLimit_NegativeRejected(t *testing.T) {
 
 	svc := NewActuaryService(actuaryRepo, empRepo, nil)
 
-	_, err := svc.SetActuaryLimit(context.Background(), 10, decimal.NewFromInt(-100))
+	_, err := svc.SetActuaryLimit(context.Background(), 10, decimal.NewFromInt(-100), 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "negative")
 }
@@ -219,7 +228,7 @@ func TestResetUsedLimit_SetsToZero(t *testing.T) {
 
 	svc := NewActuaryService(actuaryRepo, empRepo, nil)
 
-	result, err := svc.ResetUsedLimit(context.Background(), 50)
+	result, err := svc.ResetUsedLimit(context.Background(), 50, 0)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.True(t, result.UsedLimit.IsZero(), "UsedLimit should be 0 after reset")
@@ -238,7 +247,7 @@ func TestResetUsedLimit_EmployeeNotFound(t *testing.T) {
 
 	svc := NewActuaryService(actuaryRepo, empRepo, nil)
 
-	_, err := svc.ResetUsedLimit(context.Background(), 999)
+	_, err := svc.ResetUsedLimit(context.Background(), 999, 0)
 	assert.Error(t, err)
 }
 
@@ -287,7 +296,7 @@ func TestSetNeedApproval(t *testing.T) {
 	svc := NewActuaryService(actuaryRepo, empRepo, nil)
 
 	// First call creates the limit row; agents default to NeedApproval=true
-	result, err := svc.SetNeedApproval(context.Background(), 80, false)
+	result, err := svc.SetNeedApproval(context.Background(), 80, false, 0)
 	assert.NoError(t, err)
 	assert.False(t, result.NeedApproval)
 
@@ -307,7 +316,7 @@ func TestSetActuaryLimit_NonActuary(t *testing.T) {
 
 	svc := NewActuaryService(actuaryRepo, empRepo, nil)
 
-	_, err := svc.SetActuaryLimit(context.Background(), 90, decimal.NewFromInt(1000))
+	_, err := svc.SetActuaryLimit(context.Background(), 90, decimal.NewFromInt(1000), 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not an actuary")
 }
@@ -324,7 +333,7 @@ func TestSetActuaryLimit_SaveError(t *testing.T) {
 
 	svc := NewActuaryService(actuaryRepo, empRepo, nil)
 
-	_, err := svc.SetActuaryLimit(context.Background(), 100, decimal.NewFromInt(1000))
+	_, err := svc.SetActuaryLimit(context.Background(), 100, decimal.NewFromInt(1000), 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "db write failed")
 }

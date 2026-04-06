@@ -2,6 +2,8 @@
 package service
 
 import (
+	"context"
+
 	"github.com/exbanka/contract/changelog"
 	"github.com/exbanka/user-service/internal/model"
 )
@@ -71,8 +73,25 @@ type ActuaryRepo interface {
 	GetByEmployeeID(employeeID int64) (*model.ActuaryLimit, error)
 	Save(limit *model.ActuaryLimit) error
 	ListActuaries(search, position string, page, pageSize int) ([]model.ActuaryRow, int64, error)
+	Upsert(limit *model.ActuaryLimit) error
 }
 
 type ActuaryEmpRepo interface {
 	GetByIDWithRoles(id int64) (*model.Employee, error)
+}
+
+type LimitBlueprintRepo interface {
+	Create(bp *model.LimitBlueprint) error
+	GetByID(id uint64) (*model.LimitBlueprint, error)
+	List(bpType string) ([]model.LimitBlueprint, error)
+	GetByNameAndType(name, bpType string) (*model.LimitBlueprint, error)
+	Update(bp *model.LimitBlueprint) error
+	Delete(id uint64) error
+}
+
+// ClientLimitClient is the subset of clientpb.ClientLimitServiceClient that
+// BlueprintService needs. Defined as an interface to avoid tight coupling to
+// the generated gRPC client and to enable unit testing with mocks.
+type ClientLimitClient interface {
+	SetClientLimits(ctx context.Context, clientID int64, dailyLimit, monthlyLimit, transferLimit string, setByEmployee int64) error
 }
