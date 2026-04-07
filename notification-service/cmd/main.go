@@ -92,8 +92,13 @@ func main() {
 	shared.RegisterHealthCheck(grpcServer, "notification-service")
 	reflection.Register(grpcServer)
 	metrics.InitializeGRPCMetrics(grpcServer)
-	metricsShutdown := metrics.StartMetricsServer(cfg.MetricsPort)
+	markReady, addReadinessCheck, metricsShutdown := metrics.StartMetricsServer(cfg.MetricsPort)
 	defer metricsShutdown(context.Background())
+
+	sqlDB, _ := db.DB()
+	addReadinessCheck(func(ctx context.Context) error {
+		return sqlDB.PingContext(ctx)
+	})
 
 	// Graceful shutdown
 	go func() {
@@ -105,6 +110,7 @@ func main() {
 		grpcServer.GracefulStop()
 	}()
 
+	markReady()
 	fmt.Printf("Notification service listening on %s\n", cfg.GRPCAddr)
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
