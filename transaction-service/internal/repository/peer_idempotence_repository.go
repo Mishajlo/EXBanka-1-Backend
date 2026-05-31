@@ -71,13 +71,20 @@ func (r *PeerIdempotenceRepository) MarkRolledBack(id uint64) (bool, error) {
 	return res.RowsAffected == 1, nil
 }
 
-// LookupByTransactionID finds a receiver-side record by the sender's
-// transaction_id (the UUID the sender assigned to this TX, which we
-// store in the transaction_id column). Used by GetTxStatus so a peer
-// can verify we received and committed their TX.
+// LookupByTransactionID finds a receiver-side record by the INITIATOR's
+// transactionId (the ForeignBankId.id the sender assigned to this TX),
+// which we persist in the tx_foreign_id column at NEW_TX time.
+//
+// This is the spec-correct correlation key for COMMIT_TX / ROLLBACK_TX and
+// CHECK_STATUS: SI-TX §2.8.2 treats transactionId as INDEPENDENT of the NEW_TX
+// idempotence key, so a spec-conformant peer may pick a transactionId.id that
+// differs from its NEW_TX locally_generated_key. Correlating by tx_foreign_id
+// (not by locally_generated_key, and not by our own receiver-side
+// transaction_id UUID) makes inbound COMMIT/ROLLBACK resolve regardless of how
+// the peer chose its keys. Indexed by (peer_bank_code, tx_foreign_id).
 func (r *PeerIdempotenceRepository) LookupByTransactionID(peerBankCode, transactionID string) (*model.PeerIdempotenceRecord, bool, error) {
 	var rec model.PeerIdempotenceRecord
-	err := r.db.Where("peer_bank_code = ? AND transaction_id = ?", peerBankCode, transactionID).
+	err := r.db.Where("peer_bank_code = ? AND tx_foreign_id = ?", peerBankCode, transactionID).
 		First(&rec).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

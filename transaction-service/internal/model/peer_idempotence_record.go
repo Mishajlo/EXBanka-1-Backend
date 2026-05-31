@@ -12,7 +12,7 @@ import "time"
 // Composite-unique: (peer_bank_code, locally_generated_key).
 type PeerIdempotenceRecord struct {
 	ID                  uint64 `gorm:"primaryKey"`
-	PeerBankCode        string `gorm:"size:8;not null;uniqueIndex:idx_peer_idem_keys"`
+	PeerBankCode        string `gorm:"size:8;not null;uniqueIndex:idx_peer_idem_keys;index:idx_peer_idem_txid,priority:1"`
 	LocallyGeneratedKey string `gorm:"size:128;not null;uniqueIndex:idx_peer_idem_keys"`
 	TransactionID       string `gorm:"size:128;not null"`
 	ResponsePayloadJSON string `gorm:"type:text;not null"`
@@ -44,8 +44,15 @@ type PeerIdempotenceRecord struct {
 	// (ForeignBankId) carried on the NEW_TX. COMMIT_TX / ROLLBACK_TX correlate
 	// to this NEW_TX by transactionId — NOT by their own (per-message-unique)
 	// idempotence key — so the receiver resolves this record via TxForeignID.
+	//
+	// (peer_bank_code, tx_foreign_id) is indexed (NON-unique) so the COMMIT_TX /
+	// ROLLBACK_TX correlation lookup is O(index). Non-unique because the SI-TX
+	// spec (§2.8.2) does not guarantee a peer picks a globally-unique
+	// transactionId.id distinct from any other field — only that a spec-conformant
+	// initiator keeps it stable for a given TX. A unique index would risk
+	// rejecting otherwise-valid NEW_TX inserts.
 	TxRoutingNumber int64  `gorm:"not null;default:0"`
-	TxForeignID     string `gorm:"size:128;not null;default:''"`
+	TxForeignID     string `gorm:"size:128;not null;default:'';index:idx_peer_idem_txid,priority:2"`
 	// CommittedAt / RolledBackAt make COMMIT_TX / ROLLBACK_TX idempotent on
 	// retransmit: once set, a re-delivered COMMIT/ROLLBACK (which carries a
 	// fresh idempotence key each time) short-circuits as a no-op instead of

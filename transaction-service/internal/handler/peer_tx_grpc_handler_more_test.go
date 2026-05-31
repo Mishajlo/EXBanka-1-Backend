@@ -129,6 +129,7 @@ func TestHandleCommitTx_AfterNoVote_FailedPrecondition(t *testing.T) {
 	_, err := h.HandleNewTx(context.Background(), &transactionpb.SiTxNewTxRequest{
 		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 222, LocallyGeneratedKey: "no-vote"},
 		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "no-vote"},
 		Postings: []*transactionpb.SiTxPosting{
 			{RoutingNumber: 222, AccountType: "ACCOUNT", AccountId: "A", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "DEBIT"},
 			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "B", AssetType: "MONAS", AssetId: "RSD", Amount: "50", Direction: "CREDIT"},
@@ -158,6 +159,7 @@ func TestHandleCommitTx_NotFoundOnAccount_Benign(t *testing.T) {
 	_, err := h.HandleNewTx(context.Background(), &transactionpb.SiTxNewTxRequest{
 		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 222, LocallyGeneratedKey: "k-nf"},
 		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "k-nf"},
 		Postings: []*transactionpb.SiTxPosting{
 			{RoutingNumber: 222, AccountType: "ACCOUNT", AccountId: "222000001", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "DEBIT"},
 			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "111000001", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "CREDIT"},
@@ -185,6 +187,7 @@ func TestHandleCommitTx_AccountInternalError_500(t *testing.T) {
 	_, _ = h.HandleNewTx(context.Background(), &transactionpb.SiTxNewTxRequest{
 		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 222, LocallyGeneratedKey: "k-int"},
 		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "k-int"},
 		Postings: []*transactionpb.SiTxPosting{
 			{RoutingNumber: 222, AccountType: "ACCOUNT", AccountId: "222000001", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "DEBIT"},
 			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "111000001", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "CREDIT"},
@@ -246,6 +249,7 @@ func TestHandleRollbackTx_DebitHoldsReleased(t *testing.T) {
 	_, err := h.HandleNewTx(context.Background(), &transactionpb.SiTxNewTxRequest{
 		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 222, LocallyGeneratedKey: "k-rb"},
 		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "k-rb"},
 		Postings: []*transactionpb.SiTxPosting{
 			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "111-A", AssetType: "MONAS", AssetId: "RSD", Amount: "75", Direction: "DEBIT"},
 			{RoutingNumber: 222, AccountType: "ACCOUNT", AccountId: "222-B", AssetType: "MONAS", AssetId: "RSD", Amount: "75", Direction: "CREDIT"},
@@ -280,6 +284,7 @@ func TestHandleRollbackTx_ReleaseInternalError_500(t *testing.T) {
 	_, _ = h.HandleNewTx(context.Background(), &transactionpb.SiTxNewTxRequest{
 		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 222, LocallyGeneratedKey: "k-rb-int"},
 		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "k-rb-int"},
 		Postings: []*transactionpb.SiTxPosting{
 			{RoutingNumber: 222, AccountType: "ACCOUNT", AccountId: "222000001", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "DEBIT"},
 			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "111000001", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "CREDIT"},
@@ -316,6 +321,7 @@ func TestHandleCommitTx_MaterialisesOptions(t *testing.T) {
 	_, err := h.HandleNewTx(context.Background(), &transactionpb.SiTxNewTxRequest{
 		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 222, LocallyGeneratedKey: "opt-1"},
 		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "opt-1"},
 		Postings: []*transactionpb.SiTxPosting{
 			// Money legs — concrete account numbers so they bypass
 			// participant-id resolution. Both balance per assetId.
@@ -371,6 +377,7 @@ func TestHandleRollbackTx_ReleasesSellerShareHold(t *testing.T) {
 	if _, err := h.HandleNewTx(context.Background(), &transactionpb.SiTxNewTxRequest{
 		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 222, LocallyGeneratedKey: "rb-shares"},
 		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "rb-shares"},
 		Postings: []*transactionpb.SiTxPosting{
 			{RoutingNumber: 222, AccountType: "ACCOUNT", AccountId: "222-pay", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "DEBIT"},
 			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "111-pay", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "CREDIT"},
@@ -410,6 +417,7 @@ func TestHandleCommitTx_OptionRecorderError_Internal(t *testing.T) {
 	_, _ = h.HandleNewTx(context.Background(), &transactionpb.SiTxNewTxRequest{
 		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 222, LocallyGeneratedKey: "opt-err"},
 		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "opt-err"},
 		Postings: []*transactionpb.SiTxPosting{
 			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "111-pay", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "DEBIT"},
 			{RoutingNumber: 222, AccountType: "ACCOUNT", AccountId: "222-pay", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "CREDIT"},

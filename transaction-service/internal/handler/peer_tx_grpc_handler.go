@@ -203,7 +203,11 @@ func (h *PeerTxGRPCHandler) HandleCommitTx(ctx context.Context, req *transaction
 	if txForeignID == "" || peerCode == "" {
 		return nil, status.Error(codes.InvalidArgument, "missing transaction_id or peer_bank_code")
 	}
-	rec, found, err := h.idemRepo.Lookup(peerCode, txForeignID)
+	// Correlate to the NEW_TX by the INITIATOR's transactionId (tx_foreign_id
+	// column), NOT by locally_generated_key — SI-TX §2.8.2 treats transactionId
+	// as independent of the idempotence key, so a spec-conformant peer may pick a
+	// transactionId.id different from its NEW_TX key.
+	rec, found, err := h.idemRepo.LookupByTransactionID(peerCode, txForeignID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "lookup: %v", err)
 	}
@@ -341,12 +345,22 @@ func (h *PeerTxGRPCHandler) HandleRollbackTx(ctx context.Context, req *transacti
 	if txForeignID == "" || peerCode == "" {
 		return nil, status.Error(codes.InvalidArgument, "missing transaction_id or peer_bank_code")
 	}
-	rec, found, err := h.idemRepo.Lookup(peerCode, txForeignID)
+	// Correlate by the INITIATOR's transactionId (tx_foreign_id column), spec-
+	// independent of the NEW_TX idempotence key — see HandleCommitTx.
+	rec, found, err := h.idemRepo.LookupByTransactionID(peerCode, txForeignID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "lookup: %v", err)
 	}
 	if !found {
 		// No record → nothing to roll back. Idempotent.
+		return &transactionpb.SiTxAckResponse{}, nil
+	}
+	// A committed TX cannot be rolled back. If the NEW_TX already COMMITTED
+	// (committed_at set), a late/duplicate ROLLBACK must be a safe no-op — never
+	// release settled funds. This guards the spec's "ili u celosti, ili ne
+	// uopšte" atomicity against a peer that (incorrectly or due to a race) sends
+	// both COMMIT_TX and ROLLBACK_TX for the same transactionId.
+	if rec.CommittedAt != nil {
 		return &transactionpb.SiTxAckResponse{}, nil
 	}
 	// Retransmit dedup: a re-delivered ROLLBACK is a no-op once already done.
@@ -901,9 +915,9 @@ func (h *PeerTxGRPCHandler) GetTxStatus(ctx context.Context, req *transactionpb.
 	}
 
 	// 2. Check receiver-side: did WE receive a NEW_TX from this peer for
-	// this transaction? The idempotence record is keyed by (peer_bank_code,
-	// locally_generated_key). The locally_generated_key is the sender's UUID
-	// which we store as TransactionID in the idempotence record.
+	// this transaction? We correlate by the initiator's transactionId, which we
+	// persist in the tx_foreign_id column at NEW_TX time (LookupByTransactionID).
+	// This is independent of how the peer chose its NEW_TX idempotence key.
 	if callerCode != "" {
 		rec, found, err := h.idemRepo.LookupByTransactionID(callerCode, txID)
 		if err != nil {

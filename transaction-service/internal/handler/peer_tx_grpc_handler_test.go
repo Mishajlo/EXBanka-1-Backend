@@ -274,6 +274,7 @@ func TestHandleCommitTx_AfterYes(t *testing.T) {
 	_, _ = h.HandleNewTx(context.Background(), &transactionpb.SiTxNewTxRequest{
 		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 222, LocallyGeneratedKey: "k4"},
 		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "k4"},
 		Postings: []*transactionpb.SiTxPosting{
 			{RoutingNumber: 222, AccountType: "ACCOUNT", AccountId: "222000001", AssetType: "MONAS", AssetId: "RSD", Amount: "100.00", Direction: "DEBIT"},
 			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "111000001", AssetType: "MONAS", AssetId: "RSD", Amount: "100.00", Direction: "CREDIT"},
@@ -303,6 +304,7 @@ func TestHandleRollbackTx_AfterYes(t *testing.T) {
 	_, _ = h.HandleNewTx(context.Background(), &transactionpb.SiTxNewTxRequest{
 		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 222, LocallyGeneratedKey: "k5"},
 		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "k5"},
 		Postings: []*transactionpb.SiTxPosting{
 			{RoutingNumber: 222, AccountType: "ACCOUNT", AccountId: "222000001", AssetType: "MONAS", AssetId: "RSD", Amount: "100.00", Direction: "DEBIT"},
 			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "111000001", AssetType: "MONAS", AssetId: "RSD", Amount: "100.00", Direction: "CREDIT"},
@@ -319,6 +321,110 @@ func TestHandleRollbackTx_AfterYes(t *testing.T) {
 	}
 	if !called {
 		t.Errorf("expected ReleaseIncoming call")
+	}
+}
+
+// TestHandleCommitTx_DivergentTransactionId_ResolvesByForeignID is the
+// interop regression test: a spec-conformant FOREIGN peer (SI-TX §2.8.2) may
+// pick a transactionId.id DIFFERENT from its NEW_TX idempotence key. Here the
+// NEW_TX is stored under locally_generated_key "L1" but carries
+// transactionId.id="TXDIFF". The COMMIT then arrives with its OWN fresh idem
+// "M1" and transactionId.id="TXDIFF". The handler MUST resolve the L1 record
+// via tx_foreign_id and settle the holds placed under L1 — keys derived from
+// "L1", never "TXDIFF" and never "M1".
+func TestHandleCommitTx_DivergentTransactionId_ResolvesByForeignID(t *testing.T) {
+	h, _, stub := newPeerTxHandler(t)
+	var commitKeys, settleKeys []string
+	stub.commitFn = func(ctx context.Context, in *accountpb.CommitIncomingRequest, opts ...grpc.CallOption) (*accountpb.CommitIncomingResponse, error) {
+		commitKeys = append(commitKeys, in.GetReservationKey())
+		return &accountpb.CommitIncomingResponse{}, nil
+	}
+	stub.settleOutFn = func(ctx context.Context, in *accountpb.SettleOutgoingRequest, opts ...grpc.CallOption) (*accountpb.SettleOutgoingResponse, error) {
+		settleKeys = append(settleKeys, in.GetReservationKey())
+		return &accountpb.SettleOutgoingResponse{}, nil
+	}
+	// NEW_TX: idem key L1, but transactionId.id is the DIVERGENT "TXDIFF".
+	// One DEBIT leg on our routing (111) → an outgoing hold keyed under L1; one
+	// CREDIT leg on our routing → a reservation keyed under L1.
+	if _, err := h.HandleNewTx(context.Background(), &transactionpb.SiTxNewTxRequest{
+		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 222, LocallyGeneratedKey: "L1"},
+		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "TXDIFF"},
+		Postings: []*transactionpb.SiTxPosting{
+			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "111-A", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "DEBIT"},
+			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "111-B", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "CREDIT"},
+		},
+	}); err != nil {
+		t.Fatalf("NEW_TX: %v", err)
+	}
+	// COMMIT: its OWN fresh idem M1, correlating by the divergent transactionId
+	// "TXDIFF". This must still resolve the record stored under L1.
+	if _, err := h.HandleCommitTx(context.Background(), &transactionpb.SiTxCommitRequest{
+		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 111, LocallyGeneratedKey: "M1"},
+		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "TXDIFF"},
+	}); err != nil {
+		t.Fatalf("COMMIT: %v", err)
+	}
+	// The CREDIT-leg reservation key is the NEW_TX L: "222:L1" — NOT TXDIFF/M1.
+	if len(commitKeys) != 1 || commitKeys[0] != "222:L1" {
+		t.Errorf("CommitIncoming keys = %v, want exactly [222:L1] (derived from NEW_TX L)", commitKeys)
+	}
+	// The DEBIT-leg settle key is the per-posting tag under L: "222:L1:0".
+	if len(settleKeys) != 1 || settleKeys[0] != "222:L1:0" {
+		t.Errorf("SettleOutgoing keys = %v, want exactly [222:L1:0] (derived from NEW_TX L)", settleKeys)
+	}
+}
+
+// TestHandleRollbackTx_AfterCommit_NoOp verifies the defense-in-depth guard: a
+// ROLLBACK that arrives after the TX already COMMITTED (committed_at set) must
+// be a safe no-op — it MUST NOT release any settled funds. A committed TX
+// cannot be rolled back.
+func TestHandleRollbackTx_AfterCommit_NoOp(t *testing.T) {
+	h, _, stub := newPeerTxHandler(t)
+	releaseCalled := false
+	releaseOutCalled := false
+	stub.releaseFn = func(ctx context.Context, in *accountpb.ReleaseIncomingRequest, opts ...grpc.CallOption) (*accountpb.ReleaseIncomingResponse, error) {
+		releaseCalled = true
+		return &accountpb.ReleaseIncomingResponse{}, nil
+	}
+	stub.releaseOutFn = func(ctx context.Context, in *accountpb.ReleaseOutgoingRequest, opts ...grpc.CallOption) (*accountpb.ReleaseOutgoingResponse, error) {
+		releaseOutCalled = true
+		return &accountpb.ReleaseOutgoingResponse{Released: true}, nil
+	}
+	// NEW_TX (idem k6, transactionId k6) with a DEBIT leg on our routing.
+	if _, err := h.HandleNewTx(context.Background(), &transactionpb.SiTxNewTxRequest{
+		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 222, LocallyGeneratedKey: "k6"},
+		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "k6"},
+		Postings: []*transactionpb.SiTxPosting{
+			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "111-A", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "DEBIT"},
+			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "111-B", AssetType: "MONAS", AssetId: "RSD", Amount: "100", Direction: "CREDIT"},
+		},
+	}); err != nil {
+		t.Fatalf("NEW_TX: %v", err)
+	}
+	// COMMIT it — money settles, committed_at gets stamped.
+	if _, err := h.HandleCommitTx(context.Background(), &transactionpb.SiTxCommitRequest{
+		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 111, LocallyGeneratedKey: "m6"},
+		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "k6"},
+	}); err != nil {
+		t.Fatalf("COMMIT: %v", err)
+	}
+	// Now a late/erroneous ROLLBACK for the same transactionId must no-op.
+	if _, err := h.HandleRollbackTx(context.Background(), &transactionpb.SiTxRollbackRequest{
+		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 111, LocallyGeneratedKey: "r6"},
+		PeerBankCode:   "222",
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: "k6"},
+	}); err != nil {
+		t.Fatalf("ROLLBACK after COMMIT should be a no-op, got: %v", err)
+	}
+	if releaseCalled {
+		t.Error("ReleaseIncoming must NOT be called for a ROLLBACK after COMMIT")
+	}
+	if releaseOutCalled {
+		t.Error("ReleaseOutgoing must NOT be called for a ROLLBACK after COMMIT (would release settled funds)")
 	}
 }
 
