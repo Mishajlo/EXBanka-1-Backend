@@ -10,6 +10,15 @@
 
 **Design reference:** `docs/superpowers/specs/2026-05-31-sitx-wire-conformance-design.md`. Section tags below (e.g. "§6.2") point into it.
 
+## Execution progress (subagent-driven, branch `Development`)
+
+- ✅ **Task 1** — `DecimalNumber` (`2b7897e`, `ed1742a`). Reviewed.
+- ✅ **Task 2** — transaction DTOs (`a58abf1`, `ced2c2f`). Reviewed.
+- ✅ **Task 3** — `PublicStock[]` bare array (`b8a22fe`). Reviewed. **Note:** this commit also pulled forward **Task 13** (gateway `GetPublicStocks` grouping + otccache `fetchPeer` consume) because the type change broke those consumers. Consume side is test-verified. **Gateway serve side is code-correct but unverifiable until Task 7 restores the api-gateway `handler` package; deepen `TestPeerOTC_GetPublicStocks` to assert inner shape at that point.**
+- ⏳ **Next: Task 4** (proto enrichment) → then Task 7/8 to restore api-gateway+transaction-service compilation.
+
+**Known-broken (expected) until their rewrite tasks land:** `api-gateway/internal/handler` (Task 7), `transaction-service/internal/{handler,sitx}` (Tasks 8–12), `stock-service` accept path (Task 16). The contract module + `stock-service/internal/otccache` are green.
+
 **Ground rules for the implementer:**
 - TDD: write the failing test, watch it fail, implement, watch it pass, commit.
 - Run `make lint` on every service you touch before its commit; zero new warnings.
