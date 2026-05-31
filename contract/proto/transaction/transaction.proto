@@ -306,6 +306,7 @@ message SiTxVoteResponse {
   string type = 1; // YES | NO
   repeated SiTxNoVote no_votes = 2;
   string transaction_id = 3; // opaque receiver-side id, set on YES
+  bool pending = 4; // receiver still processing (HTTP 202); type/no_votes unset
 }
 
 message SiTxCommitRequest {

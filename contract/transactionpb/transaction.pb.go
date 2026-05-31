@@ -2579,6 +2579,7 @@ type SiTxVoteResponse struct {
 	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"` // YES | NO
 	NoVotes       []*SiTxNoVote          `protobuf:"bytes,2,rep,name=no_votes,json=noVotes,proto3" json:"no_votes,omitempty"`
 	TransactionId string                 `protobuf:"bytes,3,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"` // opaque receiver-side id, set on YES
+	Pending       bool                   `protobuf:"varint,4,opt,name=pending,proto3" json:"pending,omitempty"`                                 // receiver still processing (HTTP 202); type/no_votes unset
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2632,6 +2633,13 @@ func (x *SiTxVoteResponse) GetTransactionId() string {
 		return x.TransactionId
 	}
 	return ""
+}
+
+func (x *SiTxVoteResponse) GetPending() bool {
+	if x != nil {
+		return x.Pending
+	}
+	return false
 }
 
 type SiTxCommitRequest struct {
@@ -4443,11 +4451,12 @@ const file_transaction_transaction_proto_rawDesc = "" +
 	"SiTxNoVote\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\x12#\n" +
 	"\rposting_index\x18\x02 \x01(\x05R\fpostingIndex\x12*\n" +
-	"\x11posting_index_set\x18\x03 \x01(\bR\x0fpostingIndexSet\"\x81\x01\n" +
+	"\x11posting_index_set\x18\x03 \x01(\bR\x0fpostingIndexSet\"\x9b\x01\n" +
 	"\x10SiTxVoteResponse\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x122\n" +
 	"\bno_votes\x18\x02 \x03(\v2\x17.transaction.SiTxNoVoteR\anoVotes\x12%\n" +
-	"\x0etransaction_id\x18\x03 \x01(\tR\rtransactionId\"\xca\x01\n" +
+	"\x0etransaction_id\x18\x03 \x01(\tR\rtransactionId\x12\x18\n" +
+	"\apending\x18\x04 \x01(\bR\apending\"\xca\x01\n" +
 	"\x11SiTxCommitRequest\x12H\n" +
 	"\x0fidempotence_key\x18\x01 \x01(\v2\x1f.transaction.SiTxIdempotenceKeyR\x0eidempotenceKey\x12$\n" +
 	"\x0epeer_bank_code\x18\x02 \x01(\tR\fpeerBankCode\x12E\n" +
