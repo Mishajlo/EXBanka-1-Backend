@@ -773,11 +773,19 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	// "client-<principal>"). Using the buyer account number on the option leg
 	// (the old bug) left an unparseable buyer_id — exercise couldn't credit the
 	// buyer and the contract was invisible in their listing.
+	// Type tags (SI-TX §3.6) — the downstream executor detects an option leg via
+	// AssetType=="OPTION" (not by sniffing the asset_id prefix) and the outbound
+	// wire builder uses AccountType/AssetType to construct the spec account/asset
+	// tagged unions. The two premium legs carry MONAS; the two option legs OPTION.
+	// AccountType is derived from the AccountId form: a raw 18-digit bank account
+	// number → ACCOUNT, a "client-N"/"employee-N" participant id → PERSON. Only the
+	// premium DEBIT (posting 0) may carry an account number (the buyer's pinned
+	// account when BuyerAccountNumber is set); all other legs carry participant ids.
 	postings := []*transactionpb.SiTxPosting{
-		{RoutingNumber: row.BuyerRoutingNumber, AccountId: buyerAccountID, AssetId: offer.PremiumCurrency, Amount: premium, Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: row.SellerRoutingNumber, AccountId: row.SellerID, AssetId: offer.PremiumCurrency, Amount: premium, Direction: contractsitx.DirectionCredit},
-		{RoutingNumber: row.SellerRoutingNumber, AccountId: row.SellerID, AssetId: optAssetID, Amount: "1", Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: row.BuyerRoutingNumber, AccountId: row.BuyerID, AssetId: optAssetID, Amount: "1", Direction: contractsitx.DirectionCredit},
+		{RoutingNumber: row.BuyerRoutingNumber, AccountId: buyerAccountID, AccountType: accountTypeFor(buyerAccountID), AssetId: offer.PremiumCurrency, AssetType: contractsitx.AssetTypeMonas, Amount: premium, Direction: contractsitx.DirectionDebit},
+		{RoutingNumber: row.SellerRoutingNumber, AccountId: row.SellerID, AccountType: accountTypeFor(row.SellerID), AssetId: offer.PremiumCurrency, AssetType: contractsitx.AssetTypeMonas, Amount: premium, Direction: contractsitx.DirectionCredit},
+		{RoutingNumber: row.SellerRoutingNumber, AccountId: row.SellerID, AccountType: accountTypeFor(row.SellerID), AssetId: optAssetID, AssetType: contractsitx.AssetTypeOption, Amount: "1", Direction: contractsitx.DirectionDebit},
+		{RoutingNumber: row.BuyerRoutingNumber, AccountId: row.BuyerID, AccountType: accountTypeFor(row.BuyerID), AssetId: optAssetID, AssetType: contractsitx.AssetTypeOption, Amount: "1", Direction: contractsitx.DirectionCredit},
 	}
 
 	resp, err := h.peerTx.InitiateOutboundTxWithPostings(ctx, &transactionpb.SiTxInitiateWithPostingsRequest{
@@ -824,6 +832,29 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 		TransactionId: resp.GetTransactionId(),
 		Status:        resp.GetStatus(),
 	}, nil
+}
+
+// accountTypeFor classifies a SI-TX posting AccountId into its §2.7 account-type
+// tag. A raw bank account number (all digits, >=15 long — own-bank numbers are 18
+// digits) is an "ACCOUNT"; anything else (a "client-<n>"/"employee-<n>" participant
+// id) is a "PERSON". The accept flow never emits OPTION-typed accounts.
+func accountTypeFor(accountID string) string {
+	if len(accountID) >= 15 && isAllDigits(accountID) {
+		return contractsitx.AccountTypeAccount
+	}
+	return contractsitx.AccountTypePerson
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func protoToOffer(p *stockpb.PeerOtcOffer) contractsitx.OtcOffer {

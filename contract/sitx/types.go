@@ -20,6 +20,25 @@ const (
 	DirectionCredit = "CREDIT"
 )
 
+// SiTxPosting account-type tags (§2.7 account tagged-union discriminator).
+// The outbound wire builder uses these to construct the spec `account` union,
+// and the executor uses them to resolve the target. PERSON/OPTION resolve to a
+// participant id; ACCOUNT resolves to a raw bank account number.
+const (
+	AccountTypePerson  = "PERSON"
+	AccountTypeAccount = "ACCOUNT"
+	AccountTypeOption  = "OPTION"
+)
+
+// SiTxPosting asset-type tags (§2.7 asset tagged-union discriminator). The
+// executor detects an option leg via AssetType=="OPTION" (not by sniffing the
+// asset_id), and the wire builder uses these to construct the spec `asset` union.
+const (
+	AssetTypeMonas  = "MONAS"
+	AssetTypeStock  = "STOCK"
+	AssetTypeOption = "OPTION"
+)
+
 // TransactionVote.Vote values.
 const (
 	VoteYes = "YES"
