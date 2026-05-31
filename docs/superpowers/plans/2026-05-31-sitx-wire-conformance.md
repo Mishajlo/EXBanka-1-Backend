@@ -23,7 +23,12 @@
 - ✅ **Tasks 8–12** — transaction-service cluster (`6af34db`, `b62272d`, `92e9952`, `b06a8c8`, `ebea357`) + interop fix `fbea247`. transaction-service + account-service **fully green**. Executor works on `InternalPosting`; NO-vote indices set; tx metadata persisted + surfaced as ledger memo (added `memo` to `CommitIncomingRequest`); **transactionId correlation** with per-message idem (L/M scheme); outbound builds spec signed postings via `InternalPostingToSpec`; sender treats 202 as retry-later.
   - **Deep opus money/saga review:** reservation keys derive from stored NEW_TX key (never the COMMIT idem) → no stranded/double-settled money; signs canonical (DEBIT→negative); 202 cannot trigger rollback. **Important interop fix applied** (`fbea247`): COMMIT/ROLLBACK now correlate via the `tx_foreign_id` column (`LookupByTransactionID`), so a spec-conformant foreign peer that picks `transactionId.id ≠ its NEW_TX idem` is handled (previously would strand holds). Also fixed CHECK_STATUS to key on tx_foreign_id; added rollback-after-commit guard + `(peer, tx_foreign_id)` index.
 - **TRANSACTION PROTOCOL (Tasks 1–12) COMPLETE & VERIFIED.** Green modules: contract, api-gateway, transaction-service, account-service.
-- ⏳ **Remaining (OTC + finishing):** Task 14 (`/user` → `{bankDisplayName, displayName}` + OWN_BANK_NAME config + compose), Task 15 (OTC money amounts as JSON numbers), Task 16 (stock-service accept postings carry account/asset type tags), Task 17 (conformance fixtures), Task 18 (integration), Task 19 (docs).
+- ✅ **Task 14** — `/user` → `{bankDisplayName, displayName}` + `OWN_BANK_NAME` config + docker-compose (`989da07`). Reviewed.
+- ✅ **Task 15** — OTC money amounts as JSON numbers (`99d16e8`); inbound tolerant of number-or-quoted. Reviewed (no quoted-amount leaks).
+- ✅ **Task 16** — stock-service accept postings carry account/asset type tags + `AccountType*`/`AssetType*` constants in `contract/sitx` (`831285b`).
+- **ALL IMPLEMENTATION (Tasks 1–16) COMPLETE. Full workspace build+test sweep GREEN** (contract, api-gateway, transaction-service, account-service, stock-service).
+- **Repo facts discovered:** no `Specification.md` and no `docker-compose-remote.yml` exist (CLAUDE.md references them but they're absent) → Task 19 = `docs/api/REST_API_v3.md` (already partly updated by Tasks 14/15) + swagger + memory.
+- ⏳ **Remaining (finishing):** Task 17 (conformance byte-fixtures), Task 18 (integration — may be infra-gated), Task 19 (docs).
 
 **Known-broken (expected) until their rewrite tasks land:** `api-gateway/internal/handler` (Task 7), `transaction-service/internal/{handler,sitx}` (Tasks 8–12), `stock-service` accept path (Task 16). The contract module + `stock-service/internal/otccache` are green.
 
