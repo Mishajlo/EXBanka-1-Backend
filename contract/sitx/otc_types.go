@@ -84,21 +84,20 @@ type UserInformation struct {
 	LastName  string        `json:"lastName"`
 }
 
-// PublicStocksResponse is the response shape of GET /public-stock.
-type PublicStocksResponse struct {
-	Stocks []PublicStock `json:"stocks"`
+// PublicSeller is one seller of a public stock (§3.1).
+type PublicSeller struct {
+	Seller ForeignBankId `json:"seller"`
+	Amount int64         `json:"amount"`
 }
 
-// PublicStock is one entry in PublicStocksResponse — a stock holding the
-// owner has flagged as public on this bank, available for OTC offers
-// from peer banks.
+// PublicStock groups all sellers of one ticker (§3.1).
 type PublicStock struct {
-	OwnerID       ForeignBankId   `json:"ownerId"`
-	Ticker        string          `json:"ticker"`
-	Amount        int64           `json:"amount"`
-	PricePerStock decimal.Decimal `json:"pricePerStock"`
-	Currency      string          `json:"currency"`
+	Stock   StockDescription `json:"stock"`
+	Sellers []PublicSeller   `json:"sellers"`
 }
+
+// PublicStocksResponse is the §3.1 response: a BARE array.
+type PublicStocksResponse []PublicStock
 
 // PublicOptionOffersResponse is the response shape of
 // GET /api/v3/public-option-offers — Phase 6 cross-bank option

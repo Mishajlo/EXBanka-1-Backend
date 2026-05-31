@@ -95,10 +95,13 @@ func TestPeerOTC_GetPublicStocks(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d", w.Code)
 	}
-	var got map[string]any
-	_ = json.Unmarshal(w.Body.Bytes(), &got)
-	if got["stocks"] == nil {
-		t.Errorf("missing stocks: %+v", got)
+	// §3.1 bare-array response — top level must be a JSON array.
+	var got []any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal bare array: %v (body=%s)", err, w.Body.String())
+	}
+	if len(got) != 1 {
+		t.Errorf("expected 1 entry, got %d: %+v", len(got), got)
 	}
 }
 

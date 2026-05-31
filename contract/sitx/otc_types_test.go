@@ -69,13 +69,10 @@ func TestUserInformation_RoundTrip(t *testing.T) {
 
 func TestPublicStocksResponse_RoundTrip(t *testing.T) {
 	in := sitx.PublicStocksResponse{
-		Stocks: []sitx.PublicStock{
-			{
-				OwnerID:       sitx.ForeignBankId{RoutingNumber: 111, ID: "client-7"},
-				Ticker:        "MSFT",
-				Amount:        25,
-				PricePerStock: decimal.NewFromFloat(420.10),
-				Currency:      "USD",
+		{
+			Stock: sitx.StockDescription{Ticker: "MSFT"},
+			Sellers: []sitx.PublicSeller{
+				{Seller: sitx.ForeignBankId{RoutingNumber: 111, ID: "client-7"}, Amount: 25},
 			},
 		},
 	}
@@ -84,7 +81,10 @@ func TestPublicStocksResponse_RoundTrip(t *testing.T) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(out.Stocks) != 1 || out.Stocks[0].Ticker != "MSFT" {
+	if len(out) != 1 || out[0].Stock.Ticker != "MSFT" {
 		t.Errorf("got %+v", out)
+	}
+	if len(out[0].Sellers) != 1 || out[0].Sellers[0].Seller.ID != "client-7" {
+		t.Errorf("sellers: %+v", out[0].Sellers)
 	}
 }

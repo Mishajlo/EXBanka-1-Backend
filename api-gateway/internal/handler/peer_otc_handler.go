@@ -47,17 +47,38 @@ func (h *PeerOTCHandler) GetPublicStocks(c *gin.Context) {
 		handleGRPCError(c, err)
 		return
 	}
-	out := make([]gin.H, 0, len(resp.GetStocks()))
+	// §3.1 wire shape: bare array, sellers grouped by ticker.
+	// The gRPC layer returns one PeerPublicStock per (owner, ticker) row;
+	// aggregate into a map keyed by ticker to produce the spec shape.
+	type seller struct {
+		Seller gin.H `json:"seller"`
+		Amount int64 `json:"amount"`
+	}
+	type publicStock struct {
+		Stock   gin.H    `json:"stock"`
+		Sellers []seller `json:"sellers"`
+	}
+	grouped := make(map[string]*publicStock)
+	order := make([]string, 0)
 	for _, s := range resp.GetStocks() {
-		out = append(out, gin.H{
-			"ownerId":       gin.H{"routingNumber": s.GetOwnerId().GetRoutingNumber(), "id": s.GetOwnerId().GetId()},
-			"ticker":        s.GetTicker(),
-			"amount":        s.GetAmount(),
-			"pricePerStock": s.GetPricePerStock(),
-			"currency":      s.GetCurrency(),
+		ticker := s.GetTicker()
+		if _, ok := grouped[ticker]; !ok {
+			grouped[ticker] = &publicStock{
+				Stock:   gin.H{"ticker": ticker},
+				Sellers: nil,
+			}
+			order = append(order, ticker)
+		}
+		grouped[ticker].Sellers = append(grouped[ticker].Sellers, seller{
+			Seller: gin.H{"routingNumber": s.GetOwnerId().GetRoutingNumber(), "id": s.GetOwnerId().GetId()},
+			Amount: s.GetAmount(),
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"stocks": out})
+	out := make([]publicStock, 0, len(order))
+	for _, ticker := range order {
+		out = append(out, *grouped[ticker])
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // GetPublicOptionOffers godoc
