@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/exbanka/api-gateway/internal/handler"
@@ -175,7 +176,7 @@ func TestPeerOTC_GetNegotiation(t *testing.T) {
 				BuyerId:  &stockpb.PeerForeignBankId{RoutingNumber: 222, Id: "b"},
 				SellerId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "s"},
 				Offer: &stockpb.PeerOtcOffer{
-					Ticker: "AAPL", Amount: 50, PricePerStock: "180", Currency: "USD",
+					Ticker: "AAPL", Amount: 50, PricePerStock: "150.5", Currency: "USD",
 					Premium: "700", PremiumCurrency: "USD", SettlementDate: "2026-12-31",
 					LastModifiedBy: &stockpb.PeerForeignBankId{RoutingNumber: 222, Id: "u"},
 				},
@@ -189,6 +190,68 @@ func TestPeerOTC_GetNegotiation(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/negotiations/222/neg-7", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d", w.Code)
+	}
+	// SI-TX §2.5 — monetary amounts MUST serialize as JSON numbers, not
+	// quoted strings. Assert on the raw bytes so we catch the quoting
+	// regression that a map[string]any decode would silently hide.
+	raw := w.Body.String()
+	if !strings.Contains(raw, `"pricePerUnit":{"amount":150.5,`) && !strings.Contains(raw, `"amount":150.5,"currency":"USD"`) {
+		t.Errorf("pricePerUnit.amount must be unquoted number 150.5; body=%s", raw)
+	}
+	if strings.Contains(raw, `"amount":"150.5"`) || strings.Contains(raw, `"amount":"700"`) {
+		t.Errorf("monetary amount must NOT be quoted; body=%s", raw)
+	}
+	if !strings.Contains(raw, `"amount":700`) {
+		t.Errorf("premium.amount must be unquoted number 700; body=%s", raw)
+	}
+	// Decode-level sanity: amounts parse back as JSON numbers.
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	ppu, _ := got["pricePerUnit"].(map[string]any)
+	if _, ok := ppu["amount"].(float64); !ok {
+		t.Errorf("pricePerUnit.amount not a JSON number: %#v", ppu["amount"])
+	}
+	prem, _ := got["premium"].(map[string]any)
+	if _, ok := prem["amount"].(float64); !ok {
+		t.Errorf("premium.amount not a JSON number: %#v", prem["amount"])
+	}
+}
+
+// TestPeerOTC_CreateNegotiation_NumericAmount asserts the inbound parser
+// accepts a SI-TX §2.5 numeric `amount` (JSON number, not quoted).
+func TestPeerOTC_CreateNegotiation_NumericAmount(t *testing.T) {
+	stub := &stubPeerOTCClient{
+		createFn: func(ctx context.Context, in *stockpb.CreateNegotiationRequest, opts ...grpc.CallOption) (*stockpb.CreateNegotiationResponse, error) {
+			// The decimal-string proto field must carry the parsed value.
+			if in.GetOffer().GetPricePerStock() != "180.5" {
+				t.Errorf("pricePerStock: got %q, want 180.5", in.GetOffer().GetPricePerStock())
+			}
+			if in.GetOffer().GetPremium() != "700" {
+				t.Errorf("premium: got %q, want 700", in.GetOffer().GetPremium())
+			}
+			return &stockpb.CreateNegotiationResponse{NegotiationId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "neg-2"}}, nil
+		},
+	}
+	r := setupOTCRouter(stub)
+	// amount fields are bare JSON numbers (not quoted) per §2.5.
+	body := []byte(`{
+		"stock":{"ticker":"AAPL"},
+		"settlementDate":"2026-12-31",
+		"pricePerUnit":{"amount":180.5,"currency":"USD"},
+		"premium":{"amount":700,"currency":"USD"},
+		"buyerId":{"routingNumber":222,"id":"client-1"},
+		"sellerId":{"routingNumber":111,"id":"client-3"},
+		"amount":50,
+		"lastModifiedBy":{"routingNumber":222,"id":"client-1"}
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/negotiations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("numeric amount must parse: status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 

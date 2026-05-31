@@ -1,13 +1,16 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"regexp"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 
 	stockpb "github.com/exbanka/contract/stockpb"
+	"github.com/exbanka/contract/sitx"
 )
 
 // PeerOTCHandler serves the peer-facing OTC routes under /api/v3/cross-bank-protocol:
@@ -125,10 +128,13 @@ type peerForeignBankIdReq struct {
 	ID            string `json:"id"`
 }
 
-// peerMonetaryValueReq is the SI-TX MonetaryValue on the wire.
+// peerMonetaryValueReq is the SI-TX MonetaryValue on the wire. Per
+// SI-TX §2.5 the amount is a JSON number; DecimalNumber parses a number
+// (and tolerates a quoted string from peers that still quote) without
+// float64 rounding.
 type peerMonetaryValueReq struct {
-	Currency string `json:"currency"`
-	Amount   string `json:"amount"`
+	Currency string             `json:"currency"`
+	Amount   sitx.DecimalNumber `json:"amount"`
 }
 
 // peerStockDescriptionReq is the SI-TX StockDescription on the wire.
@@ -412,9 +418,9 @@ func offerReqToProto(o peerOtcOfferReq) *stockpb.PeerOtcOffer {
 	return &stockpb.PeerOtcOffer{
 		Ticker:          o.Stock.Ticker,
 		Amount:          o.Amount,
-		PricePerStock:   o.PricePerUnit.Amount,
+		PricePerStock:   o.PricePerUnit.Amount.Decimal.String(),
 		Currency:        o.PricePerUnit.Currency,
-		Premium:         o.Premium.Amount,
+		Premium:         o.Premium.Amount.Decimal.String(),
 		PremiumCurrency: o.Premium.Currency,
 		SettlementDate:  o.SettlementDate,
 		LastModifiedBy: &stockpb.PeerForeignBankId{
@@ -423,6 +429,18 @@ func offerReqToProto(o peerOtcOfferReq) *stockpb.PeerOtcOffer {
 		},
 		BuyerAccountNumber: o.BuyerAccountNumber,
 	}
+}
+
+// numJSON renders a decimal-string monetary amount as a bare JSON
+// number token (SI-TX §2.5 requires monetary amounts to be JSON numbers,
+// not quoted strings). encoding/json and gin emit json.RawMessage
+// verbatim, so the validated decimal string lands unquoted. A malformed
+// or empty string degrades to 0 rather than producing invalid JSON.
+func numJSON(s string) json.RawMessage {
+	if _, err := decimal.NewFromString(s); err != nil || s == "" {
+		return json.RawMessage("0")
+	}
+	return json.RawMessage(s)
 }
 
 // protoOfferToJSON renders the internal flat-fielded gRPC PeerOtcOffer
@@ -436,8 +454,8 @@ func protoOfferToJSON(o *stockpb.PeerOtcOffer) gin.H {
 	out := gin.H{
 		"stock":          gin.H{"ticker": o.GetTicker()},
 		"settlementDate": o.GetSettlementDate(),
-		"pricePerUnit":   gin.H{"amount": o.GetPricePerStock(), "currency": o.GetCurrency()},
-		"premium":        gin.H{"amount": o.GetPremium(), "currency": o.GetPremiumCurrency()},
+		"pricePerUnit":   gin.H{"amount": numJSON(o.GetPricePerStock()), "currency": o.GetCurrency()},
+		"premium":        gin.H{"amount": numJSON(o.GetPremium()), "currency": o.GetPremiumCurrency()},
 		"amount":         o.GetAmount(),
 		"lastModifiedBy": gin.H{"routingNumber": o.GetLastModifiedBy().GetRoutingNumber(), "id": o.GetLastModifiedBy().GetId()},
 	}

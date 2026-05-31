@@ -7183,14 +7183,14 @@ Peer initiates a cross-bank OTC negotiation against a publicly-listed holding on
 
 **Authentication:** PeerAuth.
 
-**Request Body:** SI-TX `OtcOffer` payload — verbatim from the cohort spec at <https://arsen.srht.site/si-tx-proto/>. The body IS the `OtcOffer`; there is no wrapping object.
+**Request Body:** SI-TX `OtcOffer` payload — verbatim from the cohort spec at <https://arsen.srht.site/si-tx-proto/>. The body IS the `OtcOffer`; there is no wrapping object. Per SI-TX §2.5 the monetary `amount` fields are JSON **numbers** (the gateway also tolerates a quoted string for peers that still quote).
 
 ```json
 {
   "stock":          { "ticker": "AAPL" },
   "settlementDate": "2026-12-31T00:00:00Z",
-  "pricePerUnit":   { "amount": "180.50", "currency": "USD" },
-  "premium":        { "amount": "700",    "currency": "USD" },
+  "pricePerUnit":   { "amount": 180.50, "currency": "USD" },
+  "premium":        { "amount": 700,    "currency": "USD" },
   "buyerId":        { "routingNumber": 222, "id": "client-1" },
   "sellerId":       { "routingNumber": 111, "id": "client-1" },
   "amount":         50,
@@ -7228,14 +7228,14 @@ Read a negotiation's current state.
 
 **Authentication:** PeerAuth.
 
-**Response 200:** SI-TX `OtcNegotiation` = `OtcOffer & { isOngoing: boolean }`.
+**Response 200:** SI-TX `OtcNegotiation` = `OtcOffer & { isOngoing: boolean }`. Monetary `amount` fields are JSON **numbers** per SI-TX §2.5.
 
 ```json
 {
   "stock":          { "ticker": "AAPL" },
   "settlementDate": "2026-12-31T00:00:00Z",
-  "pricePerUnit":   { "amount": "180.50", "currency": "USD" },
-  "premium":        { "amount": "700",    "currency": "USD" },
+  "pricePerUnit":   { "amount": 180.50, "currency": "USD" },
+  "premium":        { "amount": 700,    "currency": "USD" },
   "buyerId":        { "routingNumber": 222, "id": "client-1" },
   "sellerId":       { "routingNumber": 111, "id": "client-1" },
   "amount":         50,
@@ -8376,13 +8376,15 @@ POST /api/v3/me/peer-otc/negotiations
   "seller_id":         "client-7",
   "stock":             { "ticker": "AAPL" },
   "settlement_date":   "2027-08-01T00:00:00Z",
-  "price_per_unit":    { "amount": "175", "currency": "USD" },
-  "premium":           { "amount": "40",  "currency": "USD" },
+  "price_per_unit":    { "amount": 175, "currency": "USD" },
+  "premium":           { "amount": 40,  "currency": "USD" },
   "amount":            2,
   "bidder_account_id": 13,                                   ← REQUIRED (Fix #1, 2026-05-16)
   "parent_offer_id":   { "routingNumber": 111, "id": "42" }  ← optional
 }
 ```
+
+The `price_per_unit.amount` and `premium.amount` fields are JSON **numbers** (SI-TX §2.5); the gateway also tolerates a quoted decimal string for backward compatibility. They are re-serialized to the seller's bank as JSON numbers in the outbound `OtcOffer`.
 
 **`bidder_account_id` (Fix #1, 2026-05-16).** REQUIRED. The buyer's account that pays the premium on accept. Gateway validates: (a) account exists and belongs to caller; (b) account is `active`; (c) **account currency matches `premium.currency`**. Cross-bank SI-TX has no FX (postings must balance per asset_id across banks, so converting on the buyer's side would break conservation) — open an account in the offer's currency or pick one. The resolved 18-digit account number is threaded into the SI-TX `OtcOffer` as `buyerAccountNumber` so the seller's bank uses this exact account for the buyer-debit posting on accept, instead of resolving `client-<id>` to "first active account in this currency" (which was non-deterministic and silently failed when the buyer had no matching account).
 
