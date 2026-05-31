@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -51,7 +52,14 @@ func (s *stubAccountForHandler) GetAccountByNumber(ctx context.Context, in *acco
 func (s *stubAccountForHandler) ReserveIncoming(ctx context.Context, in *accountpb.ReserveIncomingRequest, opts ...grpc.CallOption) (*accountpb.ReserveIncomingResponse, error) {
 	atomic.AddInt32(&s.reserveCalls, 1)
 	if g := s.reserveGate; g != nil {
-		<-g // blocks until the gate is closed/fed (nil gate = immediate)
+		// Block until the gate is closed/fed (nil gate = immediate), but honor
+		// ctx cancellation like a real gRPC call would — so a bounded worker
+		// context can abort a hung reserve.
+		select {
+		case <-g:
+		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
 	}
 	if s.reserveFn != nil {
 		return s.reserveFn(ctx, in, opts...)
@@ -658,21 +666,30 @@ func TestInitiateOutboundTx_NewTxTransactionId_CommitFreshIdem(t *testing.T) {
 
 // --- Task 3: receiver-side 202-async ---
 
+// dbNonce makes each in-memory cache=shared DSN unique per construction, so
+// shared-cache DBs don't survive across `go test -count=N` reruns.
+var dbNonce int64
+
 // newPeerTxHandlerWithDeadline builds a handler with a custom receive-sync
 // deadline and an optional blockable reserve gate on the fake account client.
 func newPeerTxHandlerWithDeadline(t *testing.T, deadline time.Duration, gate chan struct{}) (*handler.PeerTxGRPCHandler, *gorm.DB, *stubAccountForHandler) {
 	t.Helper()
 	// Shared-cache in-memory DB so the background worker's pooled connection
 	// sees the same table the request goroutine migrated. A unique name per
-	// test keeps them isolated. Pool capped at 1 conn to avoid a closed-conn
-	// dropping the shared in-memory DB.
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
+	// CONSTRUCTION (test name + atomic nonce) keeps them isolated AND prevents a
+	// cache=shared DB surviving across `-count` reruns (which would leak rows
+	// between runs and fail at -count>1). Pool capped at 1 conn to avoid a
+	// closed-conn dropping the shared in-memory DB.
+	dsn := "file:" + t.Name() + "-" + strconv.FormatInt(atomic.AddInt64(&dbNonce, 1), 10) + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	if sqlDB, derr := db.DB(); derr == nil {
 		sqlDB.SetMaxOpenConns(1)
+		// Close the underlying pool when the test ends so the shared in-memory
+		// DB is released and not reused on the next `-count` iteration.
+		t.Cleanup(func() { _ = sqlDB.Close() })
 	}
 	if err := db.AutoMigrate(&model.PeerIdempotenceRecord{}); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -827,4 +844,54 @@ func TestHandleNewTx_RestartRecovery_RekicksWorker(t *testing.T) {
 	if got := atomic.LoadInt32(&stub.reserveCalls); got < 1 {
 		t.Errorf("expected the re-kicked worker to run a reserve, got %d", got)
 	}
+}
+
+// TestHandleNewTx_WorkerTimeout_DoesNotCacheAndRekicks: when the background
+// reserve hangs past the worker's bounded context, the worker must abort WITHOUT
+// caching a (false) NO vote. The pending row stays `pending`, and a retransmit
+// re-kicks a fresh worker — proving a transient infra timeout can't permanently
+// reject a legitimate TX.
+func TestHandleNewTx_WorkerTimeout_DoesNotCacheAndRekicks(t *testing.T) {
+	// Gate stays blocked for the whole test — the reserve never completes, so the
+	// only way the worker exits is the bounded workerTimeout firing.
+	gate := make(chan struct{})
+	h, db, stub := newPeerTxHandlerWithDeadline(t, 20*time.Millisecond, gate)
+	h.SetWorkerTimeout(40 * time.Millisecond)
+
+	// 1st delivery: reserve blocked → receiveSyncDeadline fires → 202 pending,
+	// and the timeout branch writes a pending row.
+	resp1, err := h.HandleNewTx(context.Background(), balancedPostings("222", "wt-1"))
+	if err != nil {
+		t.Fatalf("first delivery: %v", err)
+	}
+	if !resp1.GetPending() {
+		t.Fatalf("first delivery must be pending (reserve blocked), got %+v", resp1)
+	}
+	waitFor(t, func() bool { return statusOf(t, db, "222", "wt-1") == "pending" })
+
+	// Wait until the first worker has exited (workerTimeout fired, runReserve
+	// returned nil, inflight entry cleared). With the gate still blocked, the
+	// only exit is the timeout; the inflight set going empty proves it exited.
+	waitFor(t, func() bool { return h.InflightLen() == 0 })
+
+	// The infra timeout must NOT have cached a NO vote — the row is still pending.
+	if s := statusOf(t, db, "222", "wt-1"); s != "pending" {
+		t.Fatalf("after worker timeout the row must STILL be pending (no cached NO vote), got %q", s)
+	}
+	if got := atomic.LoadInt32(&stub.reserveCalls); got != 1 {
+		t.Fatalf("expected exactly 1 reserve attempt before the retransmit, got %d", got)
+	}
+
+	// Retransmit on the still-pending row: returns 202 AND re-kicks a FRESH
+	// worker (reserveCalls increments to 2). The gate stays blocked; the new
+	// worker exits ~40ms later on its own bounded timeout, so the test process
+	// is not hung.
+	resp2, err := h.HandleNewTx(context.Background(), balancedPostings("222", "wt-1"))
+	if err != nil {
+		t.Fatalf("retransmit: %v", err)
+	}
+	if !resp2.GetPending() {
+		t.Errorf("retransmit on a pending row must return pending, got %+v", resp2)
+	}
+	waitFor(t, func() bool { return atomic.LoadInt32(&stub.reserveCalls) == 2 })
 }

@@ -56,8 +56,13 @@ type PeerTxGRPCHandler struct {
 	// worker keeps running. inflight de-dups concurrent retransmits to a
 	// single worker per (peer:idem).
 	receiveSyncDeadline time.Duration
-	mu                  sync.Mutex
-	inflight            map[string]chan struct{} // peer:idem -> done signal (closed when worker finishes)
+	// workerTimeout bounds the background reserve worker's context so a hung
+	// account-service (slow/unreachable) can't leak the goroutine and keep the
+	// inflight entry forever. MUST be larger than receiveSyncDeadline. Set in
+	// NewPeerTxGRPCHandler; tests override it directly (in-package).
+	workerTimeout time.Duration
+	mu            sync.Mutex
+	inflight      map[string]chan struct{} // peer:idem -> done signal (closed when worker finishes)
 }
 
 // PeerLookupFunc resolves a peer-bank-code to a PeerHTTPTarget for outbound
@@ -84,6 +89,7 @@ func NewPeerTxGRPCHandler(
 		peerLookup:          peerLookup,
 		ownRouting:          ownRouting,
 		receiveSyncDeadline: receiveSyncDeadline,
+		workerTimeout:       2 * time.Minute,
 		inflight:            make(map[string]chan struct{}),
 	}
 }
@@ -145,7 +151,12 @@ func (h *PeerTxGRPCHandler) HandleNewTx(ctx context.Context, req *transactionpb.
 	sig := h.startWorker(peerCode, idem, postings, meta)
 	select {
 	case <-sig:
-		if rec, ok, lerr := h.idemRepo.Lookup(peerCode, idem); lerr == nil && ok {
+		// Only return the cached vote when the worker actually wrote a done
+		// record. If the worker aborted on an infra timeout (runReserve returns
+		// nil without caching), the row is still `pending` — re-reading it would
+		// unmarshal the placeholder "{}" payload into an empty/zero vote. Guard
+		// on Status=="done" so this path returns Pending instead of a bogus vote.
+		if rec, ok, lerr := h.idemRepo.Lookup(peerCode, idem); lerr == nil && ok && rec.Status == "done" {
 			var cached transactionpb.SiTxVoteResponse
 			if json.Unmarshal([]byte(rec.ResponsePayloadJSON), &cached) == nil {
 				return &cached, nil
@@ -175,6 +186,14 @@ func (h *PeerTxGRPCHandler) runReserve(ctx context.Context, peerCode, idem strin
 		return resp
 	}
 	res := h.executor.Reserve(ctx, postings, peerCode, idem)
+	if ctx.Err() != nil {
+		// Aborted by the worker timeout/cancel — the reserve was NOT a
+		// deterministic protocol reject, it's an infra timeout. Do NOT cache a
+		// done record (that would falsely freeze a NO vote and block re-kick).
+		// Leave the pending row as-is so a later retransmit re-kicks a fresh
+		// worker (idempotent on peer:idem).
+		return nil
+	}
 	if res.Vote.Type == contractsitx.VoteNo {
 		resp := voteToProto(res.Vote)
 		_, _ = cacheAndReturn(h.idemRepo, peerCode, idem, "", nil, nil, meta, resp)
@@ -200,10 +219,15 @@ func (h *PeerTxGRPCHandler) startWorker(peerCode, idem string, postings []contra
 	h.inflight[key] = sig
 	h.mu.Unlock()
 	go func() {
-		// Background context: the worker must outlive the gRPC request that
-		// returned 202. A process restart abandons it; the next retransmit
-		// re-kicks (runReserve is idempotent).
-		h.runReserve(context.Background(), peerCode, idem, postings, meta)
+		// Bounded background context: the worker must outlive the gRPC request
+		// that returned 202, but a hung account-service must NOT leak the
+		// goroutine forever. On timeout runReserve writes no done record (see
+		// there), so the pending row stays pending and the next retransmit
+		// re-kicks a fresh worker (idempotent on peer:idem). A process restart
+		// likewise abandons it; the next retransmit re-kicks.
+		ctx, cancel := context.WithTimeout(context.Background(), h.workerTimeout)
+		defer cancel()
+		h.runReserve(ctx, peerCode, idem, postings, meta)
 		h.mu.Lock()
 		delete(h.inflight, key)
 		h.mu.Unlock()
