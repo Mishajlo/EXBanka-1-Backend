@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,6 +49,15 @@ type PeerTxGRPCHandler struct {
 	peerLookup     PeerLookupFunc
 	ownRouting     int64
 	optionRecorder PeerOptionRecorder // optional; nil disables option-leg materialisation
+
+	// Receiver-side 202-async (Task 3): HandleNewTx returns the YES/NO vote
+	// synchronously if the background reserve worker finishes within
+	// receiveSyncDeadline; otherwise it returns HTTP 202 (pending) and the
+	// worker keeps running. inflight de-dups concurrent retransmits to a
+	// single worker per (peer:idem).
+	receiveSyncDeadline time.Duration
+	mu                  sync.Mutex
+	inflight            map[string]chan struct{} // peer:idem -> done signal (closed when worker finishes)
 }
 
 // PeerLookupFunc resolves a peer-bank-code to a PeerHTTPTarget for outbound
@@ -63,15 +73,18 @@ func NewPeerTxGRPCHandler(
 	httpClient *sitx.PeerHTTPClient,
 	peerLookup PeerLookupFunc,
 	ownRouting int64,
+	receiveSyncDeadline time.Duration,
 ) *PeerTxGRPCHandler {
 	return &PeerTxGRPCHandler{
-		idemRepo:   idemRepo,
-		executor:   executor,
-		client:     accountClient,
-		outRepo:    outRepo,
-		httpClient: httpClient,
-		peerLookup: peerLookup,
-		ownRouting: ownRouting,
+		idemRepo:            idemRepo,
+		executor:            executor,
+		client:              accountClient,
+		outRepo:             outRepo,
+		httpClient:          httpClient,
+		peerLookup:          peerLookup,
+		ownRouting:          ownRouting,
+		receiveSyncDeadline: receiveSyncDeadline,
+		inflight:            make(map[string]chan struct{}),
 	}
 }
 
@@ -82,11 +95,15 @@ func (h *PeerTxGRPCHandler) SetOptionRecorder(r PeerOptionRecorder) {
 	h.optionRecorder = r
 }
 
-// HandleNewTx validates the inbound NEW_TX envelope, runs the cheap
-// balance check via vote_builder, and on YES executes the credit-side
-// reservations via posting_executor. The response is cached in
-// peer_idempotence_records so replays return the same vote without
-// re-executing.
+// HandleNewTx validates the inbound NEW_TX envelope, then runs the cheap
+// balance check + reservation in a background worker (Task 3, receiver-side
+// 202-async). If the worker finishes within receiveSyncDeadline it returns the
+// YES/NO vote synchronously (fast path, identical to the pre-async behaviour);
+// otherwise it returns HTTP 202 (pending) and leaves the worker running. The
+// final vote is cached in peer_idempotence_records (status="done") so a later
+// retransmit returns the same result without re-executing. A retransmit that
+// arrives while a `pending` row exists re-kicks the worker (restart recovery)
+// and returns pending again.
 func (h *PeerTxGRPCHandler) HandleNewTx(ctx context.Context, req *transactionpb.SiTxNewTxRequest) (*transactionpb.SiTxVoteResponse, error) {
 	idem := req.GetIdempotenceKey().GetLocallyGeneratedKey()
 	peerCode := req.GetPeerBankCode()
@@ -94,16 +111,16 @@ func (h *PeerTxGRPCHandler) HandleNewTx(ctx context.Context, req *transactionpb.
 		return nil, status.Error(codes.InvalidArgument, "missing idempotence_key or peer_bank_code")
 	}
 
-	// Replay-cache hit?
-	if existing, found, err := h.idemRepo.Lookup(peerCode, idem); err != nil {
+	existing, found, err := h.idemRepo.Lookup(peerCode, idem)
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "idem lookup: %v", err)
-	} else if found {
+	}
+	if found && existing.Status == "done" {
 		var cached transactionpb.SiTxVoteResponse
-		if jerr := json.Unmarshal([]byte(existing.ResponsePayloadJSON), &cached); jerr == nil {
+		if json.Unmarshal([]byte(existing.ResponsePayloadJSON), &cached) == nil {
 			return &cached, nil
 		}
-		// Cached payload corrupt — log and fall through to re-execute. The
-		// idem record's tx_id still anchors the response if we got here.
+		// corrupt payload — fall through to re-execute
 	}
 
 	postings := protoToPostings(req.GetPostings())
@@ -120,21 +137,79 @@ func (h *PeerTxGRPCHandler) HandleNewTx(ctx context.Context, req *transactionpb.
 		TxForeignID:     req.GetTransactionId().GetId(),
 	}
 
-	// Cheap balance check first — avoids hitting account-service for
-	// trivially-rejectable envelopes.
-	if vote := sitx.BuildPrelimVote(postings); vote.Type == contractsitx.VoteNo {
-		return cacheAndReturn(h.idemRepo, peerCode, idem, "", nil, nil, meta, voteToProto(vote))
+	if found && existing.Status == "pending" {
+		h.startWorker(peerCode, idem, postings, meta) // re-kick if not in-flight (restart recovery)
+		return &transactionpb.SiTxVoteResponse{Pending: true}, nil
 	}
 
-	// Execute reservations.
+	sig := h.startWorker(peerCode, idem, postings, meta)
+	select {
+	case <-sig:
+		if rec, ok, lerr := h.idemRepo.Lookup(peerCode, idem); lerr == nil && ok {
+			var cached transactionpb.SiTxVoteResponse
+			if json.Unmarshal([]byte(rec.ResponsePayloadJSON), &cached) == nil {
+				return &cached, nil
+			}
+		}
+		return &transactionpb.SiTxVoteResponse{Pending: true}, nil
+	case <-time.After(h.receiveSyncDeadline):
+		_ = h.idemRepo.UpsertPending(&model.PeerIdempotenceRecord{
+			PeerBankCode: peerCode, LocallyGeneratedKey: idem,
+			TxRoutingNumber: meta.TxRoutingNumber, TxForeignID: meta.TxForeignID,
+			Message: meta.Message, PaymentCode: meta.PaymentCode,
+			PaymentPurpose: meta.PaymentPurpose, CallNumber: meta.CallNumber,
+		})
+		return &transactionpb.SiTxVoteResponse{Pending: true}, nil
+	}
+}
+
+// runReserve performs the cheap balance check + reservation and caches the
+// result as a done idempotence record. Returns the proto vote. Safe to call
+// from a background goroutine (uses the passed ctx) and idempotent on
+// (peerCode, idem) — re-running after a crash re-reserves harmlessly because
+// account-service reservations are keyed by peer:idem.
+func (h *PeerTxGRPCHandler) runReserve(ctx context.Context, peerCode, idem string, postings []contractsitx.InternalPosting, meta txMeta) *transactionpb.SiTxVoteResponse {
+	if vote := sitx.BuildPrelimVote(postings); vote.Type == contractsitx.VoteNo {
+		resp := voteToProto(vote)
+		_, _ = cacheAndReturn(h.idemRepo, peerCode, idem, "", nil, nil, meta, resp)
+		return resp
+	}
 	res := h.executor.Reserve(ctx, postings, peerCode, idem)
 	if res.Vote.Type == contractsitx.VoteNo {
-		return cacheAndReturn(h.idemRepo, peerCode, idem, "", nil, nil, meta, voteToProto(res.Vote))
+		resp := voteToProto(res.Vote)
+		_, _ = cacheAndReturn(h.idemRepo, peerCode, idem, "", nil, nil, meta, resp)
+		return resp
 	}
-
 	txID := uuid.NewString()
 	resp := &transactionpb.SiTxVoteResponse{Type: contractsitx.VoteYes, TransactionId: txID}
-	return cacheAndReturn(h.idemRepo, peerCode, idem, txID, res.DebitedItems, res.OptionItems, meta, resp)
+	_, _ = cacheAndReturn(h.idemRepo, peerCode, idem, txID, res.DebitedItems, res.OptionItems, meta, resp)
+	return resp
+}
+
+// startWorker ensures a single background worker runs for (peerCode, idem) and
+// returns a signal channel CLOSED when the worker finishes (after the done
+// record is committed). Concurrent callers for the same key share one worker.
+func (h *PeerTxGRPCHandler) startWorker(peerCode, idem string, postings []contractsitx.InternalPosting, meta txMeta) chan struct{} {
+	key := peerCode + ":" + idem
+	h.mu.Lock()
+	if sig, ok := h.inflight[key]; ok {
+		h.mu.Unlock()
+		return sig
+	}
+	sig := make(chan struct{})
+	h.inflight[key] = sig
+	h.mu.Unlock()
+	go func() {
+		// Background context: the worker must outlive the gRPC request that
+		// returned 202. A process restart abandons it; the next retransmit
+		// re-kicks (runReserve is idempotent).
+		h.runReserve(context.Background(), peerCode, idem, postings, meta)
+		h.mu.Lock()
+		delete(h.inflight, key)
+		h.mu.Unlock()
+		close(sig)
+	}()
+	return sig
 }
 
 // txMeta carries the NEW_TX envelope metadata + initiator transactionId
@@ -187,7 +262,7 @@ func cacheAndReturn(repo *repository.PeerIdempotenceRepository, peerCode, idem, 
 		TxRoutingNumber:     meta.TxRoutingNumber,
 		TxForeignID:         meta.TxForeignID,
 	}
-	if err := repo.Insert(rec); err != nil {
+	if err := repo.UpsertDone(rec); err != nil {
 		return nil, status.Errorf(codes.Internal, "idem insert: %v", err)
 	}
 	return resp, nil

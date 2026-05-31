@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	accountpb "github.com/exbanka/contract/accountpb"
 	contractsitx "github.com/exbanka/contract/sitx"
@@ -310,7 +311,7 @@ func TestHandleCommitTx_MaterialisesOptions(t *testing.T) {
 	stub := &stubAccountForHandler{}
 	idemRepo := repository.NewPeerIdempotenceRepository(db)
 	exec := sitx.NewPostingExecutor(stub, 111)
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, nil, nil, nil, 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, nil, nil, nil, 111, 5*time.Second)
 
 	rec := &stubOptionRecorder{}
 	h.SetOptionRecorder(rec)
@@ -368,7 +369,7 @@ func TestHandleRollbackTx_ReleasesSellerShareHold(t *testing.T) {
 	// Executor needs a holding checker so the DEBIT-option leg on our routing
 	// votes YES (reserves) at NEW_TX. ok=true via the stub.
 	exec.SetHoldingChecker(handlerHoldingChecker{})
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, nil, nil, nil, 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, nil, nil, nil, 111, 5*time.Second)
 	rec := &stubOptionRecorder{}
 	h.SetOptionRecorder(rec)
 
@@ -410,7 +411,7 @@ func TestHandleCommitTx_OptionRecorderError_Internal(t *testing.T) {
 	stub := &stubAccountForHandler{}
 	idemRepo := repository.NewPeerIdempotenceRepository(db)
 	exec := sitx.NewPostingExecutor(stub, 111)
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, nil, nil, nil, 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, nil, nil, nil, 111, 5*time.Second)
 	h.SetOptionRecorder(&stubOptionRecorder{err: errors.New("recorder boom")})
 
 	optDesc := `{"ticker":"AAPL","amount":1}`
@@ -463,7 +464,7 @@ func TestInitiateOutboundTx_ShortAccount_400(t *testing.T) {
 	peerLookup := func(ctx context.Context, code string) (*sitx.PeerHTTPTarget, error) {
 		return &sitx.PeerHTTPTarget{BankCode: code, BaseURL: "http://x", APIToken: "t", OwnRouting: 111, RoutingNumber: 222}, nil
 	}
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111, 5*time.Second)
 	_, err := h.InitiateOutboundTx(context.Background(), &transactionpb.SiTxInitiateRequest{
 		FromAccountNumber: "111-A",
 		ToAccountNumber:   "ab",
@@ -487,7 +488,7 @@ func TestInitiateOutboundTx_PeerNotFound_404(t *testing.T) {
 	peerLookup := func(ctx context.Context, code string) (*sitx.PeerHTTPTarget, error) {
 		return nil, errors.New("not registered")
 	}
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111, 5*time.Second)
 	_, err := h.InitiateOutboundTx(context.Background(), &transactionpb.SiTxInitiateRequest{
 		FromAccountNumber: "111-A",
 		ToAccountNumber:   "222-B-account",
@@ -511,7 +512,7 @@ func TestInitiateOutboundTx_BadAmount_400(t *testing.T) {
 	peerLookup := func(ctx context.Context, code string) (*sitx.PeerHTTPTarget, error) {
 		return &sitx.PeerHTTPTarget{BankCode: code, BaseURL: "http://x", APIToken: "t", OwnRouting: 111, RoutingNumber: 222}, nil
 	}
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111, 5*time.Second)
 	_, err := h.InitiateOutboundTx(context.Background(), &transactionpb.SiTxInitiateRequest{
 		FromAccountNumber: "111-A",
 		ToAccountNumber:   "222-B-account",
@@ -551,7 +552,7 @@ func TestInitiateOutboundTx_HappyPath_Yes(t *testing.T) {
 	peerLookup := func(ctx context.Context, code string) (*sitx.PeerHTTPTarget, error) {
 		return &sitx.PeerHTTPTarget{BankCode: code, BaseURL: srv.URL, APIToken: "t", OwnRouting: 111, RoutingNumber: 222}, nil
 	}
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111, 5*time.Second)
 
 	resp, err := h.InitiateOutboundTx(context.Background(), &transactionpb.SiTxInitiateRequest{
 		FromAccountNumber: "111-A",
@@ -603,7 +604,7 @@ func TestInitiateOutboundTx_PeerVotesNO_HoldReleased(t *testing.T) {
 	peerLookup := func(ctx context.Context, code string) (*sitx.PeerHTTPTarget, error) {
 		return &sitx.PeerHTTPTarget{BankCode: code, BaseURL: srv.URL, APIToken: "t", OwnRouting: 111, RoutingNumber: 222}, nil
 	}
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111, 5*time.Second)
 
 	if _, err := h.InitiateOutboundTx(context.Background(), &transactionpb.SiTxInitiateRequest{
 		FromAccountNumber: "111-A",
@@ -658,7 +659,7 @@ func TestInitiateOutboundTxWithPostings_PeerNotFound_404(t *testing.T) {
 	peerLookup := func(ctx context.Context, code string) (*sitx.PeerHTTPTarget, error) {
 		return nil, errors.New("not registered")
 	}
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111, 5*time.Second)
 	_, err := h.InitiateOutboundTxWithPostings(context.Background(), &transactionpb.SiTxInitiateWithPostingsRequest{
 		PeerBankCode: "222",
 		Postings: []*transactionpb.SiTxPosting{

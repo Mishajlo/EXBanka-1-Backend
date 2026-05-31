@@ -3,6 +3,7 @@ package handler_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	transactionpb "github.com/exbanka/contract/transactionpb"
 	"github.com/exbanka/transaction-service/internal/handler"
@@ -30,7 +31,7 @@ func newPeerTxHandlerWithOutRepo(t *testing.T) (*handler.PeerTxGRPCHandler, *rep
 	idemRepo := repository.NewPeerIdempotenceRepository(db)
 	outRepo := repository.NewOutboundPeerTxRepository(db)
 	exec := sitx.NewPostingExecutor(stub, 111)
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, nil, nil, 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, nil, nil, 111, 5*time.Second)
 	return h, idemRepo, outRepo
 }
 

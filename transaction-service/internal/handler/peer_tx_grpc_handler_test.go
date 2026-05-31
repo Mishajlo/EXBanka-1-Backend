@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	accountpb "github.com/exbanka/contract/accountpb"
 	contractsitx "github.com/exbanka/contract/sitx"
@@ -30,6 +32,14 @@ type stubAccountForHandler struct {
 	reserveOutFn func(ctx context.Context, in *accountpb.ReserveOutgoingRequest, opts ...grpc.CallOption) (*accountpb.ReserveOutgoingResponse, error)
 	settleOutFn  func(ctx context.Context, in *accountpb.SettleOutgoingRequest, opts ...grpc.CallOption) (*accountpb.SettleOutgoingResponse, error)
 	releaseOutFn func(ctx context.Context, in *accountpb.ReleaseOutgoingRequest, opts ...grpc.CallOption) (*accountpb.ReleaseOutgoingResponse, error)
+
+	// reserveGate, when non-nil, blocks ReserveIncoming until a value can be
+	// received from it (close it to unblock all waiters). Used to simulate a
+	// slow account-service reserve in the 202-async tests.
+	reserveGate chan struct{}
+	// reserveCalls counts ReserveIncoming invocations (atomic; the worker runs
+	// on a background goroutine).
+	reserveCalls int32
 }
 
 func (s *stubAccountForHandler) GetAccountByNumber(ctx context.Context, in *accountpb.GetAccountByNumberRequest, opts ...grpc.CallOption) (*accountpb.AccountResponse, error) {
@@ -39,6 +49,10 @@ func (s *stubAccountForHandler) GetAccountByNumber(ctx context.Context, in *acco
 	return &accountpb.AccountResponse{AccountNumber: in.AccountNumber, CurrencyCode: "RSD", Status: "active"}, nil
 }
 func (s *stubAccountForHandler) ReserveIncoming(ctx context.Context, in *accountpb.ReserveIncomingRequest, opts ...grpc.CallOption) (*accountpb.ReserveIncomingResponse, error) {
+	atomic.AddInt32(&s.reserveCalls, 1)
+	if g := s.reserveGate; g != nil {
+		<-g // blocks until the gate is closed/fed (nil gate = immediate)
+	}
 	if s.reserveFn != nil {
 		return s.reserveFn(ctx, in, opts...)
 	}
@@ -93,7 +107,7 @@ func newPeerTxHandler(t *testing.T) (*handler.PeerTxGRPCHandler, *gorm.DB, *stub
 	stub := &stubAccountForHandler{}
 	idemRepo := repository.NewPeerIdempotenceRepository(db)
 	exec := sitx.NewPostingExecutor(stub, 111)
-	return handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, nil, nil, nil, 111), db, stub
+	return handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, nil, nil, nil, 111, 5*time.Second), db, stub
 }
 
 // TestHandleNewTx_PersistsMetadata_AndCommitPassesMemo is the Task 10 test:
@@ -453,7 +467,7 @@ func TestInitiateOutboundTxWithPostings_HappyPath(t *testing.T) {
 	peerLookup := func(ctx context.Context, code string) (*sitx.PeerHTTPTarget, error) {
 		return &sitx.PeerHTTPTarget{BankCode: code, BaseURL: srv.URL, APIToken: "tok", OwnRouting: 111, RoutingNumber: 222}, nil
 	}
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111, 5*time.Second)
 
 	// Note: stubAccountForHandler returns CurrencyCode="RSD" by default,
 	// so the money postings use RSD here. The option postings use a
@@ -516,7 +530,7 @@ func TestInitiateOutboundTxWithPostings_LocalCommitFailure_LeavesCommitting(t *t
 	peerLookup := func(ctx context.Context, code string) (*sitx.PeerHTTPTarget, error) {
 		return &sitx.PeerHTTPTarget{BankCode: code, BaseURL: srv.URL, APIToken: "tok", OwnRouting: 111, RoutingNumber: 222}, nil
 	}
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111, 5*time.Second)
 
 	resp, err := h.InitiateOutboundTxWithPostings(context.Background(), &transactionpb.SiTxInitiateWithPostingsRequest{
 		PeerBankCode: "222",
@@ -549,7 +563,7 @@ func TestInitiateOutboundTxWithPostings_NoPostings_400(t *testing.T) {
 	peerLookup := func(ctx context.Context, code string) (*sitx.PeerHTTPTarget, error) {
 		return &sitx.PeerHTTPTarget{BankCode: code, BaseURL: "http://x", APIToken: "tok", OwnRouting: 111, RoutingNumber: 222}, nil
 	}
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111, 5*time.Second)
 
 	_, err := h.InitiateOutboundTxWithPostings(context.Background(), &transactionpb.SiTxInitiateWithPostingsRequest{
 		PeerBankCode: "222",
@@ -602,7 +616,7 @@ func TestInitiateOutboundTx_NewTxTransactionId_CommitFreshIdem(t *testing.T) {
 	peerLookup := func(ctx context.Context, code string) (*sitx.PeerHTTPTarget, error) {
 		return &sitx.PeerHTTPTarget{BankCode: code, BaseURL: srv.URL, APIToken: "tok", OwnRouting: 111, RoutingNumber: 222}, nil
 	}
-	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, outRepo, httpClient, handler.PeerLookupFunc(peerLookup), 111, 5*time.Second)
 
 	resp, err := h.InitiateOutboundTx(context.Background(), &transactionpb.SiTxInitiateRequest{
 		FromAccountNumber: "111000000000000001",
@@ -639,5 +653,178 @@ func TestInitiateOutboundTx_NewTxTransactionId_CommitFreshIdem(t *testing.T) {
 	}
 	if commit.txID != L {
 		t.Errorf("COMMIT transactionId.id = %q, want L = %q", commit.txID, L)
+	}
+}
+
+// --- Task 3: receiver-side 202-async ---
+
+// newPeerTxHandlerWithDeadline builds a handler with a custom receive-sync
+// deadline and an optional blockable reserve gate on the fake account client.
+func newPeerTxHandlerWithDeadline(t *testing.T, deadline time.Duration, gate chan struct{}) (*handler.PeerTxGRPCHandler, *gorm.DB, *stubAccountForHandler) {
+	t.Helper()
+	// Shared-cache in-memory DB so the background worker's pooled connection
+	// sees the same table the request goroutine migrated. A unique name per
+	// test keeps them isolated. Pool capped at 1 conn to avoid a closed-conn
+	// dropping the shared in-memory DB.
+	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if sqlDB, derr := db.DB(); derr == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
+	if err := db.AutoMigrate(&model.PeerIdempotenceRecord{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	stub := &stubAccountForHandler{reserveGate: gate}
+	idemRepo := repository.NewPeerIdempotenceRepository(db)
+	exec := sitx.NewPostingExecutor(stub, 111)
+	h := handler.NewPeerTxGRPCHandler(idemRepo, exec, stub, nil, nil, nil, 111, deadline)
+	return h, db, stub
+}
+
+// balancedPostings builds a 2-leg MONAS NEW_TX request (DEBIT on the peer's
+// routing, CREDIT on ours) the executor votes YES on against the fake account
+// client. The CREDIT leg on routing 111 drives one ReserveIncoming call.
+func balancedPostings(peerCode, idem string) *transactionpb.SiTxNewTxRequest {
+	return &transactionpb.SiTxNewTxRequest{
+		IdempotenceKey: &transactionpb.SiTxIdempotenceKey{RoutingNumber: 222, LocallyGeneratedKey: idem},
+		PeerBankCode:   peerCode,
+		TransactionId:  &transactionpb.SiTxForeignBankId{RoutingNumber: 222, Id: idem},
+		Postings: []*transactionpb.SiTxPosting{
+			{RoutingNumber: 222, AccountType: "ACCOUNT", AccountId: "222000001", AssetType: "MONAS", AssetId: "RSD", Amount: "100.00", Direction: "DEBIT"},
+			{RoutingNumber: 111, AccountType: "ACCOUNT", AccountId: "111000001", AssetType: "MONAS", AssetId: "RSD", Amount: "100.00", Direction: "CREDIT"},
+		},
+	}
+}
+
+// waitFor polls cond every 5ms up to ~2s, failing the test if it never holds.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("condition not met within 2s")
+}
+
+func statusOf(t *testing.T, db *gorm.DB, peerCode, idem string) string {
+	t.Helper()
+	var rec model.PeerIdempotenceRecord
+	if err := db.Where("peer_bank_code = ? AND locally_generated_key = ?", peerCode, idem).First(&rec).Error; err != nil {
+		return ""
+	}
+	return rec.Status
+}
+
+// TestHandleNewTx_FastPath_ReturnsVoteNotPending: with the deadline far larger
+// than the (immediate) reserve, HandleNewTx returns the YES vote synchronously
+// and the record lands as status="done" — identical to pre-async behaviour.
+func TestHandleNewTx_FastPath_ReturnsVoteNotPending(t *testing.T) {
+	h, db, _ := newPeerTxHandlerWithDeadline(t, 5*time.Second, nil)
+	resp, err := h.HandleNewTx(context.Background(), balancedPostings("222", "fast-1"))
+	if err != nil {
+		t.Fatalf("HandleNewTx: %v", err)
+	}
+	if resp.GetPending() {
+		t.Fatalf("fast path must not be pending: %+v", resp)
+	}
+	if resp.GetType() != contractsitx.VoteYes {
+		t.Errorf("expected YES, got %+v", resp)
+	}
+	if resp.GetTransactionId() == "" {
+		t.Errorf("expected transaction_id on the synchronous YES vote")
+	}
+	if s := statusOf(t, db, "222", "fast-1"); s != "done" {
+		t.Errorf("record status = %q, want done", s)
+	}
+}
+
+// TestHandleNewTx_SlowReserve_Returns202ThenCaches: a gated reserve forces the
+// worker past a short deadline. The first delivery returns 202 (pending) and a
+// pending row; a retransmit while still blocked returns 202 again and the
+// reserve runs exactly ONCE (shared worker). After the gate opens the row goes
+// done and a retransmit returns the cached YES vote.
+func TestHandleNewTx_SlowReserve_Returns202ThenCaches(t *testing.T) {
+	gate := make(chan struct{})
+	h, db, stub := newPeerTxHandlerWithDeadline(t, 30*time.Millisecond, gate)
+
+	// 1st delivery — reserve is blocked on the gate, deadline fires → 202.
+	resp1, err := h.HandleNewTx(context.Background(), balancedPostings("222", "slow-1"))
+	if err != nil {
+		t.Fatalf("first delivery: %v", err)
+	}
+	if !resp1.GetPending() {
+		t.Fatalf("first delivery must be pending (reserve blocked), got %+v", resp1)
+	}
+	// A pending row must exist (written by the timeout branch).
+	waitFor(t, func() bool { return statusOf(t, db, "222", "slow-1") == "pending" })
+
+	// Retransmit while still blocked — must also be pending, and must NOT spawn
+	// a second worker / second reserve.
+	resp2, err := h.HandleNewTx(context.Background(), balancedPostings("222", "slow-1"))
+	if err != nil {
+		t.Fatalf("retransmit while blocked: %v", err)
+	}
+	if !resp2.GetPending() {
+		t.Errorf("retransmit while blocked must be pending, got %+v", resp2)
+	}
+	if got := atomic.LoadInt32(&stub.reserveCalls); got != 1 {
+		t.Errorf("ReserveIncoming called %d times while blocked, want exactly 1 (single shared worker)", got)
+	}
+
+	// Unblock the reserve → worker finishes and overwrites the row to done.
+	close(gate)
+	waitFor(t, func() bool { return statusOf(t, db, "222", "slow-1") == "done" })
+
+	// Retransmit after done — returns the cached YES vote, not pending.
+	resp3, err := h.HandleNewTx(context.Background(), balancedPostings("222", "slow-1"))
+	if err != nil {
+		t.Fatalf("retransmit after done: %v", err)
+	}
+	if resp3.GetPending() {
+		t.Errorf("retransmit after done must not be pending, got %+v", resp3)
+	}
+	if resp3.GetType() != contractsitx.VoteYes {
+		t.Errorf("retransmit after done must be YES, got %+v", resp3)
+	}
+	if got := atomic.LoadInt32(&stub.reserveCalls); got != 1 {
+		t.Errorf("ReserveIncoming total = %d, want 1 (cached after done, no re-reserve)", got)
+	}
+}
+
+// TestHandleNewTx_RestartRecovery_RekicksWorker: a pending row pre-exists (as if
+// written before a process restart) and the in-flight map is empty (fresh
+// handler). A retransmit must return 202 AND re-kick a worker that drives the
+// row to done.
+func TestHandleNewTx_RestartRecovery_RekicksWorker(t *testing.T) {
+	h, db, stub := newPeerTxHandlerWithDeadline(t, 5*time.Second, nil)
+	idemRepo := repository.NewPeerIdempotenceRepository(db)
+	// Pre-insert a pending row (no in-flight worker exists for it).
+	if err := idemRepo.UpsertPending(&model.PeerIdempotenceRecord{
+		PeerBankCode: "222", LocallyGeneratedKey: "restart-1",
+		TxRoutingNumber: 222, TxForeignID: "restart-1",
+	}); err != nil {
+		t.Fatalf("seed pending: %v", err)
+	}
+	if s := statusOf(t, db, "222", "restart-1"); s != "pending" {
+		t.Fatalf("seed status = %q, want pending", s)
+	}
+
+	resp, err := h.HandleNewTx(context.Background(), balancedPostings("222", "restart-1"))
+	if err != nil {
+		t.Fatalf("retransmit: %v", err)
+	}
+	if !resp.GetPending() {
+		t.Errorf("retransmit on a pending row must return pending, got %+v", resp)
+	}
+	// The re-kicked worker drives the row to done.
+	waitFor(t, func() bool { return statusOf(t, db, "222", "restart-1") == "done" })
+	if got := atomic.LoadInt32(&stub.reserveCalls); got < 1 {
+		t.Errorf("expected the re-kicked worker to run a reserve, got %d", got)
 	}
 }
