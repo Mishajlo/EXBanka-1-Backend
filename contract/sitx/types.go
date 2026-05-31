@@ -5,10 +5,6 @@
 // Phase 4). Shape is verbatim from https://arsen.srht.site/si-tx-proto/.
 package sitx
 
-import (
-	"github.com/shopspring/decimal"
-)
-
 // MessageType discriminator values carried in a Message envelope.
 const (
 	MessageTypeNewTx      = "NEW_TX"
@@ -22,7 +18,7 @@ const (
 	DirectionCredit = "CREDIT"
 )
 
-// TransactionVote.Type values.
+// TransactionVote.Vote values.
 const (
 	VoteYes = "YES"
 	VoteNo  = "NO"
@@ -59,43 +55,66 @@ type Message[T any] struct {
 	Message        T              `json:"message"`
 }
 
-// Posting is one side of a double-entry TX leg. SI-TX requires that the
-// sum of debits equals the sum of credits per assetId across the postings
-// of a Transaction (UNBALANCED_TX is rejected with a NoVote).
+// TxAccount is the SI-TX tagged union (§2.6).
+type TxAccount struct {
+	Type string         `json:"type"`          // "PERSON" | "ACCOUNT" | "OPTION"
+	ID   *ForeignBankId `json:"id,omitempty"`  // PERSON, OPTION
+	Num  string         `json:"num,omitempty"` // ACCOUNT
+}
+
+// MonetaryAsset / StockDescription are the §2.7 asset payloads.
+type MonetaryAsset struct {
+	Currency string `json:"currency"`
+}
+
+// StockDescription is the §2.7 stock asset payload.
+type StockDescription struct {
+	Ticker string `json:"ticker"`
+}
+
+// Asset is the §2.7 tagged union (holds MonetaryAsset, StockDescription, or OptionDescription).
+type Asset struct {
+	Type  string      `json:"type"`  // "MONAS" | "STOCK" | "OPTION"
+	Asset interface{} `json:"asset"`
+}
+
+// Posting is one §2.8.1 double-entry leg. Amount is SIGNED (negative=credit/asset
+// leaves, positive=debit/asset arrives) and serializes as a JSON number.
 type Posting struct {
-	RoutingNumber int64           `json:"routingNumber"`
-	AccountID     string          `json:"accountId"`
-	AssetID       string          `json:"assetId"`
-	Amount        decimal.Decimal `json:"amount"`
-	Direction     string          `json:"direction"`
+	Account TxAccount     `json:"account"`
+	Amount  DecimalNumber `json:"amount"`
+	Asset   Asset         `json:"asset"`
 }
 
-// Transaction is the body of a NEW_TX message.
+// Transaction is the body of a NEW_TX message (§2.8.2).
 type Transaction struct {
-	Postings []Posting `json:"postings"`
+	Postings       []Posting     `json:"postings"`
+	TransactionID  ForeignBankId `json:"transactionId"`
+	Message        string        `json:"message"`
+	CallNumber     string        `json:"callNumber,omitempty"`
+	PaymentCode    string        `json:"paymentCode"`
+	PaymentPurpose string        `json:"paymentPurpose"`
 }
 
-// CommitTransaction is the body of a COMMIT_TX message.
+// CommitTransaction / RollbackTransaction reference the initiator's
+// transactionId as a ForeignBankId (§2.12.2 / §2.12.3).
 type CommitTransaction struct {
-	TransactionID string `json:"transactionId"`
+	TransactionID ForeignBankId `json:"transactionId"`
 }
 
-// RollbackTransaction is the body of a ROLLBACK_TX message.
+// RollbackTransaction is the body of a ROLLBACK_TX message (§2.12.3).
 type RollbackTransaction struct {
-	TransactionID string `json:"transactionId"`
+	TransactionID ForeignBankId `json:"transactionId"`
 }
 
-// NoVote describes a single rejection reason. When applicable, Posting is
-// the index into Transaction.Postings (0-based) that triggered the reason.
-type NoVote struct {
-	Reason  string `json:"reason"`
-	Posting *int   `json:"posting,omitempty"`
+// NoVoteReason (§2.12.1). Posting is the FULL offending posting (not an index).
+type NoVoteReason struct {
+	Reason  string   `json:"reason"`
+	Posting *Posting `json:"posting,omitempty"`
 }
 
-// TransactionVote is the receiver's response to a NEW_TX message. When
-// Type=YES, NoVotes is empty/omitted. When Type=NO, NoVotes lists every
-// failing reason.
+// TransactionVote is the NEW_TX response (§2.12.1).
 type TransactionVote struct {
-	Type    string   `json:"type"`
-	NoVotes []NoVote `json:"noVotes,omitempty"`
+	Vote    string         `json:"vote"`
+	Reasons []NoVoteReason `json:"reasons,omitempty"`
 }
