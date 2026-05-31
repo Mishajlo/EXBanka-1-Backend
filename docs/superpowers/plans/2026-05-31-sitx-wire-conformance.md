@@ -28,7 +28,12 @@
 - ✅ **Task 16** — stock-service accept postings carry account/asset type tags + `AccountType*`/`AssetType*` constants in `contract/sitx` (`831285b`).
 - **ALL IMPLEMENTATION (Tasks 1–16) COMPLETE. Full workspace build+test sweep GREEN** (contract, api-gateway, transaction-service, account-service, stock-service).
 - **Repo facts discovered:** no `Specification.md` and no `docker-compose-remote.yml` exist (CLAUDE.md references them but they're absent) → Task 19 = `docs/api/REST_API_v3.md` (already partly updated by Tasks 14/15) + swagger + memory.
-- ⏳ **Remaining (finishing):** Task 17 (conformance byte-fixtures), Task 18 (integration — may be infra-gated), Task 19 (docs).
+- ✅ **Task 17** — byte-level conformance fixtures `contract/sitx/testdata/*.json` + `conformance_test.go` (`2bf5139`). Cohort interop guard.
+- ✅ **`UserInformation` struct** aligned to spec `{bankDisplayName, displayName}` (`cfd25ef`, amended to fix a test-build break — lesson: run `go test` not just `go build` before committing).
+- ✅ **Task 19** — `docs/api/REST_API_v3.md` documents the full spec wire format (interbank envelope/NEW_TX/vote/commit-rollback, public-stock bare array); swagger regen no-op (`dbecc04`).
+- ✅ **Task 18** — integration test `sitx_conformance_test.go` (`//go:build integration`) asserts outbound NEW_TX is spec-shaped + COMMIT correlation; compiles+vets clean (runs under `make docker-up`) (`266f3ce`). Also fixed stale `cohort_dry_run_test.go` mock vote `{"type":"YES"}`→`{"vote":"YES"}` (`25435aa`).
+- **🎉 ALL 19 TASKS COMPLETE. Full workspace build+test GREEN (contract, api-gateway, transaction-service, account-service, stock-service); test-app integration compiles under `-tags integration`.**
+- **Hard cutover is live: peers must speak the spec dialect. `contract/sitx/testdata/*.json` are the shared byte-level target for the cohort.**
 
 **Known-broken (expected) until their rewrite tasks land:** `api-gateway/internal/handler` (Task 7), `transaction-service/internal/{handler,sitx}` (Tasks 8–12), `stock-service` accept path (Task 16). The contract module + `stock-service/internal/otccache` are green.
 
