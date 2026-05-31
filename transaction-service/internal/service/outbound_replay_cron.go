@@ -12,7 +12,23 @@ import (
 	"github.com/exbanka/transaction-service/internal/model"
 	"github.com/exbanka/transaction-service/internal/repository"
 	"github.com/exbanka/transaction-service/internal/sitx"
+	"github.com/google/uuid"
 )
+
+// specPostings converts persisted internal postings to the signed SPEC wire
+// postings via the shared contract mapping (sign↔direction inversion is never
+// hand-rolled here).
+func specPostings(in []contractsitx.InternalPosting) ([]contractsitx.Posting, error) {
+	out := make([]contractsitx.Posting, 0, len(in))
+	for _, ip := range in {
+		sp, err := contractsitx.InternalPostingToSpec(ip)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sp)
+	}
+	return out, nil
+}
 
 // OutboundReplayCron periodically resumes outbound SI-TX transfers that
 // were left in `pending` state (sender-side crash, network error, peer
@@ -177,25 +193,35 @@ func (c *OutboundReplayCron) processRow(ctx context.Context, row *model.Outbound
 		_ = c.repo.MarkAttempt(row.IdempotenceKey, "peer lookup failed: "+errString(err))
 		return
 	}
-	var postings []contractsitx.Posting
-	if err := json.Unmarshal([]byte(row.PostingsJSON), &postings); err != nil {
+	var internalPostings []contractsitx.InternalPosting
+	if err := json.Unmarshal([]byte(row.PostingsJSON), &internalPostings); err != nil {
 		_ = c.repo.MarkFailed(row.IdempotenceKey, "corrupt postings_json: "+err.Error())
 		return
 	}
+	wirePostings, convErr := specPostings(internalPostings)
+	if convErr != nil {
+		_ = c.repo.MarkFailed(row.IdempotenceKey, "corrupt postings_json: "+convErr.Error())
+		return
+	}
+	// transactionId pins the original NEW_TX identity (L = row.IdempotenceKey).
+	// Replaying NEW_TX reuses L as the message idem (retransmit, idempotent on
+	// the receiver); COMMIT/ROLLBACK below carry their own fresh idem and
+	// correlate via transactionId.
+	txID := contractsitx.ForeignBankId{RoutingNumber: target.OwnRouting, ID: row.IdempotenceKey}
 	envelope := contractsitx.Message[contractsitx.Transaction]{
 		IdempotenceKey: contractsitx.IdempotenceKey{
 			RoutingNumber:       target.OwnRouting,
 			LocallyGeneratedKey: row.IdempotenceKey,
 		},
 		MessageType: contractsitx.MessageTypeNewTx,
-		Message:     contractsitx.Transaction{Postings: postings},
+		Message:     contractsitx.Transaction{Postings: wirePostings, TransactionID: txID, Message: "Cross-bank " + row.TxKind},
 	}
 	vote, err := c.httpClient.PostNewTx(ctx, target, envelope)
 	if err != nil {
 		_ = c.repo.MarkAttempt(row.IdempotenceKey, err.Error())
 		return
 	}
-	if vote.Type == contractsitx.VoteYes {
+	if vote.Vote == contractsitx.VoteYes {
 		// PIVOT: the peer voted YES → it has reserved and will honor a COMMIT.
 		// Durably cross into the commit phase BEFORE any local settle, so any
 		// failure from here leaves the row `committing` (forward-only) — never
@@ -212,8 +238,8 @@ func (c *OutboundReplayCron) processRow(ctx context.Context, row *model.Outbound
 		return
 	}
 	reason := "peer voted NO"
-	if len(vote.NoVotes) > 0 {
-		reason = "peer voted NO: " + vote.NoVotes[0].Reason
+	if len(vote.Reasons) > 0 {
+		reason = "peer voted NO: " + vote.Reasons[0].Reason
 	}
 	// Safe ordering for NO-vote resolution to prevent double-reverse race:
 	//  1. Mark rolled_back FIRST (status guard: AND status='pending').
@@ -282,13 +308,17 @@ func (c *OutboundReplayCron) driveCommit(ctx context.Context, row *model.Outboun
 		fail("peer lookup", errString(err))
 		return
 	}
+	// COMMIT carries its OWN unique idempotence key (fresh per retransmit),
+	// correlating to the original NEW_TX (L) via Message.TransactionID. The
+	// receiver looks up the record by transactionId and short-circuits if it
+	// already committed, so a fresh key per tick stays idempotent.
 	commitEnvelope := contractsitx.Message[contractsitx.CommitTransaction]{
 		IdempotenceKey: contractsitx.IdempotenceKey{
 			RoutingNumber:       target.OwnRouting,
-			LocallyGeneratedKey: row.IdempotenceKey,
+			LocallyGeneratedKey: uuid.NewString(),
 		},
 		MessageType: contractsitx.MessageTypeCommitTx,
-		Message:     contractsitx.CommitTransaction{TransactionID: row.IdempotenceKey},
+		Message:     contractsitx.CommitTransaction{TransactionID: contractsitx.ForeignBankId{RoutingNumber: target.OwnRouting, ID: row.IdempotenceKey}},
 	}
 	if cerr := c.httpClient.PostCommitTx(ctx, target, commitEnvelope); cerr != nil {
 		fail("commit_tx", cerr.Error())
@@ -330,10 +360,12 @@ func dispatchPeerRollback(ctx context.Context, httpClient *sitx.PeerHTTPClient, 
 		log.Printf("%s: ROLLBACK_TX peer lookup %s failed: %v (peer may retain reservation)", who, peerCode, err)
 		return
 	}
+	// ROLLBACK carries its OWN fresh idempotence key, correlating to the
+	// original NEW_TX (idem == L) via Message.TransactionID.
 	env := contractsitx.Message[contractsitx.RollbackTransaction]{
-		IdempotenceKey: contractsitx.IdempotenceKey{RoutingNumber: target.OwnRouting, LocallyGeneratedKey: idem},
+		IdempotenceKey: contractsitx.IdempotenceKey{RoutingNumber: target.OwnRouting, LocallyGeneratedKey: uuid.NewString()},
 		MessageType:    contractsitx.MessageTypeRollbackTx,
-		Message:        contractsitx.RollbackTransaction{TransactionID: idem},
+		Message:        contractsitx.RollbackTransaction{TransactionID: contractsitx.ForeignBankId{RoutingNumber: target.OwnRouting, ID: idem}},
 	}
 	if err := httpClient.PostRollbackTx(ctx, target, env); err != nil {
 		log.Printf("%s: ROLLBACK_TX to %s for %s failed (peer may retain reservation until its sweeper): %v", who, peerCode, idem, err)

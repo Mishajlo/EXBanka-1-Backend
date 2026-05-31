@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"time"
 
 	"github.com/exbanka/transaction-service/internal/model"
 	"gorm.io/gorm"
@@ -40,6 +41,34 @@ func (r *PeerIdempotenceRepository) Lookup(peerBankCode, locallyGeneratedKey str
 		return nil, false, err
 	}
 	return &rec, true, nil
+}
+
+// MarkCommitted stamps committed_at on the record (idempotent: only sets it
+// when currently NULL). Returns true if THIS call performed the transition
+// (committed_at was NULL and is now set), false if it was already committed —
+// so the caller can short-circuit a retransmitted COMMIT_TX as a no-op.
+func (r *PeerIdempotenceRepository) MarkCommitted(id uint64) (bool, error) {
+	res := r.db.Model(&model.PeerIdempotenceRecord{}).
+		Where("id = ? AND committed_at IS NULL", id).
+		Update("committed_at", time.Now().UTC())
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// MarkRolledBack stamps rolled_back_at on the record (idempotent: only sets it
+// when currently NULL). Returns true if THIS call performed the transition,
+// false if it was already rolled back — so a retransmitted ROLLBACK_TX is a
+// no-op.
+func (r *PeerIdempotenceRepository) MarkRolledBack(id uint64) (bool, error) {
+	res := r.db.Model(&model.PeerIdempotenceRecord{}).
+		Where("id = ? AND rolled_back_at IS NULL", id).
+		Update("rolled_back_at", time.Now().UTC())
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
 }
 
 // LookupByTransactionID finds a receiver-side record by the sender's
