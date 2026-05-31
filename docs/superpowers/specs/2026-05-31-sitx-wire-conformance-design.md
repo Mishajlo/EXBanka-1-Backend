@@ -24,6 +24,29 @@ route names unchanged**. Conformance lives in two layers: the JSON DTOs in
 gateway / transaction-service / stock-service boundaries. The internal gRPC proto
 is *enriched* (not reshaped) so no spec data is lost in translation.
 
+### Implementation-grounding correction (2026-05-31)
+
+A second pass that read the *actual* serialization code (not just
+`contract/sitx/*`) corrected two OTC findings from the initial audit:
+
+- **OTC negotiation bodies already conform.** The gateway serializes
+  `OtcOffer` / `OtcNegotiation` *inline* via `peerOtcOfferReq` and
+  `protoOfferToJSON` in `api-gateway/internal/handler/peer_otc_handler.go`, not
+  via the `contract/sitx/otc_types.go` structs. The wire shape it emits is
+  already spec-shaped: `{stock:{ticker}, settlementDate, pricePerUnit:{…},
+  premium:{…}, buyerId, sellerId, amount, lastModifiedBy}` and, on GET,
+  `… & {isOngoing}`. **No structural rewrite of the OTC negotiation body is
+  needed.** The `contract/sitx/otc_types.go` `OtcOffer`/`OtcNegotiation` structs
+  are *internal* (OfferJSON storage + otccache), not the negotiation HTTP wire.
+- **The transaction-protocol deviations are real.** `peer_tx_handler.go` genuinely
+  builds `sitx.Message[sitx.Transaction]`, `sitx.Posting`, and
+  `sitx.TransactionVote` from `contract/sitx/types.go` — those flat structs *are*
+  the wire, and §6.1–§6.5 stand.
+
+Remaining OTC gaps after grounding: `/public-stock` shape (§6.8a), `/user` shape
+(§6.8b), and monetary `amount` emitted as a JSON string instead of a number
+(§6.1a — affects postings *and* OTC money values).
+
 ### Decisions locked during brainstorming
 
 - **Cutover:** Hard cut to the spec dialect only. No dual-parsing / no version
@@ -120,9 +143,9 @@ type StockDescription struct { Ticker  string `json:"ticker"`  }     // §2.7.3
 // §2.8.1 — amount is SIGNED; negative = credit (asset leaves), positive = debit.
 // No `direction` field.
 type Posting struct {
-    Account TxAccount       `json:"account"`
-    Amount  decimal.Decimal `json:"amount"`
-    Asset   Asset           `json:"asset"`
+    Account TxAccount     `json:"account"`
+    Amount  DecimalNumber `json:"amount"` // signed; serializes as a JSON number (§6.1a)
+    Asset   Asset         `json:"asset"`
 }
 
 // §2.8.2
@@ -156,11 +179,40 @@ Reason code constants are unchanged (`UNBALANCED_TX`, `NO_SUCH_ACCOUNT`,
 `OPTION_NEGOTIATION_NOT_FOUND`). The `Message[T]` envelope and `IdempotenceKey`
 are unchanged.
 
-**Decimal-as-number note (§2.5 / §2.8.1):** `amount` must serialize as a JSON
-number, never a string. Verify `decimal.Decimal` marshals as a bare number
-(`shopspring/decimal` does when not configured for string output); if any path
-emits a quoted string, fix the marshaller. Do **not** interpret amounts as
-float64 internally — keep `decimal.Decimal`.
+### 6.1a Monetary amount as a JSON number (cross-cutting)
+
+§2.5 / §2.8.1 are explicit: `amount` "should be represented as a JSON number
+production (see ECMA-404)… Do not interpret amount as a float64." Today
+`shopspring/decimal` marshals as a **quoted string** by default (no
+`MarshalJSONWithoutQuotes` is set anywhere in the repo), so our posting amounts
+and OTC `MonetaryValue.amount` currently emit as strings (`"260"`). A spec-strict
+peer expecting a bare number (`260`) would mis-parse.
+
+**Approach:** introduce a dedicated wire type that marshals a `decimal.Decimal`
+as a *raw JSON number token* (not quoted) and parses a JSON number into a
+`decimal.Decimal` without float64 rounding:
+
+```go
+// contract/sitx/decimalnum.go
+type DecimalNumber struct{ decimal.Decimal }
+
+func (d DecimalNumber) MarshalJSON() ([]byte, error) {
+    return []byte(d.Decimal.String()), nil // bare number token, e.g. 260 or 1.5
+}
+func (d *DecimalNumber) UnmarshalJSON(b []byte) error {
+    s := strings.Trim(string(b), `"`) // tolerate quoted input from lenient peers
+    v, err := decimal.NewFromString(s)
+    if err != nil { return err }
+    d.Decimal = v
+    return nil
+}
+```
+
+Use `DecimalNumber` for `Posting.Amount` and `MonetaryValue.Amount` (the wire
+DTOs only). Internal storage / proto continue to carry decimal-as-string —
+conversion happens in the translation layer. Do **not** set the global
+`decimal.MarshalJSONWithoutQuotes` (it would change decimal marshaling across
+every service and every unrelated endpoint).
 
 ### 6.2 Account/Asset union ↔ internal flat mapping (HIGH CARE)
 
@@ -288,86 +340,99 @@ Additive only (no field removed/renumbered):
 
 Run `make proto` after editing.
 
-### 6.8 OTC DTOs (`contract/sitx/otc_types.go`) + handlers
+### 6.8 OTC handlers — what actually needs changing
 
-Rewrite to spec shapes; local extension fields stay as `omitempty` additions
-(spec peers ignore unknown fields):
+The OTC *negotiation* wire (`POST/PUT/GET/DELETE/accept /negotiations`) is already
+spec-conformant **structurally** (gateway inline serialization, §1.1). The only
+negotiation-body change is money amounts:
+
+- **6.8c — OTC money as numbers.** `protoOfferToJSON`
+  (`peer_otc_handler.go:411`) emits `pricePerUnit.amount` / `premium.amount` as
+  the proto's decimal *string* (`o.GetPricePerStock()`), so they render as JSON
+  strings. Wrap them so they render as JSON numbers (§6.1a) — e.g. emit
+  `json.RawMessage(decimalString)` or a `DecimalNumber`. Same for the inbound
+  `peerMonetaryValueReq.Amount` (today `string`): accept a JSON number. Mirror the
+  fix in `peer_otc_initiate_handler.go`'s outbound offer maps (the inline
+  `"amount": req.PricePerUnit.Amount` entries) and in `protoToOffer`/`offerToProto`
+  on the stock-service side if they round-trip through the wire DTO. Turn-rule,
+  409-on-wrong-turn, accept 4-posting formation, and `isOngoing` derivation are
+  unchanged and already conformant.
+
+The two structural OTC gaps:
+
+#### 6.8a `GET /public-stock` — bare array grouped by stock (§3.1)
+
+Spec response:
+
+```jsonc
+// BARE array, grouped by stock, sellers nested
+[ { "stock": {"ticker":"AAPL"}, "sellers": [ {"seller":{"routingNumber":111,"id":"client-3"}, "amount": 50} ] } ]
+```
+
+Today (`peer_otc_handler.go:50`) we emit `{"stocks":[{ownerId,ticker,amount,
+pricePerStock,currency}]}` — wrapped, flat-per-owner, no `sellers[]`. Changes:
+
+- **Serve side:** in `GetPublicStocks`, group the stock-service rows by `ticker`,
+  building `[]{stock:{ticker}, sellers:[{seller: ownerId, amount}]}` and return
+  the **bare array** (no `{stocks:…}` wrapper, drop `pricePerStock`/`currency` —
+  not in the spec shape). The stock-service proto already returns per-owner rows
+  (`PeerPublicStock{owner_id, ticker, amount, …}`); grouping happens gateway-side,
+  so **no proto change** is required.
+- **Consume side:** `stock-service/internal/otccache/cache.go` `fetchPeer`
+  currently unmarshals into `sitx.PublicStocksResponse` (`{stocks:[…]}`). Change
+  the consume DTO to the spec bare array `[]PublicStock` with `sellers[]`, and
+  flatten each `(stock, seller)` pair into the existing cache `Offer` rows
+  (`Kind:"remote"`, `OwnerID`, `Ticker`, `Quantity=seller.amount`). Note the spec
+  `/public-stock` carries **no price/currency** — preserve today's behavior of
+  leaving remote `PricePerUnit`/`Currency` empty/unknown for discovered stocks
+  (the price is negotiated, not advertised).
+
+Rewrite the `contract/sitx/otc_types.go` `PublicStock` / `PublicStocksResponse`
+to the spec shape (this struct *is* the consume-side wire DTO):
 
 ```go
-// §3 OtcOffer
-type OtcOffer struct {
-    Stock          StockDescription `json:"stock"`           // {ticker}
-    SettlementDate string           `json:"settlementDate"`
-    PricePerUnit   MonetaryValue    `json:"pricePerUnit"`    // {currency, amount}
-    Premium        MonetaryValue    `json:"premium"`         // {currency, amount}
-    BuyerID        ForeignBankId    `json:"buyerId"`
-    SellerID       ForeignBankId    `json:"sellerId"`
-    Amount         int64            `json:"amount"`
-    LastModifiedBy ForeignBankId    `json:"lastModifiedBy"`
-
-    // Local extensions — omitempty (non-spec; peers ignore)
-    ParentOfferID      *ForeignBankId `json:"parentOfferId,omitempty"`
-    BuyerAccountNumber string         `json:"buyerAccountNumber,omitempty"`
-}
-type MonetaryValue struct {            // §2.5
-    Currency string          `json:"currency"`
-    Amount   decimal.Decimal `json:"amount"`
-}
-
-// §3.4 — OtcOffer & { isOngoing } (flattened; isOngoing derived from status)
-type OtcNegotiation struct {
-    OtcOffer
-    IsOngoing bool `json:"isOngoing"`
-}
-
-// §3.1 — BARE array
-type PublicStock struct {
-    Stock   StockDescription `json:"stock"`   // {ticker}
-    Sellers []PublicSeller   `json:"sellers"` // grouped per stock
-}
+type StockDescription struct { Ticker string `json:"ticker"` }
 type PublicSeller struct {
     Seller ForeignBankId `json:"seller"`
     Amount int64         `json:"amount"`
 }
-// handler returns []PublicStock directly (no { "stocks": … } wrapper)
-
-// §3.7
-type UserInformation struct {
-    BankDisplayName string `json:"bankDisplayName"`
-    DisplayName     string `json:"displayName"`
+type PublicStock struct {
+    Stock   StockDescription `json:"stock"`
+    Sellers []PublicSeller   `json:"sellers"`
 }
-
-// §2.7.2
-type OptionDescription struct {
-    NegotiationID  ForeignBankId    `json:"negotiationId"`
-    Stock          StockDescription `json:"stock"`        // {ticker}
-    PricePerUnit   MonetaryValue    `json:"pricePerUnit"` // {currency, amount}
-    SettlementDate string           `json:"settlementDate"`
-    Amount         int64            `json:"amount"`
-
-    Intent string `json:"intent,omitempty"` // local extension
-}
+type PublicStocksResponse []PublicStock // BARE array (was struct{ Stocks []… })
 ```
 
-Handler implications:
+#### 6.8b `GET /user/{rid}/{id}` — display names (§3.7)
 
-- `GET /public-stock` (§3.1): group the per-owner holdings the stock-service
-  returns by ticker into `PublicStock.sellers[]`; return a bare JSON array.
-- `POST /negotiations` (§3.2): accept a spec `OtcOffer`; respond with the new
-  negotiation's `ForeignBankId`.
-- `PUT /negotiations/{rid}/{id}` (§3.3): counter-offer; **409** when it is not the
-  caller's turn (turn is buyer's iff `lastModifiedBy != buyerId`) or negotiations
-  are closed.
-- `GET /negotiations/{rid}/{id}` (§3.4): return `OtcNegotiation` (offer +
-  `isOngoing`).
-- `DELETE /negotiations/{rid}/{id}` (§3.5): close; sets `isOngoing=false`.
-- `GET /negotiations/{rid}/{id}/accept` (§3.6): form the 4-posting transaction
-  (Buyer credit premium, Seller debit premium, Buyer debit one optionContract,
-  Seller credit one optionContract) expressed in spec `TxAccount` / `Asset` /
-  signed-amount terms, submit to the executor, and respond only on successful
-  submission. `optionContract(O)` per §3.6.1.
-- `GET /user/{rid}/{id}` (§3.7): return `{bankDisplayName, displayName}`; **404**
-  on unknown id.
+Spec response: `{ "bankDisplayName": string, "displayName": string }`. Today
+(`peer_user_handler.go:63,81`) we emit `{id, firstName, lastName}`. Change both
+success branches to:
+
+```go
+c.JSON(http.StatusOK, gin.H{
+    "bankDisplayName": h.ownBankDisplayName,                        // configured bank name
+    "displayName":     resp.GetFirstName() + " " + resp.GetLastName(),
+})
+```
+
+`PeerUserHandler` gains an `ownBankDisplayName string` field (wired from config —
+e.g. `OWN_BANK_NAME`, defaulting to the bank code as a string if unset). 404 on
+unknown id / foreign rid is unchanged. Update any consumer that reads
+`/user` (if otccache or a UI proxy decodes it) to the new shape.
+
+#### Unchanged OTC paths (already conformant — do not touch structurally)
+
+- `POST /negotiations` (§3.2): accepts spec `OtcOffer`, returns `ForeignBankId`.
+- `PUT /negotiations/{rid}/{id}` (§3.3): 409 on wrong turn / closed.
+- `GET /negotiations/{rid}/{id}` (§3.4): `OtcOffer & {isOngoing}`.
+- `DELETE /negotiations/{rid}/{id}` (§3.5).
+- `GET /negotiations/{rid}/{id}/accept` (§3.6): 4-posting formation. **Note:** the
+  accept postings are composed in `stock-service` (`peer_otc_grpc_handler.go`
+  `AcceptNegotiation`) and submitted via `InitiateOutboundTxWithPostings`; when
+  §6.1/§6.2 change the internal posting representation, this composition must be
+  updated in lockstep to emit the enriched proto postings (account/asset type
+  tags, signed-amount semantics).
 
 ### 6.9 HTTP semantics (§2.11)
 
@@ -382,30 +447,48 @@ Handler implications:
 
 ## 7. Files touched (indicative)
 
-- `contract/sitx/types.go`, `contract/sitx/otc_types.go` — DTO rewrite.
-- `contract/proto/transaction/transaction.proto` (+ regenerated `transactionpb`).
-- `api-gateway/internal/handler/peer_tx_handler.go`, `peer_otc_handler.go`,
-  `peer_user_handler.go`, `peer_tx_status_handler.go` — translation.
+- `contract/sitx/decimalnum.go` — **new** `DecimalNumber` (§6.1a).
+- `contract/sitx/types.go` — transaction-protocol DTO rewrite (§6.1).
+- `contract/sitx/otc_types.go` — **only** `PublicStock`/`PublicStocksResponse`
+  → spec bare-array shape (§6.8a). The `OtcOffer`/`OtcNegotiation` structs are
+  internal storage; leave their structure, but switch any money field that
+  reaches the wire to `DecimalNumber`.
+- `contract/proto/transaction/transaction.proto` (+ regenerated `transactionpb`)
+  — enrichment (§6.7). **No stock proto change** for `/public-stock` (grouping is
+  gateway-side).
+- `api-gateway/internal/handler/peer_tx_handler.go` — full translation rewrite
+  (§6.1/§6.2/§6.4).
+- `api-gateway/internal/handler/peer_otc_handler.go` — `GetPublicStocks` grouping
+  + bare array (§6.8a); `protoOfferToJSON`/`peerMonetaryValueReq` money-as-number
+  (§6.8c).
+- `api-gateway/internal/handler/peer_user_handler.go` — display-name shape +
+  `ownBankDisplayName` field (§6.8b).
+- `api-gateway/internal/handler/peer_otc_initiate_handler.go` — outbound offer
+  money-as-number (§6.8c).
 - `transaction-service/internal/handler/peer_tx_grpc_handler.go`,
   `transaction-service/internal/sitx/posting_executor.go`,
   `transaction-service/internal/sitx/peer_http_client.go` — enriched proto,
   sign/direction mapping, transactionId correlation, 202 handling, metadata.
 - `transaction-service/internal/model/peer_idempotence_record.go`,
   `outbound_peer_tx.go` — metadata columns.
-- `stock-service/internal/handler/peer_otc_grpc_handler.go`,
-  `internal/service/otc_negotiation_service.go`,
-  `internal/otccache/cache.go` — OTC reshaping, public-stock grouping.
+- `stock-service/internal/handler/peer_otc_grpc_handler.go` — accept-posting
+  composition updated to the enriched internal posting form (§6.8 note).
+- `stock-service/internal/otccache/cache.go` — `/public-stock` consume DTO →
+  spec bare array (§6.8a).
+- `api-gateway` config wiring for `OWN_BANK_NAME`; `docker-compose.yml` +
+  `docker-compose-remote.yml` env.
 - Specification.md, `docs/api/REST_API_v3.md`, Swagger — doc updates.
 
 ## 8. Test plan
 
 **Unit (per service + `contract/sitx`):**
 
-- Golden marshal/unmarshal tests asserting *exact* JSON for every rewritten DTO
-  against the spec (`Posting`, `Transaction`, `TransactionVote`,
-  `CommitTransaction`, `RollbackTransaction`, `OtcOffer`, `OtcNegotiation`,
-  `PublicStock[]`, `UserInformation`, `OptionDescription`, the `TxAccount` /
-  `Asset` variants).
+- `DecimalNumber` marshals as a bare JSON number and round-trips (incl. tolerant
+  unmarshal of a quoted string); `Posting.Amount` / OTC money render unquoted.
+- Golden marshal/unmarshal tests asserting *exact* JSON for every rewritten
+  transaction DTO against the spec (`Posting`, `Transaction`, `TransactionVote`,
+  `CommitTransaction`, `RollbackTransaction`, the `TxAccount` / `Asset` variants),
+  plus the spec `PublicStock[]` bare-array shape and `UserInformation`.
 - Union mapping tests including the **sign/direction inversion** (negative →
   internal DEBIT/outgoing, positive → internal CREDIT/incoming) and round-trip
   (inbound → internal → outbound reproduces the original signed posting).
@@ -414,9 +497,10 @@ Handler implications:
 - transactionId correlation: COMMIT/ROLLBACK resolve the record via
   `transactionId.id`; per-message unique idem keys; retransmit returns cached
   result.
-- OTC reshaping: `sellers[]` grouping, `isOngoing` derivation, MonetaryValue
-  encoding.
-- `amount` serializes as a JSON number, not a string.
+- `GetPublicStocks` groups per-owner rows by ticker into the bare
+  `[{stock, sellers[]}]` array; otccache `fetchPeer` decodes that shape into
+  cache `Offer` rows.
+- `GetUser` returns `{bankDisplayName, displayName}`; 404 on foreign rid unchanged.
 
 **Integration (`test-app/workflows`):**
 
