@@ -51,18 +51,23 @@ func TestOptionDescription_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestUserInformation_RoundTrip(t *testing.T) {
+func TestUserInformation_SpecShape(t *testing.T) {
 	in := sitx.UserInformation{
-		ID:        sitx.ForeignBankId{RoutingNumber: 222, ID: "u1"},
-		FirstName: "Marko",
-		LastName:  "Marković",
+		BankDisplayName: "EXBanka",
+		DisplayName:     "Marko Marković",
 	}
-	raw, _ := json.Marshal(in)
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(raw) != `{"bankDisplayName":"EXBanka","displayName":"Marko Marković"}` {
+		t.Fatalf("spec shape mismatch: %s", raw)
+	}
 	var out sitx.UserInformation
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if out.FirstName != "Marko" || out.ID.ID != "u1" {
+	if out.BankDisplayName != "EXBanka" || out.DisplayName != "Marko Marković" {
 		t.Errorf("got %+v", out)
 	}
 }

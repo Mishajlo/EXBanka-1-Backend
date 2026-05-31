@@ -77,11 +77,10 @@ type OptionDescription struct {
 	Intent         string          `json:"intent,omitempty"`
 }
 
-// UserInformation is the response shape of GET /user/{rid}/{id}.
+// UserInformation is the response shape of GET /user/{rid}/{id} (SI-TX §3.7).
 type UserInformation struct {
-	ID        ForeignBankId `json:"id"`
-	FirstName string        `json:"firstName"`
-	LastName  string        `json:"lastName"`
+	BankDisplayName string `json:"bankDisplayName"`
+	DisplayName     string `json:"displayName"`
 }
 
 // PublicSeller is one seller of a public stock (§3.1).
