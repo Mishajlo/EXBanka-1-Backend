@@ -22,12 +22,13 @@ import (
 // vote type so tests can assert the translated, enriched gRPC request.
 type fakePeerTxClient struct {
 	voteType  string
+	noVotes   []*transactionpb.SiTxNoVote
 	lastNewTx *transactionpb.SiTxNewTxRequest
 }
 
 func (f *fakePeerTxClient) HandleNewTx(ctx context.Context, in *transactionpb.SiTxNewTxRequest, opts ...grpc.CallOption) (*transactionpb.SiTxVoteResponse, error) {
 	f.lastNewTx = in
-	return &transactionpb.SiTxVoteResponse{Type: f.voteType}, nil
+	return &transactionpb.SiTxVoteResponse{Type: f.voteType, NoVotes: f.noVotes}, nil
 }
 
 func (f *fakePeerTxClient) HandleCommitTx(ctx context.Context, in *transactionpb.SiTxCommitRequest, opts ...grpc.CallOption) (*transactionpb.SiTxAckResponse, error) {
@@ -132,11 +133,79 @@ func TestPostInterbank_NewTx_SpecShape(t *testing.T) {
 	if fake.lastNewTx.GetPostings()[0].GetDirection() != "DEBIT" { // -260 → DEBIT
 		t.Fatalf("inversion wrong: %s", fake.lastNewTx.GetPostings()[0].GetDirection())
 	}
+	if fake.lastNewTx.GetPostings()[1].GetDirection() != "CREDIT" { // +260 → CREDIT
+		t.Fatalf("inversion wrong (positive leg): %s", fake.lastNewTx.GetPostings()[1].GetDirection())
+	}
+	if fake.lastNewTx.GetPostings()[1].GetAmount() != "260" {
+		t.Fatalf("positive-leg amount not forwarded: %s", fake.lastNewTx.GetPostings()[1].GetAmount())
+	}
 	if fake.lastNewTx.GetPostings()[0].GetAccountType() != "ACCOUNT" || fake.lastNewTx.GetPostings()[0].GetAssetType() != "MONAS" {
 		t.Fatalf("type tags not forwarded: %+v", fake.lastNewTx.GetPostings()[0])
 	}
 	if fake.lastNewTx.GetTransactionId().GetId() != "k1" || fake.lastNewTx.GetMessage() != "coffee" || fake.lastNewTx.GetPaymentCode() != "289" {
 		t.Fatalf("metadata/tx-id not forwarded: %+v", fake.lastNewTx)
+	}
+}
+
+func TestPostInterbank_NewTx_NoVote_ReattachesPosting(t *testing.T) {
+	fake := &fakePeerTxClient{
+		voteType: "NO",
+		noVotes: []*transactionpb.SiTxNoVote{
+			{Reason: "INSUFFICIENT_ASSET", PostingIndex: 1, PostingIndexSet: true},
+		},
+	}
+	h := handler.NewPeerTxHandler(fake)
+
+	body := `{"idempotenceKey":{"routingNumber":222,"locallyGeneratedKey":"k1"},"messageType":"NEW_TX","message":{"postings":[{"account":{"type":"ACCOUNT","num":"444000100182503611"},"amount":-260,"asset":{"type":"MONAS","asset":{"currency":"RSD"}}},{"account":{"type":"ACCOUNT","num":"111000141215476411"},"amount":260,"asset":{"type":"MONAS","asset":{"currency":"RSD"}}}],"transactionId":{"routingNumber":222,"id":"k1"},"message":"coffee","paymentCode":"289","paymentPurpose":"debt"}}`
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("peer_bank_code", "222")
+	c.Request = httptest.NewRequest(http.MethodPost, "/interbank", strings.NewReader(body))
+
+	h.PostInterbank(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal body: %v body=%s", err, w.Body.String())
+	}
+	if got["vote"] != "NO" {
+		t.Fatalf("expected NO vote, got: %v", got["vote"])
+	}
+	reasons, ok := got["reasons"].([]interface{})
+	if !ok || len(reasons) != 1 {
+		t.Fatalf("expected 1 reason, got: %v", got["reasons"])
+	}
+	reason0, ok := reasons[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("reason[0] not an object: %v", reasons[0])
+	}
+	if reason0["reason"] != "INSUFFICIENT_ASSET" {
+		t.Fatalf("reason[0].reason: %v", reason0["reason"])
+	}
+	posting, ok := reason0["posting"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("reason[0].posting missing/not an object: %v", reason0["posting"])
+	}
+	// FULL posting at index 1 (the +260 leg) must be re-attached.
+	account, ok := posting["account"].(map[string]interface{})
+	if !ok || account["num"] != "111000141215476411" {
+		t.Fatalf("reason[0].posting.account.num: %v", posting["account"])
+	}
+	if amt, ok := posting["amount"].(float64); !ok || amt != 260 {
+		t.Fatalf("reason[0].posting.amount: %v (want JSON number 260)", posting["amount"])
+	}
+	asset, ok := posting["asset"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("reason[0].posting.asset missing: %v", posting["asset"])
+	}
+	innerAsset, ok := asset["asset"].(map[string]interface{})
+	if !ok || innerAsset["currency"] != "RSD" {
+		t.Fatalf("reason[0].posting.asset.asset.currency: %v", asset["asset"])
 	}
 }
 
