@@ -31,6 +31,26 @@ type PeerIdempotenceRecord struct {
 	// via stock-service.PeerOTCService.RecordOptionContract; left
 	// untouched by HandleRollbackTx since no contract was written at
 	// vote time. Empty (`[]`) for non-OTC TXs.
-	OptionsJSON string    `gorm:"type:text;not null;default:'[]'"`
-	CreatedAt   time.Time `gorm:"not null"`
+	OptionsJSON string `gorm:"type:text;not null;default:'[]'"`
+	// Transaction metadata carried on the NEW_TX envelope (SI-TX §2.8.2),
+	// persisted so HandleCommitTx can surface Message as the ledger entry
+	// description, and so receiver-side reporting can show the payment code /
+	// purpose / call number the initiator sent.
+	Message        string `gorm:"type:text;not null;default:''"`
+	PaymentCode    string `gorm:"size:64;not null;default:''"`
+	PaymentPurpose string `gorm:"type:text;not null;default:''"`
+	CallNumber     string `gorm:"size:64;not null;default:''"`
+	// TxRoutingNumber / TxForeignID are the initiator's transactionId
+	// (ForeignBankId) carried on the NEW_TX. COMMIT_TX / ROLLBACK_TX correlate
+	// to this NEW_TX by transactionId — NOT by their own (per-message-unique)
+	// idempotence key — so the receiver resolves this record via TxForeignID.
+	TxRoutingNumber int64  `gorm:"not null;default:0"`
+	TxForeignID     string `gorm:"size:128;not null;default:''"`
+	// CommittedAt / RolledBackAt make COMMIT_TX / ROLLBACK_TX idempotent on
+	// retransmit: once set, a re-delivered COMMIT/ROLLBACK (which carries a
+	// fresh idempotence key each time) short-circuits as a no-op instead of
+	// re-applying the settle/release.
+	CommittedAt  *time.Time
+	RolledBackAt *time.Time
+	CreatedAt    time.Time `gorm:"not null"`
 }
