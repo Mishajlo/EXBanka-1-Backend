@@ -101,7 +101,40 @@ func TestPeerOTC_GetPublicStocks(t *testing.T) {
 		t.Fatalf("unmarshal bare array: %v (body=%s)", err, w.Body.String())
 	}
 	if len(got) != 1 {
-		t.Errorf("expected 1 entry, got %d: %+v", len(got), got)
+		t.Fatalf("expected 1 entry, got %d: %+v", len(got), got)
+	}
+	// §3.1 inner shape: each entry groups a stock with its sellers.
+	entry, ok := got[0].(map[string]any)
+	if !ok {
+		t.Fatalf("entry not an object: %+v", got[0])
+	}
+	stock, ok := entry["stock"].(map[string]any)
+	if !ok {
+		t.Fatalf("stock not an object: %+v", entry["stock"])
+	}
+	if stock["ticker"] != "AAPL" {
+		t.Errorf("ticker: got %v, want AAPL", stock["ticker"])
+	}
+	sellers, ok := entry["sellers"].([]any)
+	if !ok || len(sellers) == 0 {
+		t.Fatalf("sellers not a non-empty array: %+v", entry["sellers"])
+	}
+	first, ok := sellers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("seller entry not an object: %+v", sellers[0])
+	}
+	seller, ok := first["seller"].(map[string]any)
+	if !ok {
+		t.Fatalf("seller not an object: %+v", first["seller"])
+	}
+	if seller["routingNumber"].(float64) != 111 {
+		t.Errorf("seller.routingNumber: got %v, want 111", seller["routingNumber"])
+	}
+	if seller["id"] != "client-7" {
+		t.Errorf("seller.id: got %v, want client-7", seller["id"])
+	}
+	if first["amount"].(float64) != 50 {
+		t.Errorf("amount: got %v, want 50", first["amount"])
 	}
 }
 
