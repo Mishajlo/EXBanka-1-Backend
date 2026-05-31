@@ -37,12 +37,18 @@ func TestTransaction_SpecCoffeeShape(t *testing.T) {
 }
 
 func TestTransactionVote_YesAndNo(t *testing.T) {
-	yes, _ := json.Marshal(TransactionVote{Vote: VoteYes})
+	yes, err := json.Marshal(TransactionVote{Vote: VoteYes})
+	if err != nil {
+		t.Fatalf("marshal yes vote: %v", err)
+	}
 	if string(yes) != `{"vote":"YES"}` {
 		t.Fatalf("yes vote: %s", yes)
 	}
 	p := Posting{Account: TxAccount{Type: "ACCOUNT", Num: "1"}, Amount: DecimalNumber{decimal.RequireFromString("5")}, Asset: Asset{Type: "MONAS", Asset: MonetaryAsset{Currency: "RSD"}}}
-	no, _ := json.Marshal(TransactionVote{Vote: VoteNo, Reasons: []NoVoteReason{{Reason: NoVoteReasonInsufficientAsset, Posting: &p}}})
+	no, err := json.Marshal(TransactionVote{Vote: VoteNo, Reasons: []NoVoteReason{{Reason: NoVoteReasonInsufficientAsset, Posting: &p}}})
+	if err != nil {
+		t.Fatalf("marshal no vote: %v", err)
+	}
 	want := `{"vote":"NO","reasons":[{"reason":"INSUFFICIENT_ASSET","posting":{"account":{"type":"ACCOUNT","num":"1"},"amount":5,"asset":{"type":"MONAS","asset":{"currency":"RSD"}}}}]}`
 	if string(no) != want {
 		t.Fatalf("no vote:\n got: %s\nwant: %s", string(no), want)
@@ -50,8 +56,18 @@ func TestTransactionVote_YesAndNo(t *testing.T) {
 }
 
 func TestCommitRollback_ForeignBankId(t *testing.T) {
-	c, _ := json.Marshal(CommitTransaction{TransactionID: ForeignBankId{RoutingNumber: 111, ID: "tx-1"}})
+	c, err := json.Marshal(CommitTransaction{TransactionID: ForeignBankId{RoutingNumber: 111, ID: "tx-1"}})
+	if err != nil {
+		t.Fatalf("marshal commit: %v", err)
+	}
 	if string(c) != `{"transactionId":{"routingNumber":111,"id":"tx-1"}}` {
 		t.Fatalf("commit: %s", c)
+	}
+	r, err := json.Marshal(RollbackTransaction{TransactionID: ForeignBankId{RoutingNumber: 111, ID: "tx-1"}})
+	if err != nil {
+		t.Fatalf("marshal rollback: %v", err)
+	}
+	if string(r) != `{"transactionId":{"routingNumber":111,"id":"tx-1"}}` {
+		t.Fatalf("rollback: %s", r)
 	}
 }

@@ -12,7 +12,9 @@ const (
 	MessageTypeRollbackTx = "ROLLBACK_TX"
 )
 
-// Posting direction values.
+// Posting direction values. NOTE: the spec wire Posting has NO direction field
+// (sign of Amount encodes it). These constants name the INTERNAL effect used by
+// the protobuf SiTxPosting and the executor/vote-builder, not a wire field.
 const (
 	DirectionDebit  = "DEBIT"
 	DirectionCredit = "CREDIT"
@@ -62,19 +64,23 @@ type TxAccount struct {
 	Num  string         `json:"num,omitempty"` // ACCOUNT
 }
 
-// MonetaryAsset / StockDescription are the §2.7 asset payloads.
+// MonetaryAsset is the §2.7 monetary asset payload (asset Type "MONAS").
 type MonetaryAsset struct {
 	Currency string `json:"currency"`
 }
 
-// StockDescription is the §2.7 stock asset payload.
+// StockDescription is the §2.7 stock asset payload (asset Type "STOCK").
 type StockDescription struct {
 	Ticker string `json:"ticker"`
 }
 
-// Asset is the §2.7 tagged union (holds MonetaryAsset, StockDescription, or OptionDescription).
+// Asset is the §2.7 tagged union (holds MonetaryAsset, StockDescription, or
+// OptionDescription depending on Type). NOTE: on unmarshal, Asset.Asset is
+// populated as map[string]interface{}, NOT the concrete type — callers (e.g.
+// mapping.go) must switch on Type and re-marshal/unmarshal into the concrete
+// type, or read fields out of the map.
 type Asset struct {
-	Type  string      `json:"type"`  // "MONAS" | "STOCK" | "OPTION"
+	Type  string      `json:"type"`
 	Asset interface{} `json:"asset"`
 }
 
@@ -96,8 +102,8 @@ type Transaction struct {
 	PaymentPurpose string        `json:"paymentPurpose"`
 }
 
-// CommitTransaction / RollbackTransaction reference the initiator's
-// transactionId as a ForeignBankId (§2.12.2 / §2.12.3).
+// CommitTransaction is the body of a COMMIT_TX message (§2.12.2); it references
+// the initiator's transactionId as a ForeignBankId.
 type CommitTransaction struct {
 	TransactionID ForeignBankId `json:"transactionId"`
 }
