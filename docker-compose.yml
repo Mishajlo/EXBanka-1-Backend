@@ -683,6 +683,7 @@ services:
       METRICS_PORT: "9100"
       REDIS_ADDR: "redis:6379"
       OWN_BANK_CODE: "${OWN_BANK_CODE:-111}"
+      OWN_BANK_NAME: "${OWN_BANK_NAME:-EXBanka}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

@@ -7282,14 +7282,16 @@ Returns identity info for a counterparty user. Peers call this when displaying u
 - `rid` — must match `OWN_BANK_CODE`'s routing number; otherwise 404 (we don't proxy lookups across banks).
 - `id` — `client-<n>` or `employee-<n>` format; routes to client-service or user-service accordingly.
 
-**Response 200:**
+**Response 200:** (SI-TX §3.7 shape)
 ```json
 {
-  "id":        {"routingNumber": 111, "id": "client-7"},
-  "firstName": "Marko",
-  "lastName":  "Marković"
+  "bankDisplayName": "EXBanka",
+  "displayName":     "Marko Marković"
 }
 ```
+
+- `bankDisplayName` — this bank's human-readable name, from `OWN_BANK_NAME` (falls back to `OWN_BANK_CODE` when unset).
+- `displayName` — the user's first + last name, space-joined.
 
 **Response 404:** Foreign rid or unknown user id.
 
