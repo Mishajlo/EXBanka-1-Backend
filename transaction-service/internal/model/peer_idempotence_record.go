@@ -59,5 +59,9 @@ type PeerIdempotenceRecord struct {
 	// re-applying the settle/release.
 	CommittedAt  *time.Time
 	RolledBackAt *time.Time
-	CreatedAt    time.Time `gorm:"not null"`
+	// Status is "pending" while a 202-async reserve runs in the background,
+	// or "done" once the vote is cached. Synchronous (fast-path) inserts go
+	// straight to "done". Existing rows default to "done".
+	Status    string    `gorm:"size:16;not null;default:'done'"`
+	CreatedAt time.Time `gorm:"not null"`
 }

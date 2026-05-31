@@ -6,6 +6,7 @@ import (
 
 	"github.com/exbanka/transaction-service/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // PeerIdempotenceRepository is the receiver-side replay cache for SI-TX.
@@ -26,6 +27,49 @@ func NewPeerIdempotenceRepository(db *gorm.DB) *PeerIdempotenceRepository {
 // before sending a response").
 func (r *PeerIdempotenceRepository) Insert(rec *model.PeerIdempotenceRecord) error {
 	return r.db.Create(rec).Error
+}
+
+// UpsertDone writes (or overwrites) the record as status="done" with the
+// cached vote + debits/options/meta. Replaces the plain Insert on the cache
+// path; on the 202-async path it overwrites the pending row left by the
+// timeout. Keyed on (peer_bank_code, locally_generated_key).
+func (r *PeerIdempotenceRepository) UpsertDone(rec *model.PeerIdempotenceRecord) error {
+	rec.Status = "done"
+	if rec.DebitsJSON == "" {
+		rec.DebitsJSON = "[]"
+	}
+	if rec.OptionsJSON == "" {
+		rec.OptionsJSON = "[]"
+	}
+	return r.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "peer_bank_code"}, {Name: "locally_generated_key"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"status", "transaction_id", "response_payload_json", "debits_json",
+			"options_json", "message", "payment_code", "payment_purpose",
+			"call_number", "tx_routing_number", "tx_foreign_id",
+		}),
+	}).Create(rec).Error
+}
+
+// UpsertPending creates a status="pending" placeholder row iff none exists
+// (ON CONFLICT DO NOTHING) — it never clobbers a done row written by a worker
+// that finished as the deadline fired. ResponsePayloadJSON gets a "{}"
+// placeholder to satisfy NOT NULL.
+func (r *PeerIdempotenceRepository) UpsertPending(rec *model.PeerIdempotenceRecord) error {
+	rec.Status = "pending"
+	if rec.ResponsePayloadJSON == "" {
+		rec.ResponsePayloadJSON = "{}"
+	}
+	if rec.DebitsJSON == "" {
+		rec.DebitsJSON = "[]"
+	}
+	if rec.OptionsJSON == "" {
+		rec.OptionsJSON = "[]"
+	}
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "peer_bank_code"}, {Name: "locally_generated_key"}},
+		DoNothing: true,
+	}).Create(rec).Error
 }
 
 // Lookup returns (record, true, nil) on hit, (nil, false, nil) on miss,
