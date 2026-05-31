@@ -85,15 +85,13 @@ func TestConformance(t *testing.T) {
 			},
 		},
 		{
-			// UserInformation's Go struct is {id, firstName, lastName}, which does
-			// NOT match the spec §3.7 shape. The gateway /user handler emits the
-			// spec shape via gin.H, so the fixture reflects {bankDisplayName,
-			// displayName} built from a map rather than UserInformation.
+			// UserInformation is the spec §3.7 shape {bankDisplayName, displayName};
+			// the gateway /user handler emits the same shape.
 			name:    "user",
 			fixture: "user.json",
-			value: map[string]string{
-				"bankDisplayName": "EXBanka",
-				"displayName":     "Marko Marković",
+			value: UserInformation{
+				BankDisplayName: "EXBanka",
+				DisplayName:     "Marko Marković",
 			},
 		},
 	}
