@@ -20,8 +20,12 @@ func (d DecimalNumber) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON accepts either a JSON number or a quoted string (tolerant of
-// peers that still quote), parsing without float64 rounding.
+// peers that still quote), parsing without float64 rounding. The JSON literal
+// null is treated as a no-op (value left unchanged) per encoding/json contract.
 func (d *DecimalNumber) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		return nil
+	}
 	s := strings.Trim(string(b), `"`)
 	v, err := decimal.NewFromString(s)
 	if err != nil {
