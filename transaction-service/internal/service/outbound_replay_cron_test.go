@@ -41,7 +41,7 @@ func TestOutboundReplayCron_RetriesPendingRow_OnYESCommits(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&probe)
 		if probe["messageType"] == contractsitx.MessageTypeNewTx {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"type":"YES"}`))
+			_, _ = w.Write([]byte(`{"vote":"YES"}`))
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -53,7 +53,7 @@ func TestOutboundReplayCron_RetriesPendingRow_OnYESCommits(t *testing.T) {
 		IdempotenceKey: "cron-1",
 		PeerBankCode:   "222",
 		TxKind:         "transfer",
-		PostingsJSON:   `[{"routingNumber":111,"accountId":"111-A","assetId":"RSD","amount":"100","direction":"DEBIT"},{"routingNumber":222,"accountId":"222-B","assetId":"RSD","amount":"100","direction":"CREDIT"}]`,
+		PostingsJSON:   `[{"routingNumber":111,"accountType":"ACCOUNT","accountId":"111-A","assetType":"MONAS","assetId":"RSD","amount":"100","direction":"DEBIT"},{"routingNumber":222,"accountType":"ACCOUNT","accountId":"222-B","assetType":"MONAS","assetId":"RSD","amount":"100","direction":"CREDIT"}]`,
 		Status:         "pending",
 	}
 	if err := repo.Create(row); err != nil {
@@ -85,7 +85,7 @@ func TestOutboundReplayCron_OTCRow_InvokesLocalCommitBeforePostCommit(t *testing
 		_ = json.NewDecoder(r.Body).Decode(&probe)
 		if probe["messageType"] == contractsitx.MessageTypeNewTx {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"type":"YES"}`))
+			_, _ = w.Write([]byte(`{"vote":"YES"}`))
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -97,7 +97,7 @@ func TestOutboundReplayCron_OTCRow_InvokesLocalCommitBeforePostCommit(t *testing
 		IdempotenceKey: "otc-row-1",
 		PeerBankCode:   "222",
 		TxKind:         "otc-accept",
-		PostingsJSON:   `[{"routingNumber":111,"accountId":"111-A","assetId":"RSD","amount":"100","direction":"DEBIT"},{"routingNumber":111,"accountId":"111-B","assetId":"AAPL","amount":"50","direction":"CREDIT"}]`,
+		PostingsJSON:   `[{"routingNumber":111,"accountType":"ACCOUNT","accountId":"111-A","assetType":"MONAS","assetId":"RSD","amount":"100","direction":"DEBIT"},{"routingNumber":111,"accountType":"ACCOUNT","accountId":"111-B","assetType":"STOCK","assetId":"AAPL","amount":"50","direction":"CREDIT"}]`,
 		Status:         "pending",
 	}
 	if err := repo.Create(row); err != nil {
@@ -137,7 +137,7 @@ func TestOutboundReplayCron_OTCRow_InvokesLocalCommitBeforePostCommit(t *testing
 func TestOutboundReplayCron_PeerVotesNO_MarksRolledBack(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"type":"NO","noVotes":[{"reason":"INSUFFICIENT_ASSET"}]}`))
+		_, _ = w.Write([]byte(`{"vote":"NO","reasons":[{"reason":"INSUFFICIENT_ASSET"}]}`))
 	}))
 	defer srv.Close()
 
