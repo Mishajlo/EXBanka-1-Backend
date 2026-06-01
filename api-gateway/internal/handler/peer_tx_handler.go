@@ -85,6 +85,12 @@ func (h *PeerTxHandler) PostInterbank(c *gin.Context) {
 			renderPeerGRPCError(c, err)
 			return
 		}
+		if resp.GetPending() {
+			// SI-TX §2.11: accepted, still processing; sender retransmits.
+			// AbortWithStatus flushes the header immediately (empty body).
+			c.AbortWithStatus(http.StatusAccepted)
+			return
+		}
 		vote := sitx.TransactionVote{Vote: resp.GetType()}
 		for _, nv := range resp.GetNoVotes() {
 			r := sitx.NoVoteReason{Reason: nv.GetReason()}

@@ -22,13 +22,14 @@ import (
 // vote type so tests can assert the translated, enriched gRPC request.
 type fakePeerTxClient struct {
 	voteType  string
+	pending   bool
 	noVotes   []*transactionpb.SiTxNoVote
 	lastNewTx *transactionpb.SiTxNewTxRequest
 }
 
 func (f *fakePeerTxClient) HandleNewTx(ctx context.Context, in *transactionpb.SiTxNewTxRequest, opts ...grpc.CallOption) (*transactionpb.SiTxVoteResponse, error) {
 	f.lastNewTx = in
-	return &transactionpb.SiTxVoteResponse{Type: f.voteType, NoVotes: f.noVotes}, nil
+	return &transactionpb.SiTxVoteResponse{Type: f.voteType, Pending: f.pending, NoVotes: f.noVotes}, nil
 }
 
 func (f *fakePeerTxClient) HandleCommitTx(ctx context.Context, in *transactionpb.SiTxCommitRequest, opts ...grpc.CallOption) (*transactionpb.SiTxAckResponse, error) {
@@ -144,6 +145,23 @@ func TestPostInterbank_NewTx_SpecShape(t *testing.T) {
 	}
 	if fake.lastNewTx.GetTransactionId().GetId() != "k1" || fake.lastNewTx.GetMessage() != "coffee" || fake.lastNewTx.GetPaymentCode() != "289" {
 		t.Fatalf("metadata/tx-id not forwarded: %+v", fake.lastNewTx)
+	}
+}
+
+func TestPostInterbank_NewTx_Pending_Returns202(t *testing.T) {
+	fake := &fakePeerTxClient{pending: true}
+	h := handler.NewPeerTxHandler(fake)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("peer_bank_code", "222")
+	c.Request = httptest.NewRequest(http.MethodPost, "/interbank",
+		strings.NewReader(`{"idempotenceKey":{"routingNumber":222,"locallyGeneratedKey":"k1"},"messageType":"NEW_TX","message":{"postings":[],"transactionId":{"routingNumber":222,"id":"k1"},"message":"","paymentCode":"","paymentPurpose":""}}`))
+	h.PostInterbank(c)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d body=%s", w.Code, w.Body.String())
+	}
+	if w.Body.Len() != 0 {
+		t.Fatalf("202 must have empty body, got %s", w.Body.String())
 	}
 }
 
