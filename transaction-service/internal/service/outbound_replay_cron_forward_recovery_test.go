@@ -24,7 +24,7 @@ func yesPeer(t *testing.T) (*httptest.Server, *int) {
 		switch probe["messageType"] {
 		case contractsitx.MessageTypeNewTx:
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"type":"YES"}`))
+			_, _ = w.Write([]byte(`{"vote":"YES"}`))
 		case contractsitx.MessageTypeRollbackTx:
 			rollbacks++
 			w.WriteHeader(http.StatusNoContent)
@@ -50,7 +50,7 @@ func TestForwardRecovery_CommittingRow_NeverCompensated(t *testing.T) {
 		IdempotenceKey: "commit-stuck-1",
 		PeerBankCode:   "222",
 		TxKind:         "otc-exercise",
-		PostingsJSON:   `[{"routingNumber":111,"accountId":"111-A","assetId":"RSD","amount":"100","direction":"DEBIT"},{"routingNumber":222,"accountId":"222-B","assetId":"RSD","amount":"100","direction":"CREDIT"}]`,
+		PostingsJSON:   `[{"routingNumber":111,"accountType":"ACCOUNT","accountId":"111-A","assetType":"MONAS","assetId":"RSD","amount":"100","direction":"DEBIT"},{"routingNumber":222,"accountType":"ACCOUNT","accountId":"222-B","assetType":"MONAS","assetId":"RSD","amount":"100","direction":"CREDIT"}]`,
 		Status:         "committing",
 		AttemptCount:   9, // well past maxAttempts
 	}

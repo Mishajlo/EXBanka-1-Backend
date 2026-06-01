@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,6 +49,20 @@ type PeerTxGRPCHandler struct {
 	peerLookup     PeerLookupFunc
 	ownRouting     int64
 	optionRecorder PeerOptionRecorder // optional; nil disables option-leg materialisation
+
+	// Receiver-side 202-async (Task 3): HandleNewTx returns the YES/NO vote
+	// synchronously if the background reserve worker finishes within
+	// receiveSyncDeadline; otherwise it returns HTTP 202 (pending) and the
+	// worker keeps running. inflight de-dups concurrent retransmits to a
+	// single worker per (peer:idem).
+	receiveSyncDeadline time.Duration
+	// workerTimeout bounds the background reserve worker's context so a hung
+	// account-service (slow/unreachable) can't leak the goroutine and keep the
+	// inflight entry forever. MUST be larger than receiveSyncDeadline. Set in
+	// NewPeerTxGRPCHandler; tests override it directly (in-package).
+	workerTimeout time.Duration
+	mu            sync.Mutex
+	inflight      map[string]chan struct{} // peer:idem -> done signal (closed when worker finishes)
 }
 
 // PeerLookupFunc resolves a peer-bank-code to a PeerHTTPTarget for outbound
@@ -63,15 +78,19 @@ func NewPeerTxGRPCHandler(
 	httpClient *sitx.PeerHTTPClient,
 	peerLookup PeerLookupFunc,
 	ownRouting int64,
+	receiveSyncDeadline time.Duration,
 ) *PeerTxGRPCHandler {
 	return &PeerTxGRPCHandler{
-		idemRepo:   idemRepo,
-		executor:   executor,
-		client:     accountClient,
-		outRepo:    outRepo,
-		httpClient: httpClient,
-		peerLookup: peerLookup,
-		ownRouting: ownRouting,
+		idemRepo:            idemRepo,
+		executor:            executor,
+		client:              accountClient,
+		outRepo:             outRepo,
+		httpClient:          httpClient,
+		peerLookup:          peerLookup,
+		ownRouting:          ownRouting,
+		receiveSyncDeadline: receiveSyncDeadline,
+		workerTimeout:       2 * time.Minute,
+		inflight:            make(map[string]chan struct{}),
 	}
 }
 
@@ -82,11 +101,15 @@ func (h *PeerTxGRPCHandler) SetOptionRecorder(r PeerOptionRecorder) {
 	h.optionRecorder = r
 }
 
-// HandleNewTx validates the inbound NEW_TX envelope, runs the cheap
-// balance check via vote_builder, and on YES executes the credit-side
-// reservations via posting_executor. The response is cached in
-// peer_idempotence_records so replays return the same vote without
-// re-executing.
+// HandleNewTx validates the inbound NEW_TX envelope, then runs the cheap
+// balance check + reservation in a background worker (Task 3, receiver-side
+// 202-async). If the worker finishes within receiveSyncDeadline it returns the
+// YES/NO vote synchronously (fast path, identical to the pre-async behaviour);
+// otherwise it returns HTTP 202 (pending) and leaves the worker running. The
+// final vote is cached in peer_idempotence_records (status="done") so a later
+// retransmit returns the same result without re-executing. A retransmit that
+// arrives while a `pending` row exists re-kicks the worker (restart recovery)
+// and returns pending again.
 func (h *PeerTxGRPCHandler) HandleNewTx(ctx context.Context, req *transactionpb.SiTxNewTxRequest) (*transactionpb.SiTxVoteResponse, error) {
 	idem := req.GetIdempotenceKey().GetLocallyGeneratedKey()
 	peerCode := req.GetPeerBankCode()
@@ -94,35 +117,134 @@ func (h *PeerTxGRPCHandler) HandleNewTx(ctx context.Context, req *transactionpb.
 		return nil, status.Error(codes.InvalidArgument, "missing idempotence_key or peer_bank_code")
 	}
 
-	// Replay-cache hit?
-	if existing, found, err := h.idemRepo.Lookup(peerCode, idem); err != nil {
+	existing, found, err := h.idemRepo.Lookup(peerCode, idem)
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "idem lookup: %v", err)
-	} else if found {
+	}
+	if found && existing.Status == "done" {
 		var cached transactionpb.SiTxVoteResponse
-		if jerr := json.Unmarshal([]byte(existing.ResponsePayloadJSON), &cached); jerr == nil {
+		if json.Unmarshal([]byte(existing.ResponsePayloadJSON), &cached) == nil {
 			return &cached, nil
 		}
-		// Cached payload corrupt — log and fall through to re-execute. The
-		// idem record's tx_id still anchors the response if we got here.
+		// corrupt payload — fall through to re-execute
 	}
 
 	postings := protoToPostings(req.GetPostings())
 
-	// Cheap balance check first — avoids hitting account-service for
-	// trivially-rejectable envelopes.
+	// Transaction metadata + correlation identity carried on the NEW_TX
+	// envelope, persisted on the idempotence record (Task 10/11). The
+	// initiator's transactionId is what COMMIT_TX / ROLLBACK_TX correlate to.
+	meta := txMeta{
+		Message:         req.GetMessage(),
+		PaymentCode:     req.GetPaymentCode(),
+		PaymentPurpose:  req.GetPaymentPurpose(),
+		CallNumber:      req.GetCallNumber(),
+		TxRoutingNumber: req.GetTransactionId().GetRoutingNumber(),
+		TxForeignID:     req.GetTransactionId().GetId(),
+	}
+
+	if found && existing.Status == "pending" {
+		h.startWorker(peerCode, idem, postings, meta) // re-kick if not in-flight (restart recovery)
+		return &transactionpb.SiTxVoteResponse{Pending: true}, nil
+	}
+
+	sig := h.startWorker(peerCode, idem, postings, meta)
+	select {
+	case <-sig:
+		// Only return the cached vote when the worker actually wrote a done
+		// record. If the worker aborted on an infra timeout (runReserve returns
+		// nil without caching), the row is still `pending` — re-reading it would
+		// unmarshal the placeholder "{}" payload into an empty/zero vote. Guard
+		// on Status=="done" so this path returns Pending instead of a bogus vote.
+		if rec, ok, lerr := h.idemRepo.Lookup(peerCode, idem); lerr == nil && ok && rec.Status == "done" {
+			var cached transactionpb.SiTxVoteResponse
+			if json.Unmarshal([]byte(rec.ResponsePayloadJSON), &cached) == nil {
+				return &cached, nil
+			}
+		}
+		return &transactionpb.SiTxVoteResponse{Pending: true}, nil
+	case <-time.After(h.receiveSyncDeadline):
+		_ = h.idemRepo.UpsertPending(&model.PeerIdempotenceRecord{
+			PeerBankCode: peerCode, LocallyGeneratedKey: idem,
+			TxRoutingNumber: meta.TxRoutingNumber, TxForeignID: meta.TxForeignID,
+			Message: meta.Message, PaymentCode: meta.PaymentCode,
+			PaymentPurpose: meta.PaymentPurpose, CallNumber: meta.CallNumber,
+		})
+		return &transactionpb.SiTxVoteResponse{Pending: true}, nil
+	}
+}
+
+// runReserve performs the cheap balance check + reservation and caches the
+// result as a done idempotence record. Returns the proto vote. Safe to call
+// from a background goroutine (uses the passed ctx) and idempotent on
+// (peerCode, idem) — re-running after a crash re-reserves harmlessly because
+// account-service reservations are keyed by peer:idem.
+func (h *PeerTxGRPCHandler) runReserve(ctx context.Context, peerCode, idem string, postings []contractsitx.InternalPosting, meta txMeta) *transactionpb.SiTxVoteResponse {
 	if vote := sitx.BuildPrelimVote(postings); vote.Type == contractsitx.VoteNo {
-		return cacheAndReturn(h.idemRepo, peerCode, idem, "", nil, nil, voteToProto(vote))
+		resp := voteToProto(vote)
+		_, _ = cacheAndReturn(h.idemRepo, peerCode, idem, "", nil, nil, meta, resp)
+		return resp
 	}
-
-	// Execute reservations.
 	res := h.executor.Reserve(ctx, postings, peerCode, idem)
-	if res.Vote.Type == contractsitx.VoteNo {
-		return cacheAndReturn(h.idemRepo, peerCode, idem, "", nil, nil, voteToProto(res.Vote))
+	if ctx.Err() != nil {
+		// Aborted by the worker timeout/cancel — the reserve was NOT a
+		// deterministic protocol reject, it's an infra timeout. Do NOT cache a
+		// done record (that would falsely freeze a NO vote and block re-kick).
+		// Leave the pending row as-is so a later retransmit re-kicks a fresh
+		// worker (idempotent on peer:idem).
+		return nil
 	}
-
+	if res.Vote.Type == contractsitx.VoteNo {
+		resp := voteToProto(res.Vote)
+		_, _ = cacheAndReturn(h.idemRepo, peerCode, idem, "", nil, nil, meta, resp)
+		return resp
+	}
 	txID := uuid.NewString()
 	resp := &transactionpb.SiTxVoteResponse{Type: contractsitx.VoteYes, TransactionId: txID}
-	return cacheAndReturn(h.idemRepo, peerCode, idem, txID, res.DebitedItems, res.OptionItems, resp)
+	_, _ = cacheAndReturn(h.idemRepo, peerCode, idem, txID, res.DebitedItems, res.OptionItems, meta, resp)
+	return resp
+}
+
+// startWorker ensures a single background worker runs for (peerCode, idem) and
+// returns a signal channel CLOSED when the worker finishes (after the done
+// record is committed). Concurrent callers for the same key share one worker.
+func (h *PeerTxGRPCHandler) startWorker(peerCode, idem string, postings []contractsitx.InternalPosting, meta txMeta) chan struct{} {
+	key := peerCode + ":" + idem
+	h.mu.Lock()
+	if sig, ok := h.inflight[key]; ok {
+		h.mu.Unlock()
+		return sig
+	}
+	sig := make(chan struct{})
+	h.inflight[key] = sig
+	h.mu.Unlock()
+	go func() {
+		// Bounded background context: the worker must outlive the gRPC request
+		// that returned 202, but a hung account-service must NOT leak the
+		// goroutine forever. On timeout runReserve writes no done record (see
+		// there), so the pending row stays pending and the next retransmit
+		// re-kicks a fresh worker (idempotent on peer:idem). A process restart
+		// likewise abandons it; the next retransmit re-kicks.
+		ctx, cancel := context.WithTimeout(context.Background(), h.workerTimeout)
+		defer cancel()
+		h.runReserve(ctx, peerCode, idem, postings, meta)
+		h.mu.Lock()
+		delete(h.inflight, key)
+		h.mu.Unlock()
+		close(sig)
+	}()
+	return sig
+}
+
+// txMeta carries the NEW_TX envelope metadata + initiator transactionId
+// threaded onto the idempotence record at NEW_TX time.
+type txMeta struct {
+	Message         string
+	PaymentCode     string
+	PaymentPurpose  string
+	CallNumber      string
+	TxRoutingNumber int64
+	TxForeignID     string
 }
 
 // cacheAndReturn inserts the idempotence record and returns the response.
@@ -136,7 +258,7 @@ func (h *PeerTxGRPCHandler) HandleNewTx(ctx context.Context, req *transactionpb.
 // the IB later sends ROLLBACK_TX. Pass nil (or empty slice) when there
 // were no DEBIT postings on this bank's routing. options carries the
 // option-asset legs to materialise at COMMIT_TX time.
-func cacheAndReturn(repo *repository.PeerIdempotenceRepository, peerCode, idem, txID string, debits []sitx.DebitedItem, options []sitx.OptionItem, resp *transactionpb.SiTxVoteResponse) (*transactionpb.SiTxVoteResponse, error) {
+func cacheAndReturn(repo *repository.PeerIdempotenceRepository, peerCode, idem, txID string, debits []sitx.DebitedItem, options []sitx.OptionItem, meta txMeta, resp *transactionpb.SiTxVoteResponse) (*transactionpb.SiTxVoteResponse, error) {
 	payload, _ := json.Marshal(resp)
 	debitsJSON := "[]"
 	if len(debits) > 0 {
@@ -157,42 +279,63 @@ func cacheAndReturn(repo *repository.PeerIdempotenceRepository, peerCode, idem, 
 		ResponsePayloadJSON: string(payload),
 		DebitsJSON:          debitsJSON,
 		OptionsJSON:         optionsJSON,
+		Message:             meta.Message,
+		PaymentCode:         meta.PaymentCode,
+		PaymentPurpose:      meta.PaymentPurpose,
+		CallNumber:          meta.CallNumber,
+		TxRoutingNumber:     meta.TxRoutingNumber,
+		TxForeignID:         meta.TxForeignID,
 	}
-	if err := repo.Insert(rec); err != nil {
+	if err := repo.UpsertDone(rec); err != nil {
 		return nil, status.Errorf(codes.Internal, "idem insert: %v", err)
 	}
 	return resp, nil
 }
 
 func (h *PeerTxGRPCHandler) HandleCommitTx(ctx context.Context, req *transactionpb.SiTxCommitRequest) (*transactionpb.SiTxAckResponse, error) {
-	idem := req.GetIdempotenceKey().GetLocallyGeneratedKey()
+	// The COMMIT carries its OWN (per-message-unique) idempotence key, which is
+	// DIFFERENT from the NEW_TX's. We correlate to the original NEW_TX by
+	// transactionId (== the NEW_TX's locally_generated_key, L), NOT by this
+	// message's own key.
 	peerCode := req.GetPeerBankCode()
-	if idem == "" || peerCode == "" {
-		return nil, status.Error(codes.InvalidArgument, "missing idempotence_key or peer_bank_code")
+	txForeignID := req.GetTransactionId().GetId()
+	if txForeignID == "" || peerCode == "" {
+		return nil, status.Error(codes.InvalidArgument, "missing transaction_id or peer_bank_code")
 	}
-	rec, found, err := h.idemRepo.Lookup(peerCode, idem)
+	// Correlate to the NEW_TX by the INITIATOR's transactionId (tx_foreign_id
+	// column), NOT by locally_generated_key — SI-TX §2.8.2 treats transactionId
+	// as independent of the idempotence key, so a spec-conformant peer may pick a
+	// transactionId.id different from its NEW_TX key.
+	rec, found, err := h.idemRepo.LookupByTransactionID(peerCode, txForeignID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "lookup: %v", err)
 	}
 	if !found {
-		return nil, status.Error(codes.NotFound, "no NEW_TX record for this idempotence key")
+		return nil, status.Error(codes.NotFound, "no NEW_TX record for this transaction_id")
 	}
 	if rec.TransactionID == "" {
 		// Previous NEW_TX was a NO vote — nothing to commit.
 		return nil, status.Error(codes.FailedPrecondition, "previous NEW_TX vote was NO; cannot COMMIT")
 	}
-	// CommitIncoming is idempotent on the reservation key. We don't
-	// have the per-posting list at commit time (it was discarded after
-	// NEW_TX); the reservation key is "<peerCode>:<idem>". Account-service
-	// commits whatever was reserved under that key. NotFound is benign
-	// here — it means this bank had no CREDIT postings on the original
-	// NEW_TX (e.g., the OTC accept flow can land on a peer that only
-	// had DEBIT postings, which were already finalised at vote-YES time
-	// and need no commit step).
-	key := peerCode + ":" + idem
+	// Retransmit dedup: a re-delivered COMMIT (fresh idem each time) is a no-op
+	// once we've already committed this NEW_TX. The underlying account-service
+	// calls are themselves idempotent, so this is a fast-path short-circuit.
+	if rec.CommittedAt != nil {
+		return &transactionpb.SiTxAckResponse{}, nil
+	}
+	// All reservation keys are derived from the ORIGINAL NEW_TX key (L), which
+	// is rec.LocallyGeneratedKey — never from the COMMIT message's own key.
+	key := peerCode + ":" + rec.LocallyGeneratedKey
+	// CommitIncoming is idempotent on the reservation key. Account-service
+	// commits whatever was reserved under that key, writing the initiator's
+	// Message as the ledger entry description. NotFound is benign here — it
+	// means this bank had no CREDIT postings on the original NEW_TX (e.g., the
+	// OTC accept flow can land on a peer that only had DEBIT postings, which
+	// were already finalised at vote-YES time and need no commit step).
 	if _, cerr := h.client.CommitIncoming(ctx, &accountpb.CommitIncomingRequest{
 		ReservationKey: key,
 		IdempotencyKey: "sitx-commit-" + key,
+		Memo:           rec.Message,
 	}); cerr != nil {
 		if status.Code(cerr) != codes.NotFound {
 			return nil, status.Errorf(codes.Internal, "commit: %v", cerr)
@@ -225,6 +368,12 @@ func (h *PeerTxGRPCHandler) HandleCommitTx(ctx context.Context, req *transaction
 	// which is no longer available at commit time.
 	if err := h.materialiseOptions(ctx, rec.OptionsJSON, key); err != nil {
 		return nil, status.Errorf(codes.Internal, "record options: %v", err)
+	}
+	// Stamp committed_at so a retransmitted COMMIT short-circuits next time.
+	// All side effects above are idempotent, so a crash before this stamp just
+	// replays them on the next COMMIT delivery.
+	if _, merr := h.idemRepo.MarkCommitted(rec.ID); merr != nil {
+		return nil, status.Errorf(codes.Internal, "mark committed: %v", merr)
 	}
 	return &transactionpb.SiTxAckResponse{}, nil
 }
@@ -288,12 +437,16 @@ func (h *PeerTxGRPCHandler) materialiseOptions(ctx context.Context, optionsJSON,
 }
 
 func (h *PeerTxGRPCHandler) HandleRollbackTx(ctx context.Context, req *transactionpb.SiTxRollbackRequest) (*transactionpb.SiTxAckResponse, error) {
-	idem := req.GetIdempotenceKey().GetLocallyGeneratedKey()
+	// ROLLBACK carries its OWN (per-message-unique) idempotence key; we correlate
+	// to the original NEW_TX by transactionId (== the NEW_TX's L).
 	peerCode := req.GetPeerBankCode()
-	if idem == "" || peerCode == "" {
-		return nil, status.Error(codes.InvalidArgument, "missing idempotence_key or peer_bank_code")
+	txForeignID := req.GetTransactionId().GetId()
+	if txForeignID == "" || peerCode == "" {
+		return nil, status.Error(codes.InvalidArgument, "missing transaction_id or peer_bank_code")
 	}
-	rec, found, err := h.idemRepo.Lookup(peerCode, idem)
+	// Correlate by the INITIATOR's transactionId (tx_foreign_id column), spec-
+	// independent of the NEW_TX idempotence key — see HandleCommitTx.
+	rec, found, err := h.idemRepo.LookupByTransactionID(peerCode, txForeignID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "lookup: %v", err)
 	}
@@ -301,7 +454,21 @@ func (h *PeerTxGRPCHandler) HandleRollbackTx(ctx context.Context, req *transacti
 		// No record → nothing to roll back. Idempotent.
 		return &transactionpb.SiTxAckResponse{}, nil
 	}
-	key := peerCode + ":" + idem
+	// A committed TX cannot be rolled back. If the NEW_TX already COMMITTED
+	// (committed_at set), a late/duplicate ROLLBACK must be a safe no-op — never
+	// release settled funds. This guards the spec's "ili u celosti, ili ne
+	// uopšte" atomicity against a peer that (incorrectly or due to a race) sends
+	// both COMMIT_TX and ROLLBACK_TX for the same transactionId.
+	if rec.CommittedAt != nil {
+		return &transactionpb.SiTxAckResponse{}, nil
+	}
+	// Retransmit dedup: a re-delivered ROLLBACK is a no-op once already done.
+	if rec.RolledBackAt != nil {
+		return &transactionpb.SiTxAckResponse{}, nil
+	}
+	// All reservation keys are derived from the ORIGINAL NEW_TX key (L =
+	// rec.LocallyGeneratedKey), never from the ROLLBACK message's own key.
+	key := peerCode + ":" + rec.LocallyGeneratedKey
 	// Release CREDIT-side reservations (one reservation key per NEW_TX).
 	// NotFound is benign — the original NEW_TX may have had no CREDIT
 	// postings on this bank (DEBIT-only legs need credit-back below,
@@ -345,6 +512,10 @@ func (h *PeerTxGRPCHandler) HandleRollbackTx(ctx context.Context, req *transacti
 			}
 		}
 	}
+	// Stamp rolled_back_at so a retransmitted ROLLBACK short-circuits next time.
+	if _, merr := h.idemRepo.MarkRolledBack(rec.ID); merr != nil {
+		return nil, status.Errorf(codes.Internal, "mark rolled_back: %v", merr)
+	}
 	return &transactionpb.SiTxAckResponse{}, nil
 }
 
@@ -370,11 +541,14 @@ func (h *PeerTxGRPCHandler) InitiateOutboundTx(ctx context.Context, req *transac
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "amount: %v", err)
 	}
-	postings := []contractsitx.Posting{
-		{RoutingNumber: h.ownRouting, AccountID: req.GetFromAccountNumber(), AssetID: req.GetCurrency(), Amount: amt, Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: target.RoutingNumber, AccountID: req.GetToAccountNumber(), AssetID: req.GetCurrency(), Amount: amt, Direction: contractsitx.DirectionCredit},
+	// Internal (flat, magnitude-string) form, persisted for the replay cron's
+	// local reverse/commit dispatch. The wire envelope below carries the SPEC
+	// (signed) form built from these via InternalPostingToSpec.
+	internalPostings := []contractsitx.InternalPosting{
+		{RoutingNumber: h.ownRouting, AccountType: "ACCOUNT", AccountID: req.GetFromAccountNumber(), AssetType: "MONAS", AssetID: req.GetCurrency(), Amount: amt.Abs().String(), Direction: contractsitx.DirectionDebit},
+		{RoutingNumber: target.RoutingNumber, AccountType: "ACCOUNT", AccountID: req.GetToAccountNumber(), AssetType: "MONAS", AssetID: req.GetCurrency(), Amount: amt.Abs().String(), Direction: contractsitx.DirectionCredit},
 	}
-	postingsJSON, _ := json.Marshal(postings)
+	postingsJSON, _ := json.Marshal(internalPostings)
 	row := &model.OutboundPeerTx{
 		IdempotenceKey: idem,
 		PeerBankCode:   peerCode,
@@ -414,16 +588,37 @@ func (h *PeerTxGRPCHandler) InitiateOutboundTx(ctx context.Context, req *transac
 		return nil, status.Errorf(codes.Internal, "reserve: %v", err)
 	}
 
+	// Build the SPEC wire postings (signed amounts) from the internal form.
+	wirePostings, convErr := internalToSpecPostings(internalPostings)
+	if convErr != nil {
+		_ = h.outRepo.MarkRolledBack(idem, "build wire postings: "+convErr.Error())
+		// Reverse the hold we just placed before bailing — nothing was sent.
+		_, _ = h.client.ReleaseOutgoing(ctx, &accountpb.ReleaseOutgoingRequest{
+			ReservationKey: outKey,
+			IdempotencyKey: "peer-out-release-" + idem,
+		})
+		return nil, status.Errorf(codes.Internal, "build wire postings: %v", convErr)
+	}
+
+	// transactionId pins the ORIGINAL NEW_TX identity; COMMIT/ROLLBACK below
+	// correlate back to it while carrying their OWN fresh idempotence keys.
+	txID := contractsitx.ForeignBankId{RoutingNumber: h.ownRouting, ID: idem}
+
 	// Best-effort dispatch. On any error, the row stays pending and the
-	// replay cron picks it up on next tick.
+	// replay cron picks it up on next tick. NEW_TX idempotence key == idem (L);
+	// transactionId.id also == L so the receiver keys its record under L.
 	envelope := contractsitx.Message[contractsitx.Transaction]{
 		IdempotenceKey: contractsitx.IdempotenceKey{RoutingNumber: h.ownRouting, LocallyGeneratedKey: idem},
 		MessageType:    contractsitx.MessageTypeNewTx,
-		Message:        contractsitx.Transaction{Postings: postings},
+		Message: contractsitx.Transaction{
+			Postings:      wirePostings,
+			TransactionID: txID,
+			Message:       "Cross-bank payment",
+		},
 	}
 	if vote, err := h.httpClient.PostNewTx(ctx, target, envelope); err != nil {
 		_ = h.outRepo.MarkAttempt(idem, err.Error())
-	} else if vote.Type == contractsitx.VoteYes {
+	} else if vote.Vote == contractsitx.VoteYes {
 		// PIVOT into the forward-only commit phase BEFORE the peer commits or the
 		// hold settles. If anything below fails the row stays `committing` and
 		// OutboundReplayCron drives it to committed — it is NEVER compensated.
@@ -433,10 +628,12 @@ func (h *PeerTxGRPCHandler) InitiateOutboundTx(ctx context.Context, req *transac
 		if cerr := h.outRepo.MarkCommitting(idem); cerr != nil {
 			return &transactionpb.SiTxInitiateResponse{TransactionId: idem, PollUrl: "/api/v3/me/payments/" + idem, Status: "pending"}, nil
 		}
+		// COMMIT carries its OWN unique idempotence key (M), correlating to the
+		// NEW_TX (L) via Message.TransactionID.
 		commitEnvelope := contractsitx.Message[contractsitx.CommitTransaction]{
-			IdempotenceKey: contractsitx.IdempotenceKey{RoutingNumber: h.ownRouting, LocallyGeneratedKey: idem},
+			IdempotenceKey: contractsitx.IdempotenceKey{RoutingNumber: h.ownRouting, LocallyGeneratedKey: uuid.NewString()},
 			MessageType:    contractsitx.MessageTypeCommitTx,
-			Message:        contractsitx.CommitTransaction{TransactionID: idem},
+			Message:        contractsitx.CommitTransaction{TransactionID: txID},
 		}
 		if err := h.httpClient.PostCommitTx(ctx, target, commitEnvelope); err != nil {
 			_ = h.outRepo.MarkAttempt(idem, "commit: "+err.Error())
@@ -455,8 +652,8 @@ func (h *PeerTxGRPCHandler) InitiateOutboundTx(ctx context.Context, req *transac
 		}
 	} else {
 		reason := "peer voted NO"
-		if len(vote.NoVotes) > 0 {
-			reason = "peer voted NO: " + vote.NoVotes[0].Reason
+		if len(vote.Reasons) > 0 {
+			reason = "peer voted NO: " + vote.Reasons[0].Reason
 		}
 		// Atomicity (Celina 5: "ili u celosti, ili ne uopšte"): release the
 		// sender's hold on a NO vote (no Balance ever moved — only the hold is
@@ -472,7 +669,7 @@ func (h *PeerTxGRPCHandler) InitiateOutboundTx(ctx context.Context, req *transac
 		} else {
 			_ = h.outRepo.MarkRolledBack(idem, reason)
 			// Release any reservation the peer placed before its NO vote.
-			h.rollbackPeer(ctx, target, idem)
+			h.rollbackPeer(ctx, target, txID)
 		}
 	}
 
@@ -505,17 +702,9 @@ func (h *PeerTxGRPCHandler) InitiateOutboundTxWithPostings(ctx context.Context, 
 	}
 
 	idem := uuid.NewString()
-	postings := make([]contractsitx.Posting, 0, len(req.GetPostings()))
-	for _, p := range req.GetPostings() {
-		amt, _ := decimal.NewFromString(p.GetAmount())
-		postings = append(postings, contractsitx.Posting{
-			RoutingNumber: p.GetRoutingNumber(),
-			AccountID:     p.GetAccountId(),
-			AssetID:       p.GetAssetId(),
-			Amount:        amt,
-			Direction:     p.GetDirection(),
-		})
-	}
+	// The incoming proto postings are already in the executor's internal form
+	// (flat, magnitude-string Amount + explicit account/asset type tags).
+	postings := protoToPostings(req.GetPostings())
 	postingsJSON, _ := json.Marshal(postings)
 
 	txKind := req.GetTxKind()
@@ -552,14 +741,30 @@ func (h *PeerTxGRPCHandler) InitiateOutboundTxWithPostings(ctx context.Context, 
 		return nil, status.Error(codes.FailedPrecondition, reason)
 	}
 
+	// Build SPEC wire postings (signed amounts) from the internal form.
+	wirePostings, convErr := internalToSpecPostings(postings)
+	if convErr != nil {
+		_ = h.outRepo.MarkRolledBack(idem, "build wire postings: "+convErr.Error())
+		// Reverse the local legs we just reserved before bailing.
+		_ = h.executor.ReverseLocal(ctx, postings, ownPeerCode, idem)
+		return nil, status.Errorf(codes.Internal, "build wire postings: %v", convErr)
+	}
+	// transactionId pins the original NEW_TX identity (L). COMMIT/ROLLBACK
+	// correlate to it while carrying their own fresh idempotence keys.
+	txID := contractsitx.ForeignBankId{RoutingNumber: h.ownRouting, ID: idem}
+
 	envelope := contractsitx.Message[contractsitx.Transaction]{
 		IdempotenceKey: contractsitx.IdempotenceKey{RoutingNumber: h.ownRouting, LocallyGeneratedKey: idem},
 		MessageType:    contractsitx.MessageTypeNewTx,
-		Message:        contractsitx.Transaction{Postings: postings},
+		Message: contractsitx.Transaction{
+			Postings:      wirePostings,
+			TransactionID: txID,
+			Message:       "Cross-bank OTC " + txKind,
+		},
 	}
 	if vote, err := h.httpClient.PostNewTx(ctx, target, envelope); err != nil {
 		_ = h.outRepo.MarkAttempt(idem, err.Error())
-	} else if vote.Type == contractsitx.VoteYes {
+	} else if vote.Vote == contractsitx.VoteYes {
 		// PIVOT: the peer voted YES → it has reserved and will honor a COMMIT.
 		// Durably cross into the `committing` phase BEFORE any local settle, so
 		// any failure below leaves the row forward-only (OutboundReplayCron drives
@@ -601,10 +806,12 @@ func (h *PeerTxGRPCHandler) InitiateOutboundTxWithPostings(ctx context.Context, 
 		}
 		// 4. Tell the peer to commit.
 		if localOK {
+			// COMMIT carries its OWN unique idempotence key (M), correlating to the
+			// NEW_TX (L) via Message.TransactionID.
 			commitEnvelope := contractsitx.Message[contractsitx.CommitTransaction]{
-				IdempotenceKey: contractsitx.IdempotenceKey{RoutingNumber: h.ownRouting, LocallyGeneratedKey: idem},
+				IdempotenceKey: contractsitx.IdempotenceKey{RoutingNumber: h.ownRouting, LocallyGeneratedKey: uuid.NewString()},
 				MessageType:    contractsitx.MessageTypeCommitTx,
-				Message:        contractsitx.CommitTransaction{TransactionID: idem},
+				Message:        contractsitx.CommitTransaction{TransactionID: txID},
 			}
 			if err := h.httpClient.PostCommitTx(ctx, target, commitEnvelope); err != nil {
 				_ = h.outRepo.MarkAttempt(idem, "commit: "+err.Error())
@@ -616,8 +823,8 @@ func (h *PeerTxGRPCHandler) InitiateOutboundTxWithPostings(ctx context.Context, 
 		}
 	} else {
 		reason := "peer voted NO"
-		if len(vote.NoVotes) > 0 {
-			reason = "peer voted NO: " + vote.NoVotes[0].Reason
+		if len(vote.Reasons) > 0 {
+			reason = "peer voted NO: " + vote.Reasons[0].Reason
 		}
 		// Peer voted NO → reverse our local legs via the executor: release the
 		// CREDIT-side reservation AND release each DEBIT-side outgoing HOLD
@@ -631,7 +838,7 @@ func (h *PeerTxGRPCHandler) InitiateOutboundTxWithPostings(ctx context.Context, 
 		} else {
 			_ = h.outRepo.MarkRolledBack(idem, reason)
 			// Release any reservation the peer placed before its NO vote.
-			h.rollbackPeer(ctx, target, idem)
+			h.rollbackPeer(ctx, target, txID)
 		}
 	}
 
@@ -665,7 +872,7 @@ func (h *PeerTxGRPCHandler) InitiateOutboundTxWithPostings(ctx context.Context, 
 // payment path — InitiateOutboundTx sets "payment". Routing "payment" through
 // the executor branch (the old bug) left the real "peer-out:<idem>" hold pending.
 func (h *PeerTxGRPCHandler) ReverseOutboundLocal(ctx context.Context, row *model.OutboundPeerTx) error {
-	var postings []contractsitx.Posting
+	var postings []contractsitx.InternalPosting
 	if err := json.Unmarshal([]byte(row.PostingsJSON), &postings); err != nil {
 		return err
 	}
@@ -719,7 +926,7 @@ func (h *PeerTxGRPCHandler) CommitOutboundLocal(ctx context.Context, row *model.
 	}); err != nil && status.Code(err) != codes.NotFound {
 		return err
 	}
-	var postings []contractsitx.Posting
+	var postings []contractsitx.InternalPosting
 	if err := json.Unmarshal([]byte(row.PostingsJSON), &postings); err != nil {
 		return err
 	}
@@ -744,18 +951,37 @@ func (h *PeerTxGRPCHandler) CommitOutboundLocal(ctx context.Context, row *model.
 // key, no-op when absent), so this is safe even when the peer reserved nothing.
 // Failure is logged, not fatal — the OutboundReplayCron/PeerTxReconciler and
 // the peer's own timeout sweeper are backstops.
-func (h *PeerTxGRPCHandler) rollbackPeer(ctx context.Context, target *sitx.PeerHTTPTarget, idem string) {
+func (h *PeerTxGRPCHandler) rollbackPeer(ctx context.Context, target *sitx.PeerHTTPTarget, txID contractsitx.ForeignBankId) {
 	if h.httpClient == nil || target == nil {
 		return
 	}
+	// ROLLBACK carries its OWN fresh idempotence key and correlates to the
+	// original NEW_TX via Message.TransactionID (the spec's per-message unique
+	// key rule). The receiver looks the record up by TransactionID, not by this
+	// message's own key.
 	env := contractsitx.Message[contractsitx.RollbackTransaction]{
-		IdempotenceKey: contractsitx.IdempotenceKey{RoutingNumber: h.ownRouting, LocallyGeneratedKey: idem},
+		IdempotenceKey: contractsitx.IdempotenceKey{RoutingNumber: h.ownRouting, LocallyGeneratedKey: uuid.NewString()},
 		MessageType:    contractsitx.MessageTypeRollbackTx,
-		Message:        contractsitx.RollbackTransaction{TransactionID: idem},
+		Message:        contractsitx.RollbackTransaction{TransactionID: txID},
 	}
 	if err := h.httpClient.PostRollbackTx(ctx, target, env); err != nil {
-		log.Printf("inline rollback: ROLLBACK_TX to %s for %s failed (peer may retain reservation until its sweeper): %v", target.BankCode, idem, err)
+		log.Printf("inline rollback: ROLLBACK_TX to %s for %s failed (peer may retain reservation until its sweeper): %v", target.BankCode, txID.ID, err)
 	}
+}
+
+// internalToSpecPostings converts the flat internal postings to the signed
+// SPEC wire postings via the shared contract mapping (so the sign↔direction
+// inversion is never hand-rolled).
+func internalToSpecPostings(in []contractsitx.InternalPosting) ([]contractsitx.Posting, error) {
+	out := make([]contractsitx.Posting, 0, len(in))
+	for _, ip := range in {
+		sp, err := contractsitx.InternalPostingToSpec(ip)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sp)
+	}
+	return out, nil
 }
 
 // GetTxStatus implements the Celina-5 CHECK_STATUS mechanism. A peer bank
@@ -788,9 +1014,9 @@ func (h *PeerTxGRPCHandler) GetTxStatus(ctx context.Context, req *transactionpb.
 	}
 
 	// 2. Check receiver-side: did WE receive a NEW_TX from this peer for
-	// this transaction? The idempotence record is keyed by (peer_bank_code,
-	// locally_generated_key). The locally_generated_key is the sender's UUID
-	// which we store as TransactionID in the idempotence record.
+	// this transaction? We correlate by the initiator's transactionId, which we
+	// persist in the tx_foreign_id column at NEW_TX time (LookupByTransactionID).
+	// This is independent of how the peer chose its NEW_TX idempotence key.
 	if callerCode != "" {
 		rec, found, err := h.idemRepo.LookupByTransactionID(callerCode, txID)
 		if err != nil {
@@ -832,22 +1058,23 @@ func senderState(s string) string {
 	}
 }
 
-func protoToPostings(in []*transactionpb.SiTxPosting) []contractsitx.Posting {
-	out := make([]contractsitx.Posting, len(in))
+func protoToPostings(in []*transactionpb.SiTxPosting) []contractsitx.InternalPosting {
+	out := make([]contractsitx.InternalPosting, len(in))
 	for i, p := range in {
-		amt, _ := decimal.NewFromString(p.GetAmount())
-		out[i] = contractsitx.Posting{
+		out[i] = contractsitx.InternalPosting{
 			RoutingNumber: p.GetRoutingNumber(),
 			AccountID:     p.GetAccountId(),
 			AssetID:       p.GetAssetId(),
-			Amount:        amt,
+			Amount:        p.GetAmount(),
 			Direction:     p.GetDirection(),
+			AccountType:   p.GetAccountType(),
+			AssetType:     p.GetAssetType(),
 		}
 	}
 	return out
 }
 
-func voteToProto(v contractsitx.TransactionVote) *transactionpb.SiTxVoteResponse {
+func voteToProto(v sitx.Vote) *transactionpb.SiTxVoteResponse {
 	out := &transactionpb.SiTxVoteResponse{Type: v.Type}
 	for _, nv := range v.NoVotes {
 		entry := &transactionpb.SiTxNoVote{Reason: nv.Reason}

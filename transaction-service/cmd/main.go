@@ -244,6 +244,7 @@ func main() {
 	peerTxHandler := handler.NewPeerTxGRPCHandler(
 		peerIdemRepo, peerExecutor, accountClient,
 		outRepo, peerHTTPClient, handler.PeerLookupFunc(peerLookup), ownRouting,
+		cfg.InterbankReceiveSyncDeadline,
 	)
 	if optionRecorder != nil {
 		peerTxHandler.SetOptionRecorder(optionRecorder)
