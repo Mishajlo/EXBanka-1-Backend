@@ -9,7 +9,6 @@ import (
 	contractsitx "github.com/exbanka/contract/sitx"
 	stockpb "github.com/exbanka/contract/stockpb"
 	"github.com/exbanka/transaction-service/internal/sitx"
-	"github.com/shopspring/decimal"
 	"google.golang.org/grpc"
 )
 
@@ -76,6 +75,37 @@ func (s *stubHoldingChecker) ValidatePeerOptionMoneyLeg(ctx context.Context, in 
 	return &stockpb.ValidatePeerOptionMoneyLegResponse{Ok: !s.validateDeny}, nil
 }
 
+// TestPostingExecutor_NoSuchAccount_PostingIndex is the Task 9 regression:
+// a 2-posting TX whose 2nd posting (index 1) credits a non-existent account on
+// OUR routing must vote NO with NO_SUCH_ACCOUNT and the offending posting's
+// 0-based index (1). The 1st posting is a DEBIT on the peer's routing (skipped
+// locally), so the failure is unambiguously index 1.
+func TestPostingExecutor_NoSuchAccount_PostingIndex(t *testing.T) {
+	stub := &stubAccountClient{
+		getAccountFn: func(ctx context.Context, in *accountpb.GetAccountByNumberRequest, opts ...grpc.CallOption) (*accountpb.AccountResponse, error) {
+			return nil, errors.New("not found")
+		},
+	}
+	exec := sitx.NewPostingExecutor(stub, 111)
+	postings := []contractsitx.InternalPosting{
+		money(222, "222000001", "RSD", 100, contractsitx.DirectionDebit), // index 0, peer routing → skipped
+		money(111, "111-nope", "RSD", 100, contractsitx.DirectionCredit), // index 1, our routing, missing account
+	}
+	res := exec.Reserve(context.Background(), postings, "222", "idem-NSA")
+	if res.Vote.Type != contractsitx.VoteNo {
+		t.Fatalf("expected NO, got %+v", res.Vote)
+	}
+	if len(res.Vote.NoVotes) != 1 || res.Vote.NoVotes[0].Reason != contractsitx.NoVoteReasonNoSuchAccount {
+		t.Fatalf("expected NO_SUCH_ACCOUNT, got %+v", res.Vote.NoVotes)
+	}
+	if res.Vote.NoVotes[0].Posting == nil {
+		t.Fatalf("expected posting index set on NO_SUCH_ACCOUNT, got nil")
+	}
+	if *res.Vote.NoVotes[0].Posting != 1 {
+		t.Errorf("expected posting index 1, got %d", *res.Vote.NoVotes[0].Posting)
+	}
+}
+
 // TestPostingExecutor_AccountInactive_Unacceptable verifies that an inactive
 // destination account on our routing yields UNACCEPTABLE_ASSET on a CREDIT.
 func TestPostingExecutor_AccountInactive_Unacceptable(t *testing.T) {
@@ -85,9 +115,9 @@ func TestPostingExecutor_AccountInactive_Unacceptable(t *testing.T) {
 		},
 	}
 	exec := sitx.NewPostingExecutor(stub, 111)
-	postings := []contractsitx.Posting{
-		{RoutingNumber: 222, AccountID: "222000001", AssetID: "RSD", Amount: decimal.NewFromInt(50), Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: 111, AccountID: "111000001", AssetID: "RSD", Amount: decimal.NewFromInt(50), Direction: contractsitx.DirectionCredit},
+	postings := []contractsitx.InternalPosting{
+		money(222, "222000001", "RSD", 50, contractsitx.DirectionDebit),
+		money(111, "111000001", "RSD", 50, contractsitx.DirectionCredit),
 	}
 	res := exec.Reserve(context.Background(), postings, "222", "idem-X")
 	if res.Vote.Type != contractsitx.VoteNo {
@@ -110,9 +140,9 @@ func TestPostingExecutor_ReserveFails_VotesNo(t *testing.T) {
 		},
 	}
 	exec := sitx.NewPostingExecutor(stub, 111)
-	postings := []contractsitx.Posting{
-		{RoutingNumber: 111, AccountID: "111000001", AssetID: "RSD", Amount: decimal.NewFromInt(50), Direction: contractsitx.DirectionCredit},
-		{RoutingNumber: 222, AccountID: "222000001", AssetID: "RSD", Amount: decimal.NewFromInt(50), Direction: contractsitx.DirectionDebit},
+	postings := []contractsitx.InternalPosting{
+		money(111, "111000001", "RSD", 50, contractsitx.DirectionCredit),
+		money(222, "222000001", "RSD", 50, contractsitx.DirectionDebit),
 	}
 	res := exec.Reserve(context.Background(), postings, "222", "idem-Y")
 	if res.Vote.Type != contractsitx.VoteNo {
@@ -136,9 +166,9 @@ func TestPostingExecutor_DebitFails_InsufficientAsset(t *testing.T) {
 		},
 	}
 	exec := sitx.NewPostingExecutor(stub, 111)
-	postings := []contractsitx.Posting{
-		{RoutingNumber: 111, AccountID: "111-A", AssetID: "RSD", Amount: decimal.NewFromInt(100), Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: 222, AccountID: "222-B", AssetID: "RSD", Amount: decimal.NewFromInt(100), Direction: contractsitx.DirectionCredit},
+	postings := []contractsitx.InternalPosting{
+		money(111, "111-A", "RSD", 100, contractsitx.DirectionDebit),
+		money(222, "222-B", "RSD", 100, contractsitx.DirectionCredit),
 	}
 	res := exec.Reserve(context.Background(), postings, "222", "idem-Z")
 	if res.Vote.Type != contractsitx.VoteNo {
@@ -157,13 +187,13 @@ func TestPostingExecutor_OptionItem_NoChecker_AlwaysIncluded(t *testing.T) {
 	stub := &stubAccountClient{}
 	exec := sitx.NewPostingExecutor(stub, 111)
 	optDesc := `{"ticker":"AAPL","amount":1}`
-	postings := []contractsitx.Posting{
+	postings := []contractsitx.InternalPosting{
 		// Money leg balances out.
-		{RoutingNumber: 111, AccountID: "111-pay", AssetID: "RSD", Amount: decimal.NewFromInt(100), Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: 222, AccountID: "222-pay", AssetID: "RSD", Amount: decimal.NewFromInt(100), Direction: contractsitx.DirectionCredit},
+		money(111, "111-pay", "RSD", 100, contractsitx.DirectionDebit),
+		money(222, "222-pay", "RSD", 100, contractsitx.DirectionCredit),
 		// Option leg: SELLER on routing 222, BUYER (credit) on routing 111.
-		{RoutingNumber: 222, AccountID: "client-7", AssetID: optDesc, Amount: decimal.NewFromInt(1), Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: 111, AccountID: "client-3", AssetID: optDesc, Amount: decimal.NewFromInt(1), Direction: contractsitx.DirectionCredit},
+		option(222, "client-7", optDesc, 1, contractsitx.DirectionDebit),
+		option(111, "client-3", optDesc, 1, contractsitx.DirectionCredit),
 	}
 	// Override the get-account stub so the money DEBIT on our routing succeeds.
 	stub.getAccountFn = func(ctx context.Context, in *accountpb.GetAccountByNumberRequest, opts ...grpc.CallOption) (*accountpb.AccountResponse, error) {
@@ -201,10 +231,10 @@ func TestPostingExecutor_OptionItem_HoldingChecker_RejectsOnInsufficient(t *test
 	exec := sitx.NewPostingExecutor(stub, 111)
 	exec.SetHoldingChecker(&stubHoldingChecker{resp: &stockpb.CheckSellerCanDeliverResponse{Ok: false}})
 	optDesc := `{"ticker":"GOOG","amount":2}`
-	postings := []contractsitx.Posting{
+	postings := []contractsitx.InternalPosting{
 		// Option DEBIT on our routing 111 = WE are the seller.
-		{RoutingNumber: 111, AccountID: "client-9", AssetID: optDesc, Amount: decimal.NewFromInt(2), Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: 222, AccountID: "client-10", AssetID: optDesc, Amount: decimal.NewFromInt(2), Direction: contractsitx.DirectionCredit},
+		option(111, "client-9", optDesc, 2, contractsitx.DirectionDebit),
+		option(222, "client-10", optDesc, 2, contractsitx.DirectionCredit),
 	}
 	res := exec.Reserve(context.Background(), postings, "222", "idem-OC")
 	if res.Vote.Type != contractsitx.VoteNo {
@@ -227,9 +257,9 @@ func TestPostingExecutor_OptionItem_ExerciseDoesNotReserve(t *testing.T) {
 	exec.SetHoldingChecker(hc)
 	// Option DEBIT on our routing 111 = WE are the seller; intent=exercise.
 	optDesc := `{"ticker":"MSFT","amount":3,"intent":"exercise"}`
-	postings := []contractsitx.Posting{
-		{RoutingNumber: 111, AccountID: "client-1", AssetID: optDesc, Amount: decimal.NewFromInt(3), Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: 222, AccountID: "client-2", AssetID: optDesc, Amount: decimal.NewFromInt(3), Direction: contractsitx.DirectionCredit},
+	postings := []contractsitx.InternalPosting{
+		option(111, "client-1", optDesc, 3, contractsitx.DirectionDebit),
+		option(222, "client-2", optDesc, 3, contractsitx.DirectionCredit),
 	}
 	res := exec.Reserve(context.Background(), postings, "222", "idem-EX")
 	if res.Vote.Type != contractsitx.VoteYes {
@@ -250,9 +280,9 @@ func TestPostingExecutor_OptionItem_HoldingChecker_OK(t *testing.T) {
 	exec := sitx.NewPostingExecutor(stub, 111)
 	exec.SetHoldingChecker(&stubHoldingChecker{resp: &stockpb.CheckSellerCanDeliverResponse{Ok: true}})
 	optDesc := `{"ticker":"MSFT","amount":3}`
-	postings := []contractsitx.Posting{
-		{RoutingNumber: 111, AccountID: "client-1", AssetID: optDesc, Amount: decimal.NewFromInt(3), Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: 222, AccountID: "client-2", AssetID: optDesc, Amount: decimal.NewFromInt(3), Direction: contractsitx.DirectionCredit},
+	postings := []contractsitx.InternalPosting{
+		option(111, "client-1", optDesc, 3, contractsitx.DirectionDebit),
+		option(222, "client-2", optDesc, 3, contractsitx.DirectionCredit),
 	}
 	res := exec.Reserve(context.Background(), postings, "222", "idem-OO")
 	if res.Vote.Type != contractsitx.VoteYes {
@@ -273,9 +303,9 @@ func TestPostingExecutor_OptionItem_ReservesSharesAtVote(t *testing.T) {
 	chk := &stubHoldingChecker{resp: &stockpb.CheckSellerCanDeliverResponse{Ok: true}}
 	exec.SetHoldingChecker(chk)
 	optDesc := `{"ticker":"AAPL","amount":4}`
-	postings := []contractsitx.Posting{
-		{RoutingNumber: 111, AccountID: "client-7", AssetID: optDesc, Amount: decimal.NewFromInt(4), Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: 222, AccountID: "client-8", AssetID: optDesc, Amount: decimal.NewFromInt(4), Direction: contractsitx.DirectionCredit},
+	postings := []contractsitx.InternalPosting{
+		option(111, "client-7", optDesc, 4, contractsitx.DirectionDebit),
+		option(222, "client-8", optDesc, 4, contractsitx.DirectionCredit),
 	}
 	res := exec.Reserve(context.Background(), postings, "222", "idem-RS")
 	if res.Vote.Type != contractsitx.VoteYes {
@@ -301,10 +331,10 @@ func TestPostingExecutor_ExerciseForgedStrike_NoVote(t *testing.T) {
 	chk := &stubHoldingChecker{validateDeny: true} // receiver's terms don't match → deny
 	exec.SetHoldingChecker(chk)
 	od := `{"ticker":"MA","amount":2,"strikePrice":"250","currency":"RSD","negotiationId":{"routingNumber":222,"id":"neg-1"},"intent":"exercise"}`
-	postings := []contractsitx.Posting{
-		{RoutingNumber: 222, AccountID: "client-1", AssetID: od, Amount: decimal.NewFromInt(2), Direction: contractsitx.DirectionDebit},     // seller option leg (own routing)
-		{RoutingNumber: 222, AccountID: "client-1", AssetID: "RSD", Amount: decimal.NewFromInt(1), Direction: contractsitx.DirectionCredit}, // forged strike = 1 (should be 500)
-		{RoutingNumber: 111, AccountID: "111-BUY", AssetID: "RSD", Amount: decimal.NewFromInt(1), Direction: contractsitx.DirectionDebit},
+	postings := []contractsitx.InternalPosting{
+		option(222, "client-1", od, 2, contractsitx.DirectionDebit),     // seller option leg (own routing)
+		money(222, "client-1", "RSD", 1, contractsitx.DirectionCredit), // forged strike = 1 (should be 500)
+		money(111, "111-BUY", "RSD", 1, contractsitx.DirectionDebit),
 	}
 	res := exec.Reserve(context.Background(), postings, "111", "idem-FORGE")
 	if res.Vote.Type != contractsitx.VoteNo {
@@ -336,10 +366,10 @@ func TestPostingExecutor_ExerciseBuyerOvercharge_NoVote(t *testing.T) {
 	chk := &stubHoldingChecker{validateDeny: true}
 	exec.SetHoldingChecker(chk)
 	od := `{"ticker":"MA","amount":2,"strikePrice":"250","currency":"RSD","negotiationId":{"routingNumber":222,"id":"neg-9"},"intent":"exercise"}`
-	postings := []contractsitx.Posting{
-		{RoutingNumber: 111, AccountID: "client-1", AssetID: od, Amount: decimal.NewFromInt(2), Direction: contractsitx.DirectionCredit},            // buyer option leg (own routing)
-		{RoutingNumber: 111, AccountID: "111-BUYER-ACCT", AssetID: "RSD", Amount: decimal.NewFromInt(9000), Direction: contractsitx.DirectionDebit}, // forged-high strike 9000 (should be 500)
-		{RoutingNumber: 222, AccountID: "client-1", AssetID: "RSD", Amount: decimal.NewFromInt(9000), Direction: contractsitx.DirectionCredit},
+	postings := []contractsitx.InternalPosting{
+		option(111, "client-1", od, 2, contractsitx.DirectionCredit),            // buyer option leg (own routing)
+		money(111, "111-BUYER-ACCT", "RSD", 9000, contractsitx.DirectionDebit), // forged-high strike 9000 (should be 500)
+		money(222, "client-1", "RSD", 9000, contractsitx.DirectionCredit),
 	}
 	res := exec.Reserve(context.Background(), postings, "222", "idem-OVER")
 	if res.Vote.Type != contractsitx.VoteNo {
@@ -377,10 +407,10 @@ func TestPostingExecutor_ExerciseHonestStrike_Yes(t *testing.T) {
 	chk := &stubHoldingChecker{} // validateDeny false → approve
 	exec.SetHoldingChecker(chk)
 	od := `{"ticker":"MA","amount":2,"strikePrice":"250","currency":"RSD","negotiationId":{"routingNumber":222,"id":"neg-2"},"intent":"exercise"}`
-	postings := []contractsitx.Posting{
-		{RoutingNumber: 222, AccountID: "client-1", AssetID: "RSD", Amount: decimal.NewFromInt(500), Direction: contractsitx.DirectionCredit}, // honest strike 250*2
-		{RoutingNumber: 222, AccountID: "client-1", AssetID: od, Amount: decimal.NewFromInt(2), Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: 111, AccountID: "111-BUY", AssetID: "RSD", Amount: decimal.NewFromInt(500), Direction: contractsitx.DirectionDebit},
+	postings := []contractsitx.InternalPosting{
+		money(222, "client-1", "RSD", 500, contractsitx.DirectionCredit), // honest strike 250*2
+		option(222, "client-1", od, 2, contractsitx.DirectionDebit),
+		money(111, "111-BUY", "RSD", 500, contractsitx.DirectionDebit),
 	}
 	res := exec.Reserve(context.Background(), postings, "111", "idem-HONEST")
 	if res.Vote.Type != contractsitx.VoteYes {
@@ -407,9 +437,9 @@ func TestPostingExecutor_ReverseLocal_ReleasesShareHold(t *testing.T) {
 	chk := &stubHoldingChecker{resp: &stockpb.CheckSellerCanDeliverResponse{Ok: true}}
 	exec.SetHoldingChecker(chk)
 	optDesc := `{"ticker":"AAPL","amount":4}`
-	postings := []contractsitx.Posting{
-		{RoutingNumber: 111, AccountID: "client-7", AssetID: optDesc, Amount: decimal.NewFromInt(4), Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: 222, AccountID: "client-8", AssetID: optDesc, Amount: decimal.NewFromInt(4), Direction: contractsitx.DirectionCredit},
+	postings := []contractsitx.InternalPosting{
+		option(111, "client-7", optDesc, 4, contractsitx.DirectionDebit),
+		option(222, "client-8", optDesc, 4, contractsitx.DirectionCredit),
 	}
 	if err := exec.ReverseLocal(context.Background(), postings, "222", "idem-RV"); err != nil {
 		t.Fatalf("reverse: %v", err)
@@ -444,9 +474,9 @@ func TestPostingExecutor_ResolveClientAccountID_HappyPath(t *testing.T) {
 		},
 	}
 	exec := sitx.NewPostingExecutor(stub, 111)
-	postings := []contractsitx.Posting{
-		{RoutingNumber: 111, AccountID: "client-42", AssetID: "RSD", Amount: decimal.NewFromInt(100), Direction: contractsitx.DirectionCredit},
-		{RoutingNumber: 222, AccountID: "222-X", AssetID: "RSD", Amount: decimal.NewFromInt(100), Direction: contractsitx.DirectionDebit},
+	postings := []contractsitx.InternalPosting{
+		money(111, "client-42", "RSD", 100, contractsitx.DirectionCredit),
+		money(222, "222-X", "RSD", 100, contractsitx.DirectionDebit),
 	}
 	res := exec.Reserve(context.Background(), postings, "222", "idem-R")
 	if res.Vote.Type != contractsitx.VoteYes {
@@ -465,9 +495,9 @@ func TestPostingExecutor_ResolveClientAccountID_NoMatch(t *testing.T) {
 		},
 	}
 	exec := sitx.NewPostingExecutor(stub, 111)
-	postings := []contractsitx.Posting{
-		{RoutingNumber: 111, AccountID: "client-42", AssetID: "RSD", Amount: decimal.NewFromInt(50), Direction: contractsitx.DirectionCredit},
-		{RoutingNumber: 222, AccountID: "222-X", AssetID: "RSD", Amount: decimal.NewFromInt(50), Direction: contractsitx.DirectionDebit},
+	postings := []contractsitx.InternalPosting{
+		money(111, "client-42", "RSD", 50, contractsitx.DirectionCredit),
+		money(222, "222-X", "RSD", 50, contractsitx.DirectionDebit),
 	}
 	res := exec.Reserve(context.Background(), postings, "222", "idem-NM")
 	if res.Vote.Type != contractsitx.VoteNo {
@@ -486,9 +516,9 @@ func TestPostingExecutor_UnknownDirection_Unacceptable(t *testing.T) {
 		},
 	}
 	exec := sitx.NewPostingExecutor(stub, 111)
-	postings := []contractsitx.Posting{
-		{RoutingNumber: 111, AccountID: "111-A", AssetID: "RSD", Amount: decimal.NewFromInt(50), Direction: "FOO"},
-		{RoutingNumber: 222, AccountID: "222-B", AssetID: "RSD", Amount: decimal.NewFromInt(50), Direction: contractsitx.DirectionCredit},
+	postings := []contractsitx.InternalPosting{
+		{RoutingNumber: 111, AccountType: "ACCOUNT", AccountID: "111-A", AssetType: "MONAS", AssetID: "RSD", Amount: "50", Direction: "FOO"},
+		money(222, "222-B", "RSD", 50, contractsitx.DirectionCredit),
 	}
 	res := exec.Reserve(context.Background(), postings, "222", "idem-D")
 	if res.Vote.Type != contractsitx.VoteNo {
@@ -502,9 +532,9 @@ func TestPostingExecutor_UnknownDirection_Unacceptable(t *testing.T) {
 // TestVoteBuilder_BalancedPostings_YES verifies BuildPrelimVote returns YES
 // when net per assetId is zero.
 func TestVoteBuilder_BalancedPostings_YES(t *testing.T) {
-	v := sitx.BuildPrelimVote([]contractsitx.Posting{
-		{AssetID: "RSD", Amount: decimal.NewFromInt(100), Direction: contractsitx.DirectionDebit},
-		{AssetID: "RSD", Amount: decimal.NewFromInt(100), Direction: contractsitx.DirectionCredit},
+	v := sitx.BuildPrelimVote([]contractsitx.InternalPosting{
+		{AssetType: "MONAS", AssetID: "RSD", Amount: "100", Direction: contractsitx.DirectionDebit},
+		{AssetType: "MONAS", AssetID: "RSD", Amount: "100", Direction: contractsitx.DirectionCredit},
 	})
 	if v.Type != contractsitx.VoteYes {
 		t.Errorf("expected YES, got %+v", v)

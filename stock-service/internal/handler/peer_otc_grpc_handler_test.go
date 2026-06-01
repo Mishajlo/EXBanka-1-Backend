@@ -310,6 +310,52 @@ func TestPeerOTC_AcceptNegotiation_DispatchesViaPeerTx(t *testing.T) {
 		t.Errorf("option asset_id should be JSON OptionDescription, not premium currency")
 	}
 
+	// Type tags (SI-TX §3.6 / §2.7): the two premium legs are MONAS, the two
+	// option legs OPTION. AccountType matches each leg's AccountId form — the
+	// buyer-premium DEBIT carries a raw 18-digit account number → ACCOUNT, every
+	// other leg carries a "client-N" participant id → PERSON.
+	if postings[0].GetAssetType() != "MONAS" {
+		t.Errorf("posting 0 asset_type=%q, want MONAS", postings[0].GetAssetType())
+	}
+	if postings[0].GetAccountType() != "ACCOUNT" {
+		t.Errorf("posting 0 account_type=%q, want ACCOUNT (account-number leg)", postings[0].GetAccountType())
+	}
+	if postings[1].GetAssetType() != "MONAS" {
+		t.Errorf("posting 1 asset_type=%q, want MONAS", postings[1].GetAssetType())
+	}
+	if postings[1].GetAccountType() != "PERSON" {
+		t.Errorf("posting 1 account_type=%q, want PERSON (participant-id leg)", postings[1].GetAccountType())
+	}
+	if postings[2].GetAssetType() != "OPTION" {
+		t.Errorf("posting 2 asset_type=%q, want OPTION", postings[2].GetAssetType())
+	}
+	if postings[2].GetAccountType() != "PERSON" {
+		t.Errorf("posting 2 account_type=%q, want PERSON (participant-id leg)", postings[2].GetAccountType())
+	}
+	if postings[3].GetAssetType() != "OPTION" {
+		t.Errorf("posting 3 asset_type=%q, want OPTION", postings[3].GetAssetType())
+	}
+	if postings[3].GetAccountType() != "PERSON" {
+		t.Errorf("posting 3 account_type=%q, want PERSON (participant-id leg)", postings[3].GetAccountType())
+	}
+	// Cross-check: each posting's AccountType is consistent with its AccountId form.
+	for i, p := range postings {
+		wantType := "PERSON"
+		if id := p.GetAccountId(); len(id) >= 15 && func() bool {
+			for _, r := range id {
+				if r < '0' || r > '9' {
+					return false
+				}
+			}
+			return true
+		}() {
+			wantType = "ACCOUNT"
+		}
+		if p.GetAccountType() != wantType {
+			t.Errorf("posting %d account_type=%q does not match account_id %q form (want %q)", i, p.GetAccountType(), p.GetAccountId(), wantType)
+		}
+	}
+
 	// Status flipped to accepted on the local mirror.
 	getResp, _ := h.GetNegotiation(ctx, &stockpb.GetNegotiationRequest{
 		PeerBankCode:  "222",

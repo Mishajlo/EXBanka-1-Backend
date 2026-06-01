@@ -44,7 +44,7 @@ func TestReverseOutboundLocal_Payment_ReleasesSenderHold(t *testing.T) {
 	row := &model.OutboundPeerTx{
 		IdempotenceKey: "idem-1",
 		TxKind:         "payment",
-		PostingsJSON:   `[{"routingNumber":111,"accountId":"111-A","assetId":"RSD","amount":"100","direction":"DEBIT"},{"routingNumber":222,"accountId":"222-B","assetId":"RSD","amount":"100","direction":"CREDIT"}]`,
+		PostingsJSON:   `[{"routingNumber":111,"accountType":"ACCOUNT","accountId":"111-A","assetType":"MONAS","assetId":"RSD","amount":"100","direction":"DEBIT"},{"routingNumber":222,"accountType":"ACCOUNT","accountId":"222-B","assetType":"MONAS","assetId":"RSD","amount":"100","direction":"CREDIT"}]`,
 	}
 	if err := h.ReverseOutboundLocal(context.Background(), row); err != nil {
 		t.Fatalf("reverse: %v", err)
@@ -82,7 +82,7 @@ func TestCommitOutboundLocal_Payment_SettlesSenderHold(t *testing.T) {
 	row := &model.OutboundPeerTx{
 		IdempotenceKey: "idem-pay-1",
 		TxKind:         "payment",
-		PostingsJSON:   `[{"routingNumber":111,"accountId":"111-A","assetId":"RSD","amount":"100","direction":"DEBIT"},{"routingNumber":222,"accountId":"222-B","assetId":"RSD","amount":"100","direction":"CREDIT"}]`,
+		PostingsJSON:   `[{"routingNumber":111,"accountType":"ACCOUNT","accountId":"111-A","assetType":"MONAS","assetId":"RSD","amount":"100","direction":"DEBIT"},{"routingNumber":222,"accountType":"ACCOUNT","accountId":"222-B","assetType":"MONAS","assetId":"RSD","amount":"100","direction":"CREDIT"}]`,
 	}
 	if err := h.CommitOutboundLocal(context.Background(), row); err != nil {
 		t.Fatalf("commit local: %v", err)
@@ -137,10 +137,10 @@ func TestCommitOutboundLocal_OTC_Exercise_SettlesHoldAndMaterialisesBuyerOption(
 		IdempotenceKey: "idem-otcx",
 		TxKind:         "otc-exercise",
 		PostingsJSON: `[` +
-			`{"routingNumber":111,"accountId":"111-BUY","assetId":"RSD","amount":"500","direction":"DEBIT"},` +
-			`{"routingNumber":222,"accountId":"222-SELL","assetId":"RSD","amount":"500","direction":"CREDIT"},` +
-			`{"routingNumber":222,"accountId":"client-1","assetId":` + jsonStr(od) + `,"amount":"1","direction":"DEBIT"},` +
-			`{"routingNumber":111,"accountId":"client-1","assetId":` + jsonStr(od) + `,"amount":"1","direction":"CREDIT"}` +
+			`{"routingNumber":111,"accountType":"ACCOUNT","accountId":"111-BUY","assetType":"MONAS","assetId":"RSD","amount":"500","direction":"DEBIT"},` +
+			`{"routingNumber":222,"accountType":"ACCOUNT","accountId":"222-SELL","assetType":"MONAS","assetId":"RSD","amount":"500","direction":"CREDIT"},` +
+			`{"routingNumber":222,"accountType":"PERSON","accountId":"client-1","assetType":"OPTION","assetId":` + jsonStr(od) + `,"amount":"1","direction":"DEBIT"},` +
+			`{"routingNumber":111,"accountType":"PERSON","accountId":"client-1","assetType":"OPTION","assetId":` + jsonStr(od) + `,"amount":"1","direction":"CREDIT"}` +
 			`]`,
 	}
 	if err := h.CommitOutboundLocal(context.Background(), row); err != nil {
@@ -201,7 +201,7 @@ func TestReverseOutboundLocal_OTC_ReleasesReservationAndHolds(t *testing.T) {
 		TxKind:         "otc-accept",
 		// Local premium DEBIT (idx 0), local CREDIT money leg (idx 1), and a
 		// peer-side leg (idx 2) that must be ignored locally.
-		PostingsJSON: `[{"routingNumber":111,"accountId":"111-PREM","assetId":"USD","amount":"50","direction":"DEBIT"},{"routingNumber":111,"accountId":"111-RECV","assetId":"USD","amount":"50","direction":"CREDIT"},{"routingNumber":222,"accountId":"222-X","assetId":"USD","amount":"50","direction":"DEBIT"}]`,
+		PostingsJSON: `[{"routingNumber":111,"accountType":"ACCOUNT","accountId":"111-PREM","assetType":"MONAS","assetId":"USD","amount":"50","direction":"DEBIT"},{"routingNumber":111,"accountType":"ACCOUNT","accountId":"111-RECV","assetType":"MONAS","assetId":"USD","amount":"50","direction":"CREDIT"},{"routingNumber":222,"accountType":"ACCOUNT","accountId":"222-X","assetType":"MONAS","assetId":"USD","amount":"50","direction":"DEBIT"}]`,
 	}
 	if err := h.ReverseOutboundLocal(context.Background(), row); err != nil {
 		t.Fatalf("reverse: %v", err)

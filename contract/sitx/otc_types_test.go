@@ -51,31 +51,33 @@ func TestOptionDescription_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestUserInformation_RoundTrip(t *testing.T) {
+func TestUserInformation_SpecShape(t *testing.T) {
 	in := sitx.UserInformation{
-		ID:        sitx.ForeignBankId{RoutingNumber: 222, ID: "u1"},
-		FirstName: "Marko",
-		LastName:  "Marković",
+		BankDisplayName: "EXBanka",
+		DisplayName:     "Marko Marković",
 	}
-	raw, _ := json.Marshal(in)
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(raw) != `{"bankDisplayName":"EXBanka","displayName":"Marko Marković"}` {
+		t.Fatalf("spec shape mismatch: %s", raw)
+	}
 	var out sitx.UserInformation
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if out.FirstName != "Marko" || out.ID.ID != "u1" {
+	if out.BankDisplayName != "EXBanka" || out.DisplayName != "Marko Marković" {
 		t.Errorf("got %+v", out)
 	}
 }
 
 func TestPublicStocksResponse_RoundTrip(t *testing.T) {
 	in := sitx.PublicStocksResponse{
-		Stocks: []sitx.PublicStock{
-			{
-				OwnerID:       sitx.ForeignBankId{RoutingNumber: 111, ID: "client-7"},
-				Ticker:        "MSFT",
-				Amount:        25,
-				PricePerStock: decimal.NewFromFloat(420.10),
-				Currency:      "USD",
+		{
+			Stock: sitx.StockDescription{Ticker: "MSFT"},
+			Sellers: []sitx.PublicSeller{
+				{Seller: sitx.ForeignBankId{RoutingNumber: 111, ID: "client-7"}, Amount: 25},
 			},
 		},
 	}
@@ -84,7 +86,10 @@ func TestPublicStocksResponse_RoundTrip(t *testing.T) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(out.Stocks) != 1 || out.Stocks[0].Ticker != "MSFT" {
+	if len(out) != 1 || out[0].Stock.Ticker != "MSFT" {
 		t.Errorf("got %+v", out)
+	}
+	if len(out[0].Sellers) != 1 || out[0].Sellers[0].Seller.ID != "client-7" {
+		t.Errorf("sellers: %+v", out[0].Sellers)
 	}
 }

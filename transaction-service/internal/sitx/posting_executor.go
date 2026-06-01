@@ -64,7 +64,7 @@ type OptionItem struct {
 
 // ReserveResult is the outcome of executing the reserve phase of a NEW_TX.
 type ReserveResult struct {
-	Vote            contractsitx.TransactionVote
+	Vote            Vote
 	ReservationKeys []string      // populated on YES; one per credit posting on our routing
 	DebitedItems    []DebitedItem // populated on YES; one per debit posting on our routing
 	OptionItems     []OptionItem  // populated on YES; one per option-asset posting on our routing
@@ -125,6 +125,9 @@ func (e *PostingExecutor) SetHoldingChecker(c SellerHoldingChecker) {
 	e.holdingChecker = c
 }
 
+// isOptionLeg reports whether a posting carries an option asset.
+func isOptionLeg(p contractsitx.InternalPosting) bool { return p.AssetType == "OPTION" }
+
 // Reserve runs the receive-side reserve phase of a NEW_TX. It walks each
 // posting whose routingNumber matches ours and applies it to a local
 // account-service operation:
@@ -144,14 +147,13 @@ func (e *PostingExecutor) SetHoldingChecker(c SellerHoldingChecker) {
 //     reservation key — so the commit/rollback steps can find them. Idempotent
 //     on the key, so the reserve is safe to replay.
 //
-// Postings whose AssetID is a JSON option-description (currency mismatch
-// won't apply) are silently skipped: option contract handling lives in
-// stock-service, not here. This is a known scope limit — full OTC option
-// formation requires extending the executor to dispatch to stock-service.
+// Option-asset postings (AssetType == "OPTION") are dispatched to the seller-
+// share hold path and surfaced as OptionItems; the option contract itself is
+// materialised at COMMIT_TX in stock-service, not here.
 //
 // On any per-posting failure, returns a NO vote with the matching SI-TX
 // reason and the failing posting index.
-func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.Posting, peerBankCode, locallyGeneratedKey string) ReserveResult {
+func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.InternalPosting, peerBankCode, locallyGeneratedKey string) ReserveResult {
 	keys := []string{}
 	debits := []DebitedItem{}
 	options := []OptionItem{}
@@ -164,7 +166,7 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.P
 	var sellerByDesc = map[string]contractsitx.ForeignBankId{}
 	for i := range postings {
 		p := postings[i]
-		if !strings.HasPrefix(p.AssetID, "{") {
+		if !isOptionLeg(p) {
 			continue
 		}
 		party := contractsitx.ForeignBankId{RoutingNumber: p.RoutingNumber, ID: p.AccountID}
@@ -189,16 +191,16 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.P
 	if e.holdingChecker != nil {
 		for i := range postings {
 			p := postings[i]
-			if p.RoutingNumber != e.ownRouting || !strings.HasPrefix(p.AssetID, "{") {
+			if p.RoutingNumber != e.ownRouting || !isOptionLeg(p) {
 				continue
 			}
 			var full contractsitx.OptionDescription
 			_ = json.Unmarshal([]byte(p.AssetID), &full)
-			money, moneyCcy := pairedMoney(postings, e.ownRouting, string(p.Direction))
+			money, moneyCcy := pairedMoney(postings, e.ownRouting, p.Direction)
 			vresp, verr := e.holdingChecker.ValidatePeerOptionMoneyLeg(ctx, &stockpb.ValidatePeerOptionMoneyLegRequest{
 				NegotiationRouting: full.NegotiationID.RoutingNumber,
 				NegotiationId:      full.NegotiationID.ID,
-				Direction:          string(p.Direction),
+				Direction:          p.Direction,
 				Intent:             full.Intent,
 				Ticker:             full.Ticker,
 				Quantity:           full.Amount,
@@ -238,7 +240,7 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.P
 		// honest even when stock-service is briefly down). Replaces the prior
 		// read-only CheckSellerCanDeliver pre-check (Fix #6) which left a
 		// sell-between-vote-and-commit window.
-		if strings.HasPrefix(p.AssetID, "{") {
+		if isOptionLeg(p) {
 			// Money-leg validation already ran in the pre-pass above. Here we only
 			// place the seller-side vote-time share hold for accept-intent legs.
 			if p.Direction == contractsitx.DirectionDebit {
@@ -282,10 +284,13 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.P
 			})
 			continue
 		}
-		// Resolve participant-ID-style accountId ("client-7", "employee-3")
-		// to a concrete bank account number for the requested currency.
-		// 18-digit account numbers pass through unchanged.
-		accountNumber, resolveErr := e.resolveAccountForPosting(ctx, p.AccountID, p.AssetID)
+		// MONAS leg: the currency is the AssetID.
+		currency := p.AssetID
+		amountStr := p.Amount
+		// Resolve participant-ID-style accountId ("client-7") to a concrete bank
+		// account number for the requested currency when this is a PERSON leg;
+		// 18-digit account numbers (ACCOUNT legs) pass through unchanged.
+		accountNumber, resolveErr := e.resolveAccountForPosting(ctx, p.AccountID, currency)
 		if resolveErr != nil {
 			return noVote(contractsitx.NoVoteReasonNoSuchAccount, i)
 		}
@@ -296,7 +301,7 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.P
 		if acct.Status != "active" {
 			return noVote(contractsitx.NoVoteReasonUnacceptableAsset, i)
 		}
-		if acct.CurrencyCode != p.AssetID {
+		if acct.CurrencyCode != currency {
 			return noVote(contractsitx.NoVoteReasonNoSuchAsset, i)
 		}
 
@@ -305,8 +310,8 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.P
 			key := peerBankCode + ":" + locallyGeneratedKey
 			if _, err := e.client.ReserveIncoming(ctx, &accountpb.ReserveIncomingRequest{
 				AccountNumber:  accountNumber,
-				Amount:         p.Amount.String(),
-				Currency:       p.AssetID,
+				Amount:         amountStr,
+				Currency:       currency,
 				ReservationKey: key,
 				IdempotencyKey: "sitx-reserve-" + key,
 			}); err != nil {
@@ -321,8 +326,8 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.P
 			tag := fmt.Sprintf("%s:%s:%d", peerBankCode, locallyGeneratedKey, i)
 			if _, err := e.client.ReserveOutgoing(ctx, &accountpb.ReserveOutgoingRequest{
 				AccountNumber:  accountNumber,
-				Amount:         p.Amount.String(),
-				Currency:       p.AssetID,
+				Amount:         amountStr,
+				Currency:       currency,
 				ReservationKey: tag,
 				IdempotencyKey: "sitx-reserve-out-" + tag,
 			}); err != nil {
@@ -332,7 +337,7 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.P
 			}
 			debits = append(debits, DebitedItem{
 				AccountNumber:  accountNumber,
-				Amount:         p.Amount.String(),
+				Amount:         amountStr,
 				IdempotencyTag: tag,
 			})
 
@@ -341,7 +346,7 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.P
 		}
 	}
 	return ReserveResult{
-		Vote:            contractsitx.TransactionVote{Type: contractsitx.VoteYes},
+		Vote:            Vote{Type: contractsitx.VoteYes},
 		ReservationKeys: keys,
 		DebitedItems:    debits,
 		OptionItems:     options,
@@ -361,7 +366,7 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.P
 // return money on a sender-side OTC TX that terminally fails after the local
 // legs were already applied. Option-asset postings carry no money and are
 // skipped; a NotFound on release is benign (no CREDIT legs landed locally).
-func (e *PostingExecutor) ReverseLocal(ctx context.Context, postings []contractsitx.Posting, peerBankCode, locallyGeneratedKey string) error {
+func (e *PostingExecutor) ReverseLocal(ctx context.Context, postings []contractsitx.InternalPosting, peerBankCode, locallyGeneratedKey string) error {
 	key := peerBankCode + ":" + locallyGeneratedKey
 	if _, err := e.client.ReleaseIncoming(ctx, &accountpb.ReleaseIncomingRequest{
 		ReservationKey: key,
@@ -383,7 +388,7 @@ func (e *PostingExecutor) ReverseLocal(ctx context.Context, postings []contracts
 		if p.RoutingNumber != e.ownRouting || p.Direction != contractsitx.DirectionDebit {
 			continue
 		}
-		if strings.HasPrefix(p.AssetID, "{") {
+		if isOptionLeg(p) {
 			continue // option-asset leg — no money to return
 		}
 		tag := fmt.Sprintf("%s:%s:%d", peerBankCode, locallyGeneratedKey, i)
@@ -408,13 +413,13 @@ func (e *PostingExecutor) ReverseLocal(ctx context.Context, postings []contracts
 // skipped here. Keyed by the same per-posting tags Reserve used, so this is
 // idempotent and safe to call from both the inline commit path and the replay
 // cron. NotFound on a leg is benign (no hold landed for it).
-func (e *PostingExecutor) SettleLocal(ctx context.Context, postings []contractsitx.Posting, peerBankCode, locallyGeneratedKey string) error {
+func (e *PostingExecutor) SettleLocal(ctx context.Context, postings []contractsitx.InternalPosting, peerBankCode, locallyGeneratedKey string) error {
 	for i := range postings {
 		p := postings[i]
 		if p.RoutingNumber != e.ownRouting || p.Direction != contractsitx.DirectionDebit {
 			continue
 		}
-		if strings.HasPrefix(p.AssetID, "{") {
+		if isOptionLeg(p) {
 			continue // option-asset leg — no money to settle
 		}
 		tag := fmt.Sprintf("%s:%s:%d", peerBankCode, locallyGeneratedKey, i)
@@ -436,12 +441,12 @@ func (e *PostingExecutor) SettleLocal(ctx context.Context, postings []contractsi
 // CommitOutboundLocal so a sender-side option contract can still be materialised
 // after a crash between the inline Reserve() and the inline materialise — the
 // cron has only the persisted postings, not the in-memory ReserveResult.
-func (e *PostingExecutor) ExtractOwnOptionItems(postings []contractsitx.Posting) []OptionItem {
+func (e *PostingExecutor) ExtractOwnOptionItems(postings []contractsitx.InternalPosting) []OptionItem {
 	buyerByDesc := map[string]contractsitx.ForeignBankId{}
 	sellerByDesc := map[string]contractsitx.ForeignBankId{}
 	for i := range postings {
 		p := postings[i]
-		if !strings.HasPrefix(p.AssetID, "{") {
+		if !isOptionLeg(p) {
 			continue
 		}
 		party := contractsitx.ForeignBankId{RoutingNumber: p.RoutingNumber, ID: p.AccountID}
@@ -455,7 +460,7 @@ func (e *PostingExecutor) ExtractOwnOptionItems(postings []contractsitx.Posting)
 	var items []OptionItem
 	for i := range postings {
 		p := postings[i]
-		if p.RoutingNumber != e.ownRouting || !strings.HasPrefix(p.AssetID, "{") {
+		if p.RoutingNumber != e.ownRouting || !isOptionLeg(p) {
 			continue
 		}
 		items = append(items, OptionItem{
@@ -510,10 +515,10 @@ func (e *PostingExecutor) resolveAccountForPosting(ctx context.Context, accountI
 // uses a resolved account number, so id-matching is unreliable). The currency is
 // taken from the money leg itself (the premium currency on accept may differ from
 // the strike currency on a cross-currency trade, so it must NOT be assumed from
-// the option description). Option-asset legs (AssetID is a JSON blob) are skipped.
-// Returns ("0", "") when no paired money leg is present (a forged/degenerate
-// envelope), which fails downstream validation closed.
-func pairedMoney(postings []contractsitx.Posting, ownRouting int64, optionDirection string) (decimal.Decimal, string) {
+// the option description). Option-asset legs are skipped. Returns ("0", "") when
+// no paired money leg is present (a forged/degenerate envelope), which fails
+// downstream validation closed.
+func pairedMoney(postings []contractsitx.InternalPosting, ownRouting int64, optionDirection string) (decimal.Decimal, string) {
 	wantMoneyDir := contractsitx.DirectionCredit // seller (DEBIT option) receives money
 	if optionDirection == contractsitx.DirectionCredit {
 		wantMoneyDir = contractsitx.DirectionDebit // buyer (CREDIT option) pays money
@@ -525,7 +530,7 @@ func pairedMoney(postings []contractsitx.Posting, ownRouting int64, optionDirect
 		if p.RoutingNumber != ownRouting || p.Direction != wantMoneyDir {
 			continue
 		}
-		if strings.HasPrefix(p.AssetID, "{") { // option-asset leg, not money
+		if isOptionLeg(p) { // option-asset leg, not money
 			continue
 		}
 		if currency != "" && p.AssetID != currency {
@@ -534,7 +539,11 @@ func pairedMoney(postings []contractsitx.Posting, ownRouting int64, optionDirect
 			return total, ""
 		}
 		currency = p.AssetID
-		total = total.Add(p.Amount)
+		amt, err := decimal.NewFromString(p.Amount)
+		if err != nil {
+			return total, ""
+		}
+		total = total.Add(amt)
 	}
 	return total, currency
 }
@@ -542,10 +551,10 @@ func pairedMoney(postings []contractsitx.Posting, ownRouting int64, optionDirect
 // hasOwnDebitOptionLeg reports whether the postings contain a DEBIT
 // option-asset leg on the given routing — i.e. this bank holds the seller and
 // therefore placed a vote-time share hold that must be released on rollback.
-func hasOwnDebitOptionLeg(postings []contractsitx.Posting, ownRouting int64) bool {
+func hasOwnDebitOptionLeg(postings []contractsitx.InternalPosting, ownRouting int64) bool {
 	for i := range postings {
 		p := postings[i]
-		if p.RoutingNumber == ownRouting && p.Direction == contractsitx.DirectionDebit && strings.HasPrefix(p.AssetID, "{") {
+		if p.RoutingNumber == ownRouting && p.Direction == contractsitx.DirectionDebit && isOptionLeg(p) {
 			return true
 		}
 	}
@@ -554,9 +563,9 @@ func hasOwnDebitOptionLeg(postings []contractsitx.Posting, ownRouting int64) boo
 
 func noVote(reason string, postingIdx int) ReserveResult {
 	return ReserveResult{
-		Vote: contractsitx.TransactionVote{
+		Vote: Vote{
 			Type:    contractsitx.VoteNo,
-			NoVotes: []contractsitx.NoVote{{Reason: reason, Posting: ptr(postingIdx)}},
+			NoVotes: []NoVote{{Reason: reason, Posting: ptr(postingIdx)}},
 		},
 	}
 }
