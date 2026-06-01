@@ -7217,6 +7217,8 @@ Each NO reason echoes back the **entire offending `Posting`** (not an index). Re
 
 > **Sender semantics:** `202` = peer accepted, retry later; `200` = final (vote); `204` = final, empty.
 
+> **Receiver-side 202 (async):** For a `NEW_TX` whose local reserve exceeds `SITX_RECEIVE_SYNC_DEADLINE` (transaction-service, default `5s`), the receiver returns **202 Accepted** with an empty body and finishes the reserve in the background. The sender retransmits the same idempotence key; once the reserve completes, the retransmit returns **200** with the vote. `COMMIT_TX` / `ROLLBACK_TX` are always processed synchronously (**204**).
+
 ---
 
 ### GET /api/v3/cross-bank-protocol/interbank/:transaction_id/status

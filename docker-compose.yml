@@ -482,6 +482,7 @@ services:
       STOCK_GRPC_ADDR: "stock-service:50060"
       METRICS_PORT: "9107"
       OWN_BANK_CODE: "${OWN_BANK_CODE:-111}"
+      SITX_RECEIVE_SYNC_DEADLINE: "${SITX_RECEIVE_SYNC_DEADLINE:-5s}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
