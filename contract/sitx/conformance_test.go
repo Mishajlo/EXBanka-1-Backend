@@ -125,6 +125,31 @@ func TestConformance(t *testing.T) {
 				}
 			}(),
 		},
+		{
+			name:    "newtx_otc_exercise",
+			fixture: "newtx_otc_exercise.json",
+			value: func() Message[Transaction] {
+				rsd := Asset{Type: AssetTypeMonas, Asset: MonetaryAsset{Currency: "RSD"}}
+				wmt := Asset{Type: AssetTypeStock, Asset: StockDescription{Ticker: "WMT"}}
+				pseudo := TxAccount{Type: AccountTypeOption, ID: &ForeignBankId{RoutingNumber: 111, ID: "neg-1"}}
+				return Message[Transaction]{
+					IdempotenceKey: IdempotenceKey{RoutingNumber: 111, LocallyGeneratedKey: "k-otc-exercise-1"},
+					MessageType:    MessageTypeNewTx,
+					Message: Transaction{
+						Postings: []Posting{
+							{Account: TxAccount{Type: AccountTypeAccount, Num: "111000117810858011"}, Amount: dn("-500"), Asset: rsd},
+							{Account: pseudo, Amount: dn("500"), Asset: rsd},
+							{Account: pseudo, Amount: dn("-10"), Asset: wmt},
+							{Account: TxAccount{Type: AccountTypePerson, ID: &ForeignBankId{RoutingNumber: 111, ID: "client-1"}}, Amount: dn("10"), Asset: wmt},
+						},
+						TransactionID:  ForeignBankId{RoutingNumber: 111, ID: "k-otc-exercise-1"},
+						Message:        "Cross-bank OTC otc-exercise",
+						PaymentCode:    "",
+						PaymentPurpose: "",
+					},
+				}
+			}(),
+		},
 	}
 
 	for _, tc := range cases {
