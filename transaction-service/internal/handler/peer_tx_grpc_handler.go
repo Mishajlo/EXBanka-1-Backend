@@ -402,7 +402,15 @@ func optionsJSONHasDebitLeg(optionsJSON string) bool {
 		return false
 	}
 	for _, it := range items {
-		if it.Direction == contractsitx.DirectionDebit {
+		// Only an ACCEPT debit leg placed a vote-time seller-share HOLD that
+		// ROLLBACK_TX must release. Exercise items never place a vote-time share
+		// hold (the shares were reserved at ACCEPT and are only CONSUMED at the
+		// exercise COMMIT), so an exercise_seller DEBIT item must NOT trigger an
+		// accept-style share release — its MONAS reservation is released via the
+		// normal ReservationKeys/ReleaseIncoming path. Empty Kind == accept
+		// (back-compat with items persisted before the discriminator).
+		if it.Direction == contractsitx.DirectionDebit &&
+			(it.Kind == "" || it.Kind == sitx.OptionKindAccept) {
 			return true
 		}
 	}

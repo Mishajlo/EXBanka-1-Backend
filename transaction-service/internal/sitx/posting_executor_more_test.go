@@ -43,6 +43,25 @@ type stubHoldingChecker struct {
 	lastValidate  *stockpb.ValidatePeerOptionMoneyLegRequest
 	validateDeny  bool
 	validateErr   error
+	// OPTION pseudo-account exercise-leg ownership lookup (design §3.3.1). When
+	// lookupResp is nil the checker reports found=false (this bank doesn't hold
+	// the seller side). lookupErr forces a transport error.
+	lookupCalls int
+	lastLookup  *stockpb.LookupPeerOptionContractRequest
+	lookupResp  *stockpb.LookupPeerOptionContractResponse
+	lookupErr   error
+}
+
+func (s *stubHoldingChecker) LookupPeerOptionContract(ctx context.Context, in *stockpb.LookupPeerOptionContractRequest, opts ...grpc.CallOption) (*stockpb.LookupPeerOptionContractResponse, error) {
+	s.lookupCalls++
+	s.lastLookup = in
+	if s.lookupErr != nil {
+		return nil, s.lookupErr
+	}
+	if s.lookupResp != nil {
+		return s.lookupResp, nil
+	}
+	return &stockpb.LookupPeerOptionContractResponse{Found: false}, nil
 }
 
 func (s *stubHoldingChecker) CheckSellerCanDeliver(ctx context.Context, in *stockpb.CheckSellerCanDeliverRequest, opts ...grpc.CallOption) (*stockpb.CheckSellerCanDeliverResponse, error) {

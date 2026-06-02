@@ -1856,6 +1856,16 @@ service PeerOTCService {
   // Closes the forged-strike theft (a peer crafting an exercise that delivers
   // full shares for an under-stated strike). Idempotent / read-only.
   rpc ValidatePeerOptionMoneyLeg(ValidatePeerOptionMoneyLegRequest) returns (ValidatePeerOptionMoneyLegResponse);
+  // LookupPeerOptionContract returns the SELLER-side (DEBIT) peer_option_contract
+  // this bank holds for a negotiationId, with enough stored terms for the
+  // transaction-service executor to (a) decide ownership of an OPTION pseudo-
+  // account exercise leg ("do I hold the seller side of this negotiation?"),
+  // (b) resolve + credit the seller's money account, and (c) gate the exercise
+  // on settlement-date/used-status and validate the strike money. found=false
+  // means this bank does NOT hold the seller side (a different bank does) — the
+  // executor then SKIPS the pseudo-account leg. See the option wire-conformance
+  // design §3.3.1 (ownership-by-contract, not routing-prefix). Read-only.
+  rpc LookupPeerOptionContract(LookupPeerOptionContractRequest) returns (LookupPeerOptionContractResponse);
   rpc InitiateOptionExercise(InitiateOptionExerciseRequest) returns (InitiateOptionExerciseResponse);
 
   // Buyer-side mirror persistence so the buyer's bank also has a local
@@ -2205,6 +2215,27 @@ message ReleaseSellerSharesRequest {
 
 message ReleaseSellerSharesResponse {
   int64 released_quantity = 1;
+}
+
+// LookupPeerOptionContractRequest identifies a contract by its negotiationId
+// (the OPTION pseudo-account id on the exercise wire). The seller-side row is
+// looked up by (negotiation_routing_number, negotiation_id, direction="DEBIT").
+message LookupPeerOptionContractRequest {
+  int64 negotiation_routing_number = 1;
+  string negotiation_id = 2;
+}
+
+// LookupPeerOptionContractResponse carries the stored SELLER-side terms.
+// found=false ⇒ this bank does not hold the seller side (skip the leg).
+message LookupPeerOptionContractResponse {
+  bool found = 1;
+  string seller_id = 2;        // SI-TX participant id of the seller ("client-<n>"/"bank")
+  string ticker = 3;
+  string strike_price = 4;     // per-unit strike, decimal string
+  int64 quantity = 5;
+  string currency = 6;
+  string settlement_date = 7;  // ISO-8601 string (lex-comparable, SI-TX shape)
+  string status = 8;           // "active" | "exercising" | "exercised" | ...
 }
 
 // ---- RecurringFundService -----------------------------------------------

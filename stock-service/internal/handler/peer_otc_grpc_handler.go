@@ -1205,6 +1205,48 @@ func (h *PeerOTCGRPCHandler) ValidatePeerOptionMoneyLeg(ctx context.Context, req
 	return &stockpb.ValidatePeerOptionMoneyLegResponse{Ok: true}, nil
 }
 
+// LookupPeerOptionContract returns the SELLER-side (DEBIT) peer_option_contract
+// this bank holds for a negotiationId, with the stored terms the
+// transaction-service executor needs to recognise and settle an OPTION
+// pseudo-account exercise leg. The exercise wire pins the OPTION pseudo-account
+// id to the negotiationId (spec §2.7.2), whose routingNumber is the
+// negotiation's bank — NOT necessarily the seller's. So the executor decides
+// ownership of a pseudo-account leg by asking each candidate bank "do you hold
+// the SELLER side of this negotiation?" via this RPC: found=true means this bank
+// is the settling (seller) bank and should process the leg; found=false means a
+// different bank owns it and this bank must SKIP the leg (see the option
+// wire-conformance design §3.3.1). Always the DEBIT row — the seller side.
+// Read-only; no status mutation here (the gates + settlement run in the executor
+// + RecordOptionContract).
+func (h *PeerOTCGRPCHandler) LookupPeerOptionContract(_ context.Context, req *stockpb.LookupPeerOptionContractRequest) (*stockpb.LookupPeerOptionContractResponse, error) {
+	if h.peerOptionRepo == nil {
+		return nil, status.Error(codes.Unimplemented, "peer option repo not wired")
+	}
+	if req.GetNegotiationId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "negotiation_id is required")
+	}
+	contract, err := h.peerOptionRepo.GetByNegotiationAndDirection(
+		req.GetNegotiationRoutingNumber(), req.GetNegotiationId(), contractsitx.DirectionDebit,
+	)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// No seller-side row → this bank does not hold the seller side.
+			return &stockpb.LookupPeerOptionContractResponse{Found: false}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "lookup contract: %v", err)
+	}
+	return &stockpb.LookupPeerOptionContractResponse{
+		Found:          true,
+		SellerId:       contract.SellerID,
+		Ticker:         contract.Ticker,
+		StrikePrice:    contract.StrikePrice.String(),
+		Quantity:       contract.Quantity,
+		Currency:       contract.Currency,
+		SettlementDate: contract.SettlementDate,
+		Status:         contract.Status,
+	}, nil
+}
+
 // ReserveSellerSharesForNewTx places a real HOLD on the seller's shares at
 // SI-TX NEW_TX (vote) time, keyed on crossbank_tx_id. Unlike
 // CheckSellerCanDeliver this increments reserved_quantity so the shares cannot
