@@ -1403,16 +1403,17 @@ func (h *PeerOTCGRPCHandler) recordOptionExercise(ctx context.Context, req *stoc
 	return &stockpb.RecordOptionContractResponse{ContractId: contract.ID}, nil
 }
 
-// InitiateOptionExercise builds the 4-posting Transaction for an
-// exercise (strike money buyer→seller + option markers carrying
-// intent=exercise) and dispatches it via transaction-service. Called
-// by the gateway when the buyer hits POST /api/v3/me/otc/contracts/peer/:id/exercise.
+// InitiateOptionExercise builds the 4-posting exercise Transaction in the spec
+// pseudo-account form (MONAS strike: buyer account -> OPTION pseudo-account;
+// STOCK: OPTION pseudo-account -> buyer PERSON record) and dispatches it via
+// transaction-service. No OPTION asset or intent is carried on the wire.
+// Called by the gateway when the buyer hits POST /api/v3/me/otc/contracts/peer/:id/exercise.
 //
 // Validates: contract exists on this bank, this bank holds the buyer
-// side (so this bank is the IB), contract is active, settlement date
-// is in the future. The strike-money currency-account on the seller's
-// bank is left to that bank to resolve via the executor's seller-id-
-// to-account lookup at NEW_TX time.
+// side (so this bank is the IB), contract is active. The CompareAndSetStatus
+// claim (active → exercising) guards against double-exercise races; on any
+// synchronous dispatch failure the claim is reverted (exercising → active)
+// so the buyer can retry.
 func (h *PeerOTCGRPCHandler) InitiateOptionExercise(ctx context.Context, req *stockpb.InitiateOptionExerciseRequest) (*stockpb.InitiateOptionExerciseResponse, error) {
 	if req.GetPeerOptionContractId() == 0 || req.GetBuyerAccountNumber() == "" {
 		return nil, status.Error(codes.InvalidArgument, "peer_option_contract_id and buyer_account_number are required")
@@ -1445,6 +1446,7 @@ func (h *PeerOTCGRPCHandler) InitiateOptionExercise(ctx context.Context, req *st
 	}
 
 	strikeAmount := contract.StrikePrice.Mul(decimal.NewFromInt(contract.Quantity)).String()
+	qty := strconv.FormatInt(contract.Quantity, 10)
 
 	// Build the spec pseudo-account postings for option exercise.
 	// The spec expresses exercise as a transaction between the buyer and an
@@ -1458,12 +1460,17 @@ func (h *PeerOTCGRPCHandler) InitiateOptionExercise(ctx context.Context, req *st
 	postings := []*transactionpb.SiTxPosting{
 		// 1. Buyer pays strike (MONAS, from the pinned buyer account).
 		{RoutingNumber: contract.BuyerRoutingNumber, AccountId: req.GetBuyerAccountNumber(), AccountType: contractsitx.AccountTypeAccount, AssetId: contract.Currency, AssetType: contractsitx.AssetTypeMonas, Amount: strikeAmount, Direction: contractsitx.DirectionDebit},
+		// The OPTION pseudo-account's id IS the negotiationId (spec §2.7.2), so its
+		// routingNumber is the negotiation's routing — NOT necessarily the seller's
+		// bank. The receiver claims these pseudo-account legs by matching the stored
+		// contract (ownership-by-contract), not by routing-prefix; see the option
+		// wire-conformance design doc §3.3.1. Do not change to SellerRoutingNumber.
 		// 2. Strike arrives at the option pseudo-account (seller bank credits the seller).
 		{RoutingNumber: negRouting, AccountId: negID, AccountType: contractsitx.AccountTypeOption, AssetId: contract.Currency, AssetType: contractsitx.AssetTypeMonas, Amount: strikeAmount, Direction: contractsitx.DirectionCredit},
 		// 3. Underlying leaves the option pseudo-account (seller bank releases reserved shares).
-		{RoutingNumber: negRouting, AccountId: negID, AccountType: contractsitx.AccountTypeOption, AssetId: contract.Ticker, AssetType: contractsitx.AssetTypeStock, Amount: strconv.FormatInt(contract.Quantity, 10), Direction: contractsitx.DirectionDebit},
+		{RoutingNumber: negRouting, AccountId: negID, AccountType: contractsitx.AccountTypeOption, AssetId: contract.Ticker, AssetType: contractsitx.AssetTypeStock, Amount: qty, Direction: contractsitx.DirectionDebit},
 		// 4. Underlying arrives at the buyer (buyer bank credits the holding).
-		{RoutingNumber: contract.BuyerRoutingNumber, AccountId: contract.BuyerID, AccountType: contractsitx.AccountTypePerson, AssetId: contract.Ticker, AssetType: contractsitx.AssetTypeStock, Amount: strconv.FormatInt(contract.Quantity, 10), Direction: contractsitx.DirectionCredit},
+		{RoutingNumber: contract.BuyerRoutingNumber, AccountId: contract.BuyerID, AccountType: contractsitx.AccountTypePerson, AssetId: contract.Ticker, AssetType: contractsitx.AssetTypeStock, Amount: qty, Direction: contractsitx.DirectionCredit},
 	}
 
 	resp, err := h.peerTx.InitiateOutboundTxWithPostings(ctx, &transactionpb.SiTxInitiateWithPostingsRequest{

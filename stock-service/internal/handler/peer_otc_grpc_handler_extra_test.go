@@ -934,6 +934,13 @@ func TestInitiateOptionExercise_SpecPseudoAccountForm(t *testing.T) {
 		t.Fatal("InitiateOutboundTxWithPostings was not called")
 	}
 
+	if peerTx.gotReq.GetTxKind() != "otc-exercise" {
+		t.Errorf("tx_kind: want otc-exercise, got %q", peerTx.gotReq.GetTxKind())
+	}
+	if peerTx.gotReq.GetPeerBankCode() != "222" {
+		t.Errorf("peer_bank_code: want 222 (seller routing), got %q", peerTx.gotReq.GetPeerBankCode())
+	}
+
 	postings := peerTx.gotReq.GetPostings()
 	if got := len(postings); got != 4 {
 		t.Fatalf("expected 4 postings, got %d", got)
