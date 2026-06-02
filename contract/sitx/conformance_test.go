@@ -94,6 +94,37 @@ func TestConformance(t *testing.T) {
 				DisplayName:     "Marko Marković",
 			},
 		},
+		{
+			name:    "newtx_otc_accept",
+			fixture: "newtx_otc_accept.json",
+			value: func() Message[Transaction] {
+				od := OptionDescription{
+					NegotiationID:  ForeignBankId{RoutingNumber: 111, ID: "neg-1"},
+					Stock:          StockDescription{Ticker: "WMT"},
+					PricePerUnit:   MonetaryValue{Amount: dn("50"), Currency: "RSD"},
+					SettlementDate: "2026-12-31T00:00:00+02:00",
+					Amount:         10,
+				}
+				optAsset := Asset{Type: AssetTypeOption, Asset: od}
+				rsd := Asset{Type: AssetTypeMonas, Asset: MonetaryAsset{Currency: "RSD"}}
+				return Message[Transaction]{
+					IdempotenceKey: IdempotenceKey{RoutingNumber: 111, LocallyGeneratedKey: "k-otc-accept-1"},
+					MessageType:    MessageTypeNewTx,
+					Message: Transaction{
+						Postings: []Posting{
+							{Account: TxAccount{Type: AccountTypeAccount, Num: "111000117810858011"}, Amount: dn("-1000"), Asset: rsd},
+							{Account: TxAccount{Type: AccountTypePerson, ID: &ForeignBankId{RoutingNumber: 222, ID: "client-1"}}, Amount: dn("1000"), Asset: rsd},
+							{Account: TxAccount{Type: AccountTypePerson, ID: &ForeignBankId{RoutingNumber: 222, ID: "client-1"}}, Amount: dn("-1"), Asset: optAsset},
+							{Account: TxAccount{Type: AccountTypePerson, ID: &ForeignBankId{RoutingNumber: 111, ID: "client-1"}}, Amount: dn("1"), Asset: optAsset},
+						},
+						TransactionID:  ForeignBankId{RoutingNumber: 111, ID: "k-otc-accept-1"},
+						Message:        "Cross-bank OTC otc-accept",
+						PaymentCode:    "",
+						PaymentPurpose: "",
+					},
+				}
+			}(),
+		},
 	}
 
 	for _, tc := range cases {
