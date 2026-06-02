@@ -41,6 +41,9 @@ type stubAccountForHandler struct {
 	// reserveCalls counts ReserveIncoming invocations (atomic; the worker runs
 	// on a background goroutine).
 	reserveCalls int32
+	// listFn, when non-nil, overrides ListAccountsByClient (used by exercise
+	// seller-money resolution tests).
+	listFn func(ctx context.Context, in *accountpb.ListAccountsByClientRequest, opts ...grpc.CallOption) (*accountpb.ListAccountsResponse, error)
 }
 
 func (s *stubAccountForHandler) GetAccountByNumber(ctx context.Context, in *accountpb.GetAccountByNumberRequest, opts ...grpc.CallOption) (*accountpb.AccountResponse, error) {
@@ -85,6 +88,9 @@ func (s *stubAccountForHandler) UpdateBalance(ctx context.Context, in *accountpb
 	return &accountpb.AccountResponse{AccountNumber: in.AccountNumber}, nil
 }
 func (s *stubAccountForHandler) ListAccountsByClient(ctx context.Context, in *accountpb.ListAccountsByClientRequest, opts ...grpc.CallOption) (*accountpb.ListAccountsResponse, error) {
+	if s.listFn != nil {
+		return s.listFn(ctx, in, opts...)
+	}
 	return &accountpb.ListAccountsResponse{}, nil
 }
 func (s *stubAccountForHandler) ReserveOutgoing(ctx context.Context, in *accountpb.ReserveOutgoingRequest, opts ...grpc.CallOption) (*accountpb.ReserveOutgoingResponse, error) {

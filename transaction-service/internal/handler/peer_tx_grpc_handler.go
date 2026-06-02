@@ -426,16 +426,29 @@ func (h *PeerTxGRPCHandler) materialiseOptions(ctx context.Context, optionsJSON,
 		return err
 	}
 	for _, it := range items {
-		_, err := h.optionRecorder.RecordOptionContract(ctx, &stockpb.RecordOptionContractRequest{
+		req := &stockpb.RecordOptionContractRequest{
 			CrossbankTxId:         crossbankTxID,
 			PostingIndex:          int32(it.PostingIndex),
 			OptionDescriptionJson: it.OptionDescriptionJSON,
 			BuyerId:               &stockpb.PeerForeignBankId{RoutingNumber: it.Buyer.RoutingNumber, Id: it.Buyer.ID},
 			SellerId:              &stockpb.PeerForeignBankId{RoutingNumber: it.Seller.RoutingNumber, Id: it.Seller.ID},
 			Direction:             it.Direction,
-			Intent:                contractsitx.OptionIntentAccept,
-		})
-		if err != nil {
+		}
+		// Branch on the item Kind (set by the executor from the transaction SHAPE):
+		//   - accept (empty/"accept"): forms the cross-bank contract; Intent=accept,
+		//     parties taken from the paired OPTION-asset legs.
+		//   - exercise_seller/exercise_buyer: drives recordOptionExercise via
+		//     Intent=exercise with the item's Direction (DEBIT seller / CREDIT buyer).
+		//     recordOptionExercise looks the contract up by negotiationId+direction and
+		//     reads the parties/terms from the stored row, so BuyerId/SellerId here are
+		//     only the non-nil placeholders the request validation requires.
+		switch it.Kind {
+		case sitx.OptionKindExerciseSeller, sitx.OptionKindExerciseBuyer:
+			req.Intent = contractsitx.OptionIntentExercise
+		default: // "" or OptionKindAccept
+			req.Intent = contractsitx.OptionIntentAccept
+		}
+		if _, err := h.optionRecorder.RecordOptionContract(ctx, req); err != nil {
 			return err
 		}
 	}
