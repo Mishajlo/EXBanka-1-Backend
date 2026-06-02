@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	accountpb "github.com/exbanka/contract/accountpb"
 	contractsitx "github.com/exbanka/contract/sitx"
@@ -45,21 +46,56 @@ type DebitedItem struct {
 	IdempotencyTag string `json:"idempotencyTag"` // unique per (peer,idem,posting); used to derive the creditback key
 }
 
-// OptionItem records one option-asset posting on this bank's routing.
-// At reserve time, the option contract has not yet been written; this
-// item is persisted as JSON in peer_idempotence_records.options_json
-// and then materialised into peer_option_contracts at COMMIT_TX time.
+// OptionItem kinds discriminate which COMMIT settlement an item drives.
+// The kind is set at Reserve time from the transaction SHAPE — never carried
+// on the wire (the wire encodes accept-vs-exercise structurally: OPTION asset
+// = accept; OPTION pseudo-account + STOCK = exercise). materialiseOptions
+// (peer_tx_grpc_handler) branches on Kind to call RecordOptionContract with the
+// right Intent/Direction. Empty == OptionKindAccept for backward compatibility
+// with items persisted before this discriminator existed.
+const (
+	// OptionKindAccept is an OPTION-asset accept leg → RecordOptionContract
+	// with Intent=accept (forms the contract; seller share hold for a DEBIT leg).
+	OptionKindAccept = "accept"
+	// OptionKindExerciseSeller is the seller bank's STOCK pseudo-account DEBIT leg
+	// → RecordOptionContract Intent=exercise Direction=DEBIT (consume the reserved
+	// shares + mark exercised). The paired pseudo MONAS CREDIT credits the seller's
+	// money account via ReserveIncoming (tracked in ReservationKeys), not here.
+	OptionKindExerciseSeller = "exercise_seller"
+	// OptionKindExerciseBuyer is the buyer bank's PERSON STOCK CREDIT leg →
+	// RecordOptionContract Intent=exercise Direction=CREDIT (credit the buyer's
+	// holding + mark exercised). The buyer's strike MONAS DEBIT is the generic
+	// ReserveOutgoing path.
+	OptionKindExerciseBuyer = "exercise_buyer"
+)
+
+// OptionItem records one option posting on this bank's routing that drives a
+// COMMIT-time settlement. At reserve time, the option contract has not yet been
+// written (accept) or is being looked up (exercise); this item is persisted as
+// JSON in peer_idempotence_records.options_json and materialised at COMMIT_TX.
 //
-// Buyer and Seller are extracted by pairing this option posting with
-// its counterpart in the same TX (the matched posting with opposite
-// direction): a CREDIT option posting identifies the buyer; the DEBIT
-// option posting (same OptionDescription) identifies the seller.
+// For ACCEPT items (Kind empty/"accept"): Buyer and Seller are extracted by
+// pairing this option-asset posting with its counterpart in the same TX (the
+// matched posting with opposite direction): a CREDIT posting identifies the
+// buyer; the DEBIT posting (same OptionDescription) identifies the seller, and
+// OptionDescriptionJSON is the on-wire option description.
+//
+// For EXERCISE items (Kind "exercise_seller"/"exercise_buyer"): the wire carries
+// no OPTION asset, so OptionDescriptionJSON is RECONSTRUCTED to carry at least
+// the negotiationId (the only field recordOptionExercise reads from it); the
+// contract terms are read from the stored peer_option_contract at settlement.
+// Buyer/Seller are not populated for exercise items (RecordOptionContract reads
+// the parties from the stored row), but the request requires non-nil ids, so the
+// COMMIT step fills placeholders.
 type OptionItem struct {
 	PostingIndex          int                        `json:"postingIndex"`
 	Direction             string                     `json:"direction"` // local-side direction: DEBIT or CREDIT
 	OptionDescriptionJSON string                     `json:"optionDescriptionJson"`
 	Buyer                 contractsitx.ForeignBankId `json:"buyer"`
 	Seller                contractsitx.ForeignBankId `json:"seller"`
+	// Kind discriminates the COMMIT settlement (accept vs exercise-seller vs
+	// exercise-buyer). Empty == accept (back-compat). See the consts above.
+	Kind string `json:"kind,omitempty"`
 }
 
 // ReserveResult is the outcome of executing the reserve phase of a NEW_TX.
@@ -87,19 +123,27 @@ type SellerHoldingChecker interface {
 	// receiver's OWN stored terms (forged-strike defense — see the RPC doc). The
 	// executor calls it for seller-side (DEBIT) option legs on this bank's routing.
 	ValidatePeerOptionMoneyLeg(ctx context.Context, in *stockpb.ValidatePeerOptionMoneyLegRequest, opts ...grpc.CallOption) (*stockpb.ValidatePeerOptionMoneyLegResponse, error)
+	// LookupPeerOptionContract answers "do I hold the SELLER side of this
+	// negotiationId?" for the OPTION pseudo-account exercise legs. found=true
+	// returns the stored terms (seller_id, strike, qty, currency, settlement_date,
+	// status) the executor uses to gate + settle the leg; found=false means a
+	// different bank owns it and the executor SKIPS the pseudo-account leg
+	// (ownership-by-contract, not routing-prefix — design §3.3.1).
+	LookupPeerOptionContract(ctx context.Context, in *stockpb.LookupPeerOptionContractRequest, opts ...grpc.CallOption) (*stockpb.LookupPeerOptionContractResponse, error)
 }
 
 // optionDescriptionForCheck mirrors the fields of contract.sitx.OptionDescription
-// that the executor's pre-check needs. Local copy avoids importing the full
-// option-description type just for two fields and keeps the executor
-// independent of stock-service's option model.
+// that the executor's reserve-phase needs. Local copy keeps the executor
+// independent of the full wire type; only stock + amount are needed for the
+// seller-share reservation at NEW_TX vote time.
 type optionDescriptionForCheck struct {
+	Stock  stockDescForCheck `json:"stock"`
+	Amount int64             `json:"amount"`
+}
+
+// stockDescForCheck is the subset of StockDescription needed by optionDescriptionForCheck.
+type stockDescForCheck struct {
 	Ticker string `json:"ticker"`
-	Amount int64  `json:"amount"`
-	// Intent distinguishes accept (""/"accept") from exercise ("exercise").
-	// Only accept reserves seller shares at vote time; exercise consumes the
-	// existing accept-time hold at COMMIT (see Reserve).
-	Intent string `json:"intent"`
 }
 
 // PostingExecutor walks an accepted NEW_TX's postings and applies the
@@ -125,8 +169,201 @@ func (e *PostingExecutor) SetHoldingChecker(c SellerHoldingChecker) {
 	e.holdingChecker = c
 }
 
-// isOptionLeg reports whether a posting carries an option asset.
+// isOptionLeg reports whether a posting carries an option ASSET (accept form).
 func isOptionLeg(p contractsitx.InternalPosting) bool { return p.AssetType == "OPTION" }
+
+// isOptionPseudoAccount reports whether a posting is on an OPTION pseudo-account
+// (exercise form). Its AccountID is the negotiationId and RoutingNumber is the
+// negotiation's routing.
+func isOptionPseudoAccount(p contractsitx.InternalPosting) bool {
+	return p.AccountType == contractsitx.AccountTypeOption
+}
+
+// isStockAsset reports whether a posting moves a STOCK asset (its AssetID is the
+// ticker).
+func isStockAsset(p contractsitx.InternalPosting) bool {
+	return p.AssetType == contractsitx.AssetTypeStock
+}
+
+// findExerciseNegotiationID returns the negotiationId ({routing, id}) carried by
+// the OPTION pseudo-account legs of an exercise TX. The buyer-side STOCK arrival
+// (a PERSON leg) does not itself carry the negotiationId, so the buyer bank reads
+// it from the pseudo-account legs present in the same posting set. Returns ok=false
+// if the TX has no OPTION pseudo-account leg (not an exercise).
+func findExerciseNegotiationID(postings []contractsitx.InternalPosting) (contractsitx.ForeignBankId, bool) {
+	for i := range postings {
+		p := postings[i]
+		if isOptionPseudoAccount(p) {
+			return contractsitx.ForeignBankId{RoutingNumber: p.RoutingNumber, ID: p.AccountID}, true
+		}
+	}
+	return contractsitx.ForeignBankId{}, false
+}
+
+// reconstructExerciseOptionDesc builds the minimal OptionDescription JSON an
+// exercise OptionItem carries so recordOptionExercise can extract the
+// negotiationId. recordOptionExercise reads ONLY opt.NegotiationID from this JSON
+// (all other terms come from the stored peer_option_contract row), so we populate
+// just that.
+func reconstructExerciseOptionDesc(negID contractsitx.ForeignBankId) string {
+	od := contractsitx.OptionDescription{NegotiationID: negID}
+	b, err := json.Marshal(od)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// exercisePseudoResult is the outcome of reserveExercisePseudoLeg for one
+// OPTION pseudo-account leg. Exactly one of the three states is set:
+//   - skip: the leg is not ours to settle (no checker wired, or we hold the
+//     buyer side as the sender) — the caller continues to the next posting.
+//   - noVote: a closed-failure reason — the caller returns it immediately.
+//   - reservationKey / optionItem: a successful reservation key to append (MONAS
+//     strike credit) or an OptionItem to merge (STOCK consume-at-commit).
+type exercisePseudoResult struct {
+	skip           bool
+	noVote         *ReserveResult
+	reservationKey string
+	optionItem     *OptionItem
+}
+
+// reserveExercisePseudoLeg handles an OPTION pseudo-account leg (exercise form,
+// spec §2.7.2). These are processed by OWNERSHIP-BY-CONTRACT, not routing-prefix:
+// the pseudo-account's id is the negotiationId, whose routing is the negotiation's
+// bank — NOT necessarily the settling (seller) bank. So we ask stock-service "do I
+// hold the SELLER side of this negotiationId?"; only the bank that does settles
+// these legs. The buyer bank (holds the buyer side, lookup found=false) SKIPS them
+// even when the routing matches its own. See the option wire-conformance design
+// §3.3.1.
+//
+// Returns one of: skip (not ours), a NO vote, or a successful reservation key /
+// option item to merge. Behaviour is identical to the prior inline block: same
+// gate order (not-found→OPTION_NEGOTIATION_NOT_FOUND, status/expired→
+// OPTION_USED_OR_EXPIRED, amount→OPTION_AMOUNT_INCORRECT), same skip-vs-NO
+// discriminator (peerBankCode == strconv(ownRouting)), same key derivation.
+func (e *PostingExecutor) reserveExercisePseudoLeg(ctx context.Context, p contractsitx.InternalPosting, i int, peerBankCode, locallyGeneratedKey string) exercisePseudoResult {
+	negID := contractsitx.ForeignBankId{RoutingNumber: p.RoutingNumber, ID: p.AccountID}
+	if e.holdingChecker == nil {
+		// No checker wired → cannot prove ownership; skip (don't vote NO so a
+		// misconfigured/test executor doesn't reject the whole TX).
+		return exercisePseudoResult{skip: true}
+	}
+	look, lerr := e.holdingChecker.LookupPeerOptionContract(ctx, &stockpb.LookupPeerOptionContractRequest{
+		NegotiationRoutingNumber: negID.RoutingNumber,
+		NegotiationId:            negID.ID,
+	})
+	if lerr != nil {
+		// Transient lookup failure on a leg we might own → fail closed so money
+		// never moves on an unverified exercise.
+		nv := noVote(contractsitx.NoVoteReasonOptionNegotiationNotFound, i)
+		return exercisePseudoResult{noVote: &nv}
+	}
+	if look == nil || !look.GetFound() {
+		// We do NOT hold the seller side. Two cases:
+		//  - We are the SENDER (buyer's bank, local reserve): peerBankCode is
+		//    our own routing. We hold the BUYER side, so skipping the seller-
+		//    side pseudo legs is correct (they settle at the seller's bank).
+		//  - We are the RECEIVER (seller's bank, inbound NEW_TX): peerBankCode
+		//    is the counterparty's. The pseudo legs MUST settle here, so a
+		//    missing seller contract is a closed-failure → vote NO.
+		// Distinguish by whether peerBankCode == our own routing (sender path).
+		if peerBankCode == strconv.FormatInt(e.ownRouting, 10) {
+			return exercisePseudoResult{skip: true}
+		}
+		nv := noVote(contractsitx.NoVoteReasonOptionNegotiationNotFound, i)
+		return exercisePseudoResult{noVote: &nv}
+	}
+	// We hold the seller side. Gate: used/expired/amount BEFORE any reserve.
+	if look.GetStatus() != "active" && look.GetStatus() != "exercising" {
+		nv := noVote(contractsitx.NoVoteReasonOptionUsedOrExpired, i)
+		return exercisePseudoResult{noVote: &nv}
+	}
+	if optionExpired(look.GetSettlementDate()) {
+		nv := noVote(contractsitx.NoVoteReasonOptionUsedOrExpired, i)
+		return exercisePseudoResult{noVote: &nv}
+	}
+	switch p.AssetType {
+	case contractsitx.AssetTypeMonas:
+		// Strike arrives at the pseudo-account → credit the SELLER's money
+		// account. Validate amount == StrikePrice*Quantity first.
+		strike, serr := decimal.NewFromString(look.GetStrikePrice())
+		if serr != nil {
+			nv := noVote(contractsitx.NoVoteReasonOptionAmountIncorrect, i)
+			return exercisePseudoResult{noVote: &nv}
+		}
+		expected := strike.Mul(decimal.NewFromInt(look.GetQuantity()))
+		legAmt, aerr := decimal.NewFromString(p.Amount)
+		if aerr != nil || !legAmt.Equal(expected) {
+			nv := noVote(contractsitx.NoVoteReasonOptionAmountIncorrect, i)
+			return exercisePseudoResult{noVote: &nv}
+		}
+		// Resolve + credit the seller's money account, tracked like any MONAS
+		// credit so COMMIT settles (CommitIncoming) and ROLLBACK releases.
+		currency := p.AssetID
+		key, reason, ok := e.reserveIncomingCredit(ctx, look.GetSellerId(), currency, p.Amount, peerBankCode, locallyGeneratedKey)
+		if !ok {
+			nv := noVote(reason, i)
+			return exercisePseudoResult{noVote: &nv}
+		}
+		return exercisePseudoResult{reservationKey: key}
+	case contractsitx.AssetTypeStock:
+		// Underlying leaves the pseudo-account → at COMMIT, consume the
+		// seller's RESERVED shares (placed at ACCEPT) + mark exercised. We do
+		// NOT place a new share reservation here.
+		return exercisePseudoResult{optionItem: &OptionItem{
+			PostingIndex:          i,
+			Direction:             contractsitx.DirectionDebit,
+			OptionDescriptionJSON: reconstructExerciseOptionDesc(negID),
+			Kind:                  OptionKindExerciseSeller,
+		}}
+	}
+	// Non-MONAS/non-STOCK asset on a pseudo-account leg: nothing to do here
+	// (mirrors the prior inline switch falling through to the trailing continue).
+	return exercisePseudoResult{skip: true}
+}
+
+// reserveIncomingCredit resolves the account for a credit posting, applies the
+// standard credit gates, and places the incoming hold (ReserveIncoming). Returns
+// the reservation key on success, or (ok=false) with the NoVote reason for the
+// first failing gate. Used by BOTH the generic MONAS-CREDIT arm and the exercise
+// pseudo-account MONAS-CREDIT path so the five gate-reason mappings can't diverge:
+//
+//	resolve fail   → NO_SUCH_ACCOUNT
+//	lookup fail    → NO_SUCH_ACCOUNT
+//	inactive acct  → UNACCEPTABLE_ASSET
+//	currency wrong → NO_SUCH_ASSET
+//	reserve fail   → UNACCEPTABLE_ASSET
+//
+// The reservation key is "<peer>:<idem>" and the idempotency key is
+// "sitx-reserve-<key>" — identical to the prior inline derivation at both sites.
+func (e *PostingExecutor) reserveIncomingCredit(ctx context.Context, accountID, currency, amount, peerBankCode, locallyGeneratedKey string) (key string, noVoteReason string, ok bool) {
+	accountNumber, resolveErr := e.resolveAccountForPosting(ctx, accountID, currency)
+	if resolveErr != nil {
+		return "", contractsitx.NoVoteReasonNoSuchAccount, false
+	}
+	acct, err := e.client.GetAccountByNumber(ctx, &accountpb.GetAccountByNumberRequest{AccountNumber: accountNumber})
+	if err != nil || acct == nil {
+		return "", contractsitx.NoVoteReasonNoSuchAccount, false
+	}
+	if acct.Status != "active" {
+		return "", contractsitx.NoVoteReasonUnacceptableAsset, false
+	}
+	if acct.CurrencyCode != currency {
+		return "", contractsitx.NoVoteReasonNoSuchAsset, false
+	}
+	key = peerBankCode + ":" + locallyGeneratedKey
+	if _, err := e.client.ReserveIncoming(ctx, &accountpb.ReserveIncomingRequest{
+		AccountNumber:  accountNumber,
+		Amount:         amount,
+		Currency:       currency,
+		ReservationKey: key,
+		IdempotencyKey: "sitx-reserve-" + key,
+	}); err != nil {
+		return "", contractsitx.NoVoteReasonUnacceptableAsset, false
+	}
+	return key, "", true
+}
 
 // Reserve runs the receive-side reserve phase of a NEW_TX. It walks each
 // posting whose routingNumber matches ours and applies it to a local
@@ -201,10 +438,10 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.I
 				NegotiationRouting: full.NegotiationID.RoutingNumber,
 				NegotiationId:      full.NegotiationID.ID,
 				Direction:          p.Direction,
-				Intent:             full.Intent,
-				Ticker:             full.Ticker,
+				Intent:             contractsitx.OptionIntentAccept,
+				Ticker:             full.Stock.Ticker,
 				Quantity:           full.Amount,
-				StrikePrice:        full.StrikePrice.String(),
+				StrikePrice:        full.PricePerUnit.Amount.Decimal.String(),
 				MoneyAmount:        money.String(),
 				Currency:           moneyCcy,
 				PeerBankCode:       peerBankCode,
@@ -217,6 +454,48 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.I
 
 	for i := range postings {
 		p := postings[i]
+
+		// --- Exercise pseudo-account legs (spec §2.7.2 OPTION pseudo-account form).
+		// These are processed by OWNERSHIP-BY-CONTRACT, not routing-prefix: the
+		// pseudo-account's id is the negotiationId, whose routing is the
+		// negotiation's bank — NOT necessarily the settling (seller) bank. So we ask
+		// stock-service "do I hold the SELLER side of this negotiationId?"; only the
+		// bank that does settles these legs. The buyer bank (holds the buyer side,
+		// lookup found=false) SKIPS them even when the routing matches its own. See
+		// the option wire-conformance design §3.3.1.
+		if isOptionPseudoAccount(p) {
+			r := e.reserveExercisePseudoLeg(ctx, p, i, peerBankCode, locallyGeneratedKey)
+			if r.noVote != nil {
+				return *r.noVote
+			}
+			if r.reservationKey != "" {
+				keys = append(keys, r.reservationKey)
+			}
+			if r.optionItem != nil {
+				options = append(options, *r.optionItem)
+			}
+			continue
+		}
+
+		// --- Exercise STOCK arrival on a PERSON/ACCOUNT leg on our routing (the
+		// buyer's underlying). The buyer bank emits an exercise_buyer item that
+		// drives RecordOptionContract Intent=exercise Direction=CREDIT at COMMIT
+		// (credit the buyer's holding + mark exercised). The negotiationId is read
+		// from the OPTION pseudo-account legs in the same TX.
+		if p.RoutingNumber == e.ownRouting && isStockAsset(p) && p.Direction == contractsitx.DirectionCredit {
+			negID, ok := findExerciseNegotiationID(postings)
+			if !ok {
+				return noVote(contractsitx.NoVoteReasonUnacceptableAsset, i)
+			}
+			options = append(options, OptionItem{
+				PostingIndex:          i,
+				Direction:             contractsitx.DirectionCredit,
+				OptionDescriptionJSON: reconstructExerciseOptionDesc(negID),
+				Kind:                  OptionKindExerciseBuyer,
+			})
+			continue
+		}
+
 		if p.RoutingNumber != e.ownRouting {
 			continue
 		}
@@ -246,32 +525,23 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.I
 			if p.Direction == contractsitx.DirectionDebit {
 				var od optionDescriptionForCheck
 				_ = json.Unmarshal([]byte(p.AssetID), &od)
-				// Reserve the seller's shares ONLY for accept-intent option
-				// formation. On EXERCISE (intent="exercise") the shares were
-				// already held at accept and are consumed/transferred at COMMIT
-				// via RecordOptionContract; reserving again here would orphan a
-				// second hold that the exercise never releases (it only touches
-				// the accept-time reservation), permanently locking those shares.
-				// This matches OptionDescription.Intent's documented contract.
-				if od.Intent != "exercise" {
-					if e.holdingChecker == nil {
+				if e.holdingChecker == nil {
+					return noVote(contractsitx.NoVoteReasonInsufficientAsset, i)
+				}
+				if od.Stock.Ticker != "" && od.Amount > 0 {
+					seller := sellerByDesc[p.AssetID]
+					crossbankTxID := peerBankCode + ":" + locallyGeneratedKey
+					resp, err := e.holdingChecker.ReserveSellerSharesForNewTx(ctx, &stockpb.ReserveSellerSharesRequest{
+						SellerId: &stockpb.PeerForeignBankId{
+							RoutingNumber: seller.RoutingNumber,
+							Id:            seller.ID,
+						},
+						Ticker:        od.Stock.Ticker,
+						Quantity:      od.Amount,
+						CrossbankTxId: crossbankTxID,
+					})
+					if err != nil || resp == nil || !resp.GetOk() {
 						return noVote(contractsitx.NoVoteReasonInsufficientAsset, i)
-					}
-					if od.Ticker != "" && od.Amount > 0 {
-						seller := sellerByDesc[p.AssetID]
-						crossbankTxID := peerBankCode + ":" + locallyGeneratedKey
-						resp, err := e.holdingChecker.ReserveSellerSharesForNewTx(ctx, &stockpb.ReserveSellerSharesRequest{
-							SellerId: &stockpb.PeerForeignBankId{
-								RoutingNumber: seller.RoutingNumber,
-								Id:            seller.ID,
-							},
-							Ticker:        od.Ticker,
-							Quantity:      od.Amount,
-							CrossbankTxId: crossbankTxID,
-						})
-						if err != nil || resp == nil || !resp.GetOk() {
-							return noVote(contractsitx.NoVoteReasonInsufficientAsset, i)
-						}
 					}
 				}
 			}
@@ -281,15 +551,31 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.I
 				OptionDescriptionJSON: p.AssetID,
 				Buyer:                 buyerByDesc[p.AssetID],
 				Seller:                sellerByDesc[p.AssetID],
+				Kind:                  OptionKindAccept,
 			})
 			continue
 		}
 		// MONAS leg: the currency is the AssetID.
 		currency := p.AssetID
 		amountStr := p.Amount
-		// Resolve participant-ID-style accountId ("client-7") to a concrete bank
-		// account number for the requested currency when this is a PERSON leg;
-		// 18-digit account numbers (ACCOUNT legs) pass through unchanged.
+
+		if p.Direction == contractsitx.DirectionCredit {
+			// Shared with the exercise pseudo-account MONAS-credit path so the
+			// resolve/lookup/active/currency/reserve gate-reason mappings can't
+			// diverge between the two sites.
+			key, reason, ok := e.reserveIncomingCredit(ctx, p.AccountID, currency, amountStr, peerBankCode, locallyGeneratedKey)
+			if !ok {
+				return noVote(reason, i)
+			}
+			keys = append(keys, key)
+			continue
+		}
+
+		// Non-CREDIT MONAS legs (DEBIT / unknown): resolve + gate the account up
+		// front, exactly as before, then branch. Resolve participant-ID-style
+		// accountId ("client-7") to a concrete bank account number for the
+		// requested currency when this is a PERSON leg; 18-digit account numbers
+		// (ACCOUNT legs) pass through unchanged.
 		accountNumber, resolveErr := e.resolveAccountForPosting(ctx, p.AccountID, currency)
 		if resolveErr != nil {
 			return noVote(contractsitx.NoVoteReasonNoSuchAccount, i)
@@ -306,19 +592,6 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.I
 		}
 
 		switch p.Direction {
-		case contractsitx.DirectionCredit:
-			key := peerBankCode + ":" + locallyGeneratedKey
-			if _, err := e.client.ReserveIncoming(ctx, &accountpb.ReserveIncomingRequest{
-				AccountNumber:  accountNumber,
-				Amount:         amountStr,
-				Currency:       currency,
-				ReservationKey: key,
-				IdempotencyKey: "sitx-reserve-" + key,
-			}); err != nil {
-				return noVote(contractsitx.NoVoteReasonUnacceptableAsset, i)
-			}
-			keys = append(keys, key)
-
 		case contractsitx.DirectionDebit:
 			// Reserve-then-settle: place a HOLD now (AvailableBalance -= amount),
 			// not an immediate debit. The reservation key is the per-posting tag
@@ -433,14 +706,20 @@ func (e *PostingExecutor) SettleLocal(ctx context.Context, postings []contractsi
 	return nil
 }
 
-// ExtractOwnOptionItems deterministically derives the OptionItems for option-
-// asset legs on THIS bank's routing, mirroring the option-collection pass inside
-// Reserve (no side effects). The buyer/seller maps are built from ALL postings
-// (CREDIT = buyer side, DEBIT = seller side, paired by OptionDescription JSON),
-// then items are emitted only for own-routing legs. Used by the replay cron's
+// ExtractOwnOptionItems deterministically derives the OptionItems for option
+// legs on THIS bank's routing, mirroring the option-collection pass inside
+// Reserve (no side effects, no gRPC). Used by the replay cron's
 // CommitOutboundLocal so a sender-side option contract can still be materialised
 // after a crash between the inline Reserve() and the inline materialise — the
 // cron has only the persisted postings, not the in-memory ReserveResult.
+//
+// This is the SENDER-side mirror only (it owns its OWN routing's legs):
+//   - ACCEPT: an OPTION-asset leg on our routing → accept item (buyer/seller maps
+//     built from CREDIT/DEBIT pairing by OptionDescription JSON).
+//   - EXERCISE: a PERSON/ACCOUNT STOCK CREDIT leg on our routing → exercise_buyer
+//     item (the sender is always the buyer's bank; the negotiationId is read from
+//     the OPTION pseudo-account legs in the same TX). The seller-side exercise
+//     legs are never own-routing on the sender, so they are not emitted here.
 func (e *PostingExecutor) ExtractOwnOptionItems(postings []contractsitx.InternalPosting) []OptionItem {
 	buyerByDesc := map[string]contractsitx.ForeignBankId{}
 	sellerByDesc := map[string]contractsitx.ForeignBankId{}
@@ -457,19 +736,32 @@ func (e *PostingExecutor) ExtractOwnOptionItems(postings []contractsitx.Internal
 			sellerByDesc[p.AssetID] = party
 		}
 	}
+	exNegID, hasExercise := findExerciseNegotiationID(postings)
 	var items []OptionItem
 	for i := range postings {
 		p := postings[i]
-		if p.RoutingNumber != e.ownRouting || !isOptionLeg(p) {
+		if p.RoutingNumber != e.ownRouting {
 			continue
 		}
-		items = append(items, OptionItem{
-			PostingIndex:          i,
-			Direction:             p.Direction,
-			OptionDescriptionJSON: p.AssetID,
-			Buyer:                 buyerByDesc[p.AssetID],
-			Seller:                sellerByDesc[p.AssetID],
-		})
+		switch {
+		case isOptionLeg(p):
+			items = append(items, OptionItem{
+				PostingIndex:          i,
+				Direction:             p.Direction,
+				OptionDescriptionJSON: p.AssetID,
+				Buyer:                 buyerByDesc[p.AssetID],
+				Seller:                sellerByDesc[p.AssetID],
+				Kind:                  OptionKindAccept,
+			})
+		case hasExercise && isStockAsset(p) && p.Direction == contractsitx.DirectionCredit:
+			// Buyer's underlying arrival on the sender side → exercise_buyer.
+			items = append(items, OptionItem{
+				PostingIndex:          i,
+				Direction:             contractsitx.DirectionCredit,
+				OptionDescriptionJSON: reconstructExerciseOptionDesc(exNegID),
+				Kind:                  OptionKindExerciseBuyer,
+			})
+		}
 	}
 	return items
 }
@@ -546,6 +838,28 @@ func pairedMoney(postings []contractsitx.InternalPosting, ownRouting int64, opti
 		total = total.Add(amt)
 	}
 	return total, currency
+}
+
+// optionExpired reports whether an option's settlementDate has passed (now >
+// settlementDate), per spec §2.7.2 ("should be unable to execute" past
+// settlement). Parses the SI-TX ISO-8601-with-timezone string; an unparseable
+// date is treated as NOT expired (fail open here — the amount/status gates and
+// the downstream stored-terms settlement still guard the money path; rejecting a
+// parse error as "expired" would wrongly block a legitimate exercise on a date
+// format the peer encoded slightly differently).
+func optionExpired(settlementDate string) bool {
+	if settlementDate == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, settlementDate)
+	if err != nil {
+		// Try date-only fallback (some peers may send a bare date).
+		t, err = time.Parse("2006-01-02", settlementDate)
+		if err != nil {
+			return false
+		}
+	}
+	return time.Now().After(t)
 }
 
 // hasOwnDebitOptionLeg reports whether the postings contain a DEBIT

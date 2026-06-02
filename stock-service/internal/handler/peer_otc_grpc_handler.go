@@ -736,12 +736,11 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	// 3. Seller debits 1× OptionDescription (asset)
 	// 4. Buyer credits 1× OptionDescription
 	optDesc := contractsitx.OptionDescription{
-		Ticker:         offer.Ticker,
-		Amount:         offer.Amount,
-		StrikePrice:    offer.PricePerStock,
-		Currency:       offer.Currency,
-		SettlementDate: offer.SettlementDate,
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: h.ownRouting, ID: row.ForeignID},
+		Stock:          contractsitx.StockDescription{Ticker: offer.Ticker},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: offer.PricePerStock}, Currency: offer.Currency},
+		SettlementDate: offer.SettlementDate,
+		Amount:         offer.Amount,
 	}
 	optDescJSON, err := json.Marshal(optDesc)
 	if err != nil {
@@ -957,10 +956,10 @@ func (h *PeerOTCGRPCHandler) RecordOptionContract(ctx context.Context, req *stoc
 		BuyerID:                  req.GetBuyerId().GetId(),
 		SellerRoutingNumber:      req.GetSellerId().GetRoutingNumber(),
 		SellerID:                 req.GetSellerId().GetId(),
-		Ticker:                   opt.Ticker,
+		Ticker:                   opt.Stock.Ticker,
 		Quantity:                 opt.Amount,
-		StrikePrice:              opt.StrikePrice,
-		Currency:                 opt.Currency,
+		StrikePrice:              opt.PricePerUnit.Amount.Decimal,
+		Currency:                 opt.PricePerUnit.Currency,
 		SettlementDate:           opt.SettlementDate,
 		Direction:                req.GetDirection(),
 		Status:                   "active",
@@ -1206,6 +1205,48 @@ func (h *PeerOTCGRPCHandler) ValidatePeerOptionMoneyLeg(ctx context.Context, req
 	return &stockpb.ValidatePeerOptionMoneyLegResponse{Ok: true}, nil
 }
 
+// LookupPeerOptionContract returns the SELLER-side (DEBIT) peer_option_contract
+// this bank holds for a negotiationId, with the stored terms the
+// transaction-service executor needs to recognise and settle an OPTION
+// pseudo-account exercise leg. The exercise wire pins the OPTION pseudo-account
+// id to the negotiationId (spec §2.7.2), whose routingNumber is the
+// negotiation's bank — NOT necessarily the seller's. So the executor decides
+// ownership of a pseudo-account leg by asking each candidate bank "do you hold
+// the SELLER side of this negotiation?" via this RPC: found=true means this bank
+// is the settling (seller) bank and should process the leg; found=false means a
+// different bank owns it and this bank must SKIP the leg (see the option
+// wire-conformance design §3.3.1). Always the DEBIT row — the seller side.
+// Read-only; no status mutation here (the gates + settlement run in the executor
+// + RecordOptionContract).
+func (h *PeerOTCGRPCHandler) LookupPeerOptionContract(_ context.Context, req *stockpb.LookupPeerOptionContractRequest) (*stockpb.LookupPeerOptionContractResponse, error) {
+	if h.peerOptionRepo == nil {
+		return nil, status.Error(codes.Unimplemented, "peer option repo not wired")
+	}
+	if req.GetNegotiationId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "negotiation_id is required")
+	}
+	contract, err := h.peerOptionRepo.GetByNegotiationAndDirection(
+		req.GetNegotiationRoutingNumber(), req.GetNegotiationId(), contractsitx.DirectionDebit,
+	)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// No seller-side row → this bank does not hold the seller side.
+			return &stockpb.LookupPeerOptionContractResponse{Found: false}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "lookup contract: %v", err)
+	}
+	return &stockpb.LookupPeerOptionContractResponse{
+		Found:          true,
+		SellerId:       contract.SellerID,
+		Ticker:         contract.Ticker,
+		StrikePrice:    contract.StrikePrice.String(),
+		Quantity:       contract.Quantity,
+		Currency:       contract.Currency,
+		SettlementDate: contract.SettlementDate,
+		Status:         contract.Status,
+	}, nil
+}
+
 // ReserveSellerSharesForNewTx places a real HOLD on the seller's shares at
 // SI-TX NEW_TX (vote) time, keyed on crossbank_tx_id. Unlike
 // CheckSellerCanDeliver this increments reserved_quantity so the shares cannot
@@ -1404,16 +1445,17 @@ func (h *PeerOTCGRPCHandler) recordOptionExercise(ctx context.Context, req *stoc
 	return &stockpb.RecordOptionContractResponse{ContractId: contract.ID}, nil
 }
 
-// InitiateOptionExercise builds the 4-posting Transaction for an
-// exercise (strike money buyer→seller + option markers carrying
-// intent=exercise) and dispatches it via transaction-service. Called
-// by the gateway when the buyer hits POST /api/v3/me/otc/contracts/peer/:id/exercise.
+// InitiateOptionExercise builds the 4-posting exercise Transaction in the spec
+// pseudo-account form (MONAS strike: buyer account -> OPTION pseudo-account;
+// STOCK: OPTION pseudo-account -> buyer PERSON record) and dispatches it via
+// transaction-service. No OPTION asset or intent is carried on the wire.
+// Called by the gateway when the buyer hits POST /api/v3/me/otc/contracts/peer/:id/exercise.
 //
 // Validates: contract exists on this bank, this bank holds the buyer
-// side (so this bank is the IB), contract is active, settlement date
-// is in the future. The strike-money currency-account on the seller's
-// bank is left to that bank to resolve via the executor's seller-id-
-// to-account lookup at NEW_TX time.
+// side (so this bank is the IB), contract is active. The CompareAndSetStatus
+// claim (active → exercising) guards against double-exercise races; on any
+// synchronous dispatch failure the claim is reverted (exercising → active)
+// so the buyer can retry.
 func (h *PeerOTCGRPCHandler) InitiateOptionExercise(ctx context.Context, req *stockpb.InitiateOptionExerciseRequest) (*stockpb.InitiateOptionExerciseResponse, error) {
 	if req.GetPeerOptionContractId() == 0 || req.GetBuyerAccountNumber() == "" {
 		return nil, status.Error(codes.InvalidArgument, "peer_option_contract_id and buyer_account_number are required")
@@ -1446,38 +1488,31 @@ func (h *PeerOTCGRPCHandler) InitiateOptionExercise(ctx context.Context, req *st
 	}
 
 	strikeAmount := contract.StrikePrice.Mul(decimal.NewFromInt(contract.Quantity)).String()
+	qty := strconv.FormatInt(contract.Quantity, 10)
 
-	// Build the OptionDescription that goes into the option-marker
-	// postings, with intent="exercise" so each receiving bank's
-	// RecordOptionContract dispatches to the exercise branch.
-	optDesc := contractsitx.OptionDescription{
-		Ticker:         contract.Ticker,
-		Amount:         contract.Quantity,
-		StrikePrice:    contract.StrikePrice,
-		Currency:       contract.Currency,
-		SettlementDate: contract.SettlementDate,
-		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: contract.NegotiationRoutingNumber, ID: contract.NegotiationID},
-		Intent:         "exercise",
-	}
-	optDescJSON, err := json.Marshal(optDesc)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "marshal option description: %v", err)
-	}
-	optAssetID := string(optDescJSON)
-
-	// 4 postings:
-	//  1. Buyer DEBIT strike money (currency)
-	//  2. Seller CREDIT strike money (currency)
-	//  3. Seller DEBIT option (marker)
-	//  4. Buyer CREDIT option (marker)
-	// Currency postings carry account numbers; option postings carry
-	// participant ids (the executor resolves via ListAccountsByClient
-	// at NEW_TX time).
+	// Build the spec pseudo-account postings for option exercise.
+	// The spec expresses exercise as a transaction between the buyer and an
+	// OPTION pseudo-account (AccountType=OPTION, AccountId=negotiationId):
+	//  1. strike MONAS leaves the buyer's currency account  (DEBIT)
+	//  2. strike MONAS arrives at the OPTION pseudo-account (CREDIT — seller bank credits the seller)
+	//  3. STOCK leaves the OPTION pseudo-account            (DEBIT — seller bank releases reserved shares)
+	//  4. STOCK arrives at the buyer PERSON record          (CREDIT — buyer bank credits the holding)
+	negRouting := contract.NegotiationRoutingNumber
+	negID := contract.NegotiationID
 	postings := []*transactionpb.SiTxPosting{
-		{RoutingNumber: contract.BuyerRoutingNumber, AccountId: req.GetBuyerAccountNumber(), AssetId: contract.Currency, Amount: strikeAmount, Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: contract.SellerRoutingNumber, AccountId: contract.SellerID, AssetId: contract.Currency, Amount: strikeAmount, Direction: contractsitx.DirectionCredit},
-		{RoutingNumber: contract.SellerRoutingNumber, AccountId: contract.SellerID, AssetId: optAssetID, Amount: "1", Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: contract.BuyerRoutingNumber, AccountId: contract.BuyerID, AssetId: optAssetID, Amount: "1", Direction: contractsitx.DirectionCredit},
+		// 1. Buyer pays strike (MONAS, from the pinned buyer account).
+		{RoutingNumber: contract.BuyerRoutingNumber, AccountId: req.GetBuyerAccountNumber(), AccountType: contractsitx.AccountTypeAccount, AssetId: contract.Currency, AssetType: contractsitx.AssetTypeMonas, Amount: strikeAmount, Direction: contractsitx.DirectionDebit},
+		// The OPTION pseudo-account's id IS the negotiationId (spec §2.7.2), so its
+		// routingNumber is the negotiation's routing — NOT necessarily the seller's
+		// bank. The receiver claims these pseudo-account legs by matching the stored
+		// contract (ownership-by-contract), not by routing-prefix; see the option
+		// wire-conformance design doc §3.3.1. Do not change to SellerRoutingNumber.
+		// 2. Strike arrives at the option pseudo-account (seller bank credits the seller).
+		{RoutingNumber: negRouting, AccountId: negID, AccountType: contractsitx.AccountTypeOption, AssetId: contract.Currency, AssetType: contractsitx.AssetTypeMonas, Amount: strikeAmount, Direction: contractsitx.DirectionCredit},
+		// 3. Underlying leaves the option pseudo-account (seller bank releases reserved shares).
+		{RoutingNumber: negRouting, AccountId: negID, AccountType: contractsitx.AccountTypeOption, AssetId: contract.Ticker, AssetType: contractsitx.AssetTypeStock, Amount: qty, Direction: contractsitx.DirectionDebit},
+		// 4. Underlying arrives at the buyer (buyer bank credits the holding).
+		{RoutingNumber: contract.BuyerRoutingNumber, AccountId: contract.BuyerID, AccountType: contractsitx.AccountTypePerson, AssetId: contract.Ticker, AssetType: contractsitx.AssetTypeStock, Amount: qty, Direction: contractsitx.DirectionCredit},
 	}
 
 	resp, err := h.peerTx.InitiateOutboundTxWithPostings(ctx, &transactionpb.SiTxInitiateWithPostingsRequest{

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	accountpb "github.com/exbanka/contract/accountpb"
+	contractsitx "github.com/exbanka/contract/sitx"
 	"github.com/exbanka/transaction-service/internal/model"
 	"google.golang.org/grpc"
 )
@@ -131,8 +132,9 @@ func TestCommitOutboundLocal_OTC_Exercise_SettlesHoldAndMaterialisesBuyerOption(
 	}
 
 	// Same OptionDescription string on both option legs so buyer/seller pairing
-	// matches; intent=exercise drives the buyer-credit transition.
-	od := `{"ticker":"MA","amount":2,"strikePrice":"250","currency":"RSD","intent":"exercise"}`
+	// matches. Intent is now INTERNAL ONLY (OptionIntentAccept); exercise is
+	// signalled by TX shape (OPTION pseudo-account), not by a wire intent field.
+	od := `{"negotiationId":{"routingNumber":222,"id":"neg-ex"},"stock":{"ticker":"MA"},"pricePerUnit":{"amount":250,"currency":"RSD"},"settlementDate":"","amount":2}`
 	row := &model.OutboundPeerTx{
 		IdempotenceKey: "idem-otcx",
 		TxKind:         "otc-exercise",
@@ -154,7 +156,9 @@ func TestCommitOutboundLocal_OTC_Exercise_SettlesHoldAndMaterialisesBuyerOption(
 	if settles[0].GetReservationKey() != "111:idem-otcx:0" {
 		t.Errorf("settle key = %q want 111:idem-otcx:0", settles[0].GetReservationKey())
 	}
-	// (2) Exactly the buyer's own CREDIT option leg is materialised, intent carried.
+	// (2) Exactly the buyer's own CREDIT option leg is materialised.
+	// Intent is always OptionIntentAccept — the receiver (stock-service)
+	// determines accept vs exercise from TxKind/shape, not from a wire field.
 	if len(rec.calls) != 1 {
 		t.Fatalf("expected exactly 1 RecordOptionContract (own CREDIT leg), got %d", len(rec.calls))
 	}
@@ -162,8 +166,8 @@ func TestCommitOutboundLocal_OTC_Exercise_SettlesHoldAndMaterialisesBuyerOption(
 	if c.GetDirection() != "CREDIT" {
 		t.Errorf("materialised leg direction = %q want CREDIT", c.GetDirection())
 	}
-	if c.GetIntent() != "exercise" {
-		t.Errorf("materialised leg intent = %q want exercise", c.GetIntent())
+	if c.GetIntent() != contractsitx.OptionIntentAccept {
+		t.Errorf("materialised leg intent = %q want %q", c.GetIntent(), contractsitx.OptionIntentAccept)
 	}
 	if c.GetCrossbankTxId() != "111:idem-otcx" {
 		t.Errorf("crossbank_tx_id = %q want 111:idem-otcx", c.GetCrossbankTxId())

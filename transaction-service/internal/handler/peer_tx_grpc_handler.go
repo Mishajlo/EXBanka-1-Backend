@@ -383,11 +383,11 @@ func (h *PeerTxGRPCHandler) HandleCommitTx(ctx context.Context, req *transaction
 // crossbankTxID is "<peerCode>:<idem>" so both banks key contracts
 // the same way (idempotency is on (crossbank_tx_id, posting_index)).
 //
-// The OptionDescription's intent field flows through to the gRPC
-// request: empty/"accept" creates new contract rows, "exercise"
-// transitions existing rows and runs role-specific stock ops on
-// stock-service. Decoded per item so a single TX could mix intents
-// in principle (today they're homogeneous per-TX).
+// OPTION-asset legs are always accept-phase: the executor supplies
+// OptionIntentAccept unconditionally. The intent field is no longer
+// carried on the wire — it was removed from OptionDescription as part
+// of the SI-TX wire-conformance reshape. Exercise flows use a different
+// account shape handled by a later task, not the OPTION-asset path.
 //
 // No-op when optionRecorder is nil or list is empty/`[]`.
 // optionsJSONHasDebitLeg reports whether the persisted NEW_TX OptionsJSON
@@ -402,7 +402,15 @@ func optionsJSONHasDebitLeg(optionsJSON string) bool {
 		return false
 	}
 	for _, it := range items {
-		if it.Direction == contractsitx.DirectionDebit {
+		// Only an ACCEPT debit leg placed a vote-time seller-share HOLD that
+		// ROLLBACK_TX must release. Exercise items never place a vote-time share
+		// hold (the shares were reserved at ACCEPT and are only CONSUMED at the
+		// exercise COMMIT), so an exercise_seller DEBIT item must NOT trigger an
+		// accept-style share release — its MONAS reservation is released via the
+		// normal ReservationKeys/ReleaseIncoming path. Empty Kind == accept
+		// (back-compat with items persisted before the discriminator).
+		if it.Direction == contractsitx.DirectionDebit &&
+			(it.Kind == "" || it.Kind == sitx.OptionKindAccept) {
 			return true
 		}
 	}
@@ -418,18 +426,29 @@ func (h *PeerTxGRPCHandler) materialiseOptions(ctx context.Context, optionsJSON,
 		return err
 	}
 	for _, it := range items {
-		var od contractsitx.OptionDescription
-		_ = json.Unmarshal([]byte(it.OptionDescriptionJSON), &od)
-		_, err := h.optionRecorder.RecordOptionContract(ctx, &stockpb.RecordOptionContractRequest{
+		req := &stockpb.RecordOptionContractRequest{
 			CrossbankTxId:         crossbankTxID,
 			PostingIndex:          int32(it.PostingIndex),
 			OptionDescriptionJson: it.OptionDescriptionJSON,
 			BuyerId:               &stockpb.PeerForeignBankId{RoutingNumber: it.Buyer.RoutingNumber, Id: it.Buyer.ID},
 			SellerId:              &stockpb.PeerForeignBankId{RoutingNumber: it.Seller.RoutingNumber, Id: it.Seller.ID},
 			Direction:             it.Direction,
-			Intent:                od.Intent,
-		})
-		if err != nil {
+		}
+		// Branch on the item Kind (set by the executor from the transaction SHAPE):
+		//   - accept (empty/"accept"): forms the cross-bank contract; Intent=accept,
+		//     parties taken from the paired OPTION-asset legs.
+		//   - exercise_seller/exercise_buyer: drives recordOptionExercise via
+		//     Intent=exercise with the item's Direction (DEBIT seller / CREDIT buyer).
+		//     recordOptionExercise looks the contract up by negotiationId+direction and
+		//     reads the parties/terms from the stored row, so BuyerId/SellerId here are
+		//     only the non-nil placeholders the request validation requires.
+		switch it.Kind {
+		case sitx.OptionKindExerciseSeller, sitx.OptionKindExerciseBuyer:
+			req.Intent = contractsitx.OptionIntentExercise
+		default: // "" or OptionKindAccept
+			req.Intent = contractsitx.OptionIntentAccept
+		}
+		if _, err := h.optionRecorder.RecordOptionContract(ctx, req); err != nil {
 			return err
 		}
 	}
