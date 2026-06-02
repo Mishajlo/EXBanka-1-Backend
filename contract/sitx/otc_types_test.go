@@ -1,6 +1,7 @@
 package sitx_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -32,14 +33,40 @@ func TestOtcOffer_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestOptionDescriptionSpecShape(t *testing.T) {
+	od := sitx.OptionDescription{
+		NegotiationID:  sitx.ForeignBankId{RoutingNumber: 111, ID: "neg-1"},
+		Stock:          sitx.StockDescription{Ticker: "WMT"},
+		PricePerUnit:   sitx.MonetaryValue{Amount: sitx.DecimalNumber{Decimal: decimal.RequireFromString("50")}, Currency: "RSD"},
+		SettlementDate: "2026-12-31T00:00:00+02:00",
+		Amount:         10,
+	}
+	got, err := json.Marshal(od)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := `{"negotiationId":{"routingNumber":111,"id":"neg-1"},"stock":{"ticker":"WMT"},"pricePerUnit":{"amount":50,"currency":"RSD"},"settlementDate":"2026-12-31T00:00:00+02:00","amount":10}`
+	var g, w bytes.Buffer
+	_ = json.Compact(&g, got)
+	_ = json.Compact(&w, []byte(want))
+	if g.String() != w.String() {
+		t.Errorf("shape mismatch:\n got: %s\nwant: %s", g.String(), w.String())
+	}
+	// Verify removed flat fields do not appear anywhere in the output.
+	for _, bad := range []string{`"strikePrice"`, `"intent"`} {
+		if bytes.Contains(got, []byte(bad)) {
+			t.Errorf("unexpected legacy field %s in %s", bad, got)
+		}
+	}
+}
+
 func TestOptionDescription_RoundTrip(t *testing.T) {
 	in := sitx.OptionDescription{
-		Ticker:         "AAPL",
-		Amount:         50,
-		StrikePrice:    decimal.NewFromFloat(200),
-		Currency:       "USD",
-		SettlementDate: "2026-12-31",
 		NegotiationID:  sitx.ForeignBankId{RoutingNumber: 222, ID: "neg-7"},
+		Stock:          sitx.StockDescription{Ticker: "AAPL"},
+		PricePerUnit:   sitx.MonetaryValue{Amount: sitx.DecimalNumber{Decimal: decimal.RequireFromString("200")}, Currency: "USD"},
+		SettlementDate: "2026-12-31",
+		Amount:         50,
 	}
 	raw, _ := json.Marshal(in)
 	var out sitx.OptionDescription

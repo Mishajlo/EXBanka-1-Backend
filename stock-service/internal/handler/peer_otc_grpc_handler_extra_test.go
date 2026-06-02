@@ -233,12 +233,11 @@ func TestPeerOTC_RecordOptionContract_AcceptIntent(t *testing.T) {
 	h.SetHoldingReserver(reserver)
 
 	optDesc := contractsitx.OptionDescription{
-		Ticker:         "AAPL",
-		Amount:         5,
-		StrikePrice:    decimal.NewFromInt(100),
-		Currency:       "USD",
-		SettlementDate: "2026-12-31",
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: 222, ID: "neg-1"},
+		Stock:          contractsitx.StockDescription{Ticker: "AAPL"},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.NewFromInt(100)}, Currency: "USD"},
+		SettlementDate: "2026-12-31",
+		Amount:         5,
 	}
 	optJSON, _ := json.Marshal(optDesc)
 
@@ -276,9 +275,11 @@ func TestPeerOTC_RecordOptionContract_AcceptIntent_CreditDirection_NoReserveCall
 	h.SetHoldingReserver(reserver)
 
 	optDesc := contractsitx.OptionDescription{
-		Ticker: "MSFT", Amount: 1, StrikePrice: decimal.NewFromInt(50), Currency: "USD",
-		SettlementDate: "2026-12-31",
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: 222, ID: "neg-2"},
+		Stock:          contractsitx.StockDescription{Ticker: "MSFT"},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.NewFromInt(50)}, Currency: "USD"},
+		SettlementDate: "2026-12-31",
+		Amount:         1,
 	}
 	optJSON, _ := json.Marshal(optDesc)
 	_, err := h.RecordOptionContract(context.Background(), &stockpb.RecordOptionContractRequest{
@@ -311,9 +312,11 @@ func TestPeerOTC_RecordOptionContract_ReserveFails_ReturnsError(t *testing.T) {
 	h.SetHoldingReserver(reserver)
 
 	optDesc := contractsitx.OptionDescription{
-		Ticker: "AAPL", Amount: 5, StrikePrice: decimal.NewFromInt(100), Currency: "USD",
-		SettlementDate: "2026-12-31",
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: 222, ID: "neg-rf"},
+		Stock:          contractsitx.StockDescription{Ticker: "AAPL"},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.NewFromInt(100)}, Currency: "USD"},
+		SettlementDate: "2026-12-31",
+		Amount:         5,
 	}
 	optJSON, _ := json.Marshal(optDesc)
 	_, err := h.RecordOptionContract(context.Background(), &stockpb.RecordOptionContractRequest{
@@ -342,9 +345,11 @@ func TestPeerOTC_RecordOptionContract_UnparseableSeller_ReturnsError(t *testing.
 	h.SetHoldingReserver(reserver)
 
 	optDesc := contractsitx.OptionDescription{
-		Ticker: "AAPL", Amount: 5, StrikePrice: decimal.NewFromInt(100), Currency: "USD",
-		SettlementDate: "2026-12-31",
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: 222, ID: "neg-bad"},
+		Stock:          contractsitx.StockDescription{Ticker: "AAPL"},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.NewFromInt(100)}, Currency: "USD"},
+		SettlementDate: "2026-12-31",
+		Amount:         5,
 	}
 	optJSON, _ := json.Marshal(optDesc)
 	_, err := h.RecordOptionContract(context.Background(), &stockpb.RecordOptionContractRequest{
@@ -421,9 +426,11 @@ func TestPeerOTC_RecordOptionContract_ExerciseIntent_DebitConsumesReservation(t 
 
 	// Step 1: record an active contract on DEBIT direction.
 	optDesc := contractsitx.OptionDescription{
-		Ticker: "AAPL", Amount: 10, StrikePrice: decimal.NewFromInt(100), Currency: "USD",
-		SettlementDate: "2026-12-31",
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: 222, ID: "neg-x"},
+		Stock:          contractsitx.StockDescription{Ticker: "AAPL"},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.NewFromInt(100)}, Currency: "USD"},
+		SettlementDate: "2026-12-31",
+		Amount:         10,
 	}
 	optJSON, _ := json.Marshal(optDesc)
 	_, _ = h.RecordOptionContract(context.Background(), &stockpb.RecordOptionContractRequest{
@@ -459,9 +466,11 @@ func TestPeerOTC_RecordOptionContract_ExerciseIntent_CreditCreditsBuyer(t *testi
 
 	// Step 1: record active contract CREDIT direction.
 	optDesc := contractsitx.OptionDescription{
-		Ticker: "AAPL", Amount: 7, StrikePrice: decimal.NewFromInt(100), Currency: "USD",
-		SettlementDate: "2026-12-31",
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: 222, ID: "neg-c"},
+		Stock:          contractsitx.StockDescription{Ticker: "AAPL"},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.NewFromInt(100)}, Currency: "USD"},
+		SettlementDate: "2026-12-31",
+		Amount:         7,
 	}
 	optJSON, _ := json.Marshal(optDesc)
 	_, _ = h.RecordOptionContract(context.Background(), &stockpb.RecordOptionContractRequest{
@@ -523,9 +532,11 @@ func TestPeerOTC_RecordOptionContract_ExerciseIntent_BuyerCreditFails_ReturnsErr
 	h.SetHoldingReserver(reserver)
 
 	optDesc := contractsitx.OptionDescription{
-		Ticker: "AAPL", Amount: 10, StrikePrice: decimal.NewFromInt(150), Currency: "USD",
-		SettlementDate: "2026-12-31",
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: 222, ID: "neg-credit-fail"},
+		Stock:          contractsitx.StockDescription{Ticker: "AAPL"},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.NewFromInt(150)}, Currency: "USD"},
+		SettlementDate: "2026-12-31",
+		Amount:         10,
 	}
 	optJSON, _ := json.Marshal(optDesc)
 	// Seed an active CREDIT-direction contract (this bank holds the buyer).
@@ -585,9 +596,11 @@ func TestPeerOTC_InitiateOptionExercise_HappyPath(t *testing.T) {
 
 	// Seed an active CREDIT-direction contract (this bank holds the buyer).
 	optDesc := contractsitx.OptionDescription{
-		Ticker: "AAPL", Amount: 10, StrikePrice: decimal.NewFromInt(150), Currency: "USD",
-		SettlementDate: "2026-12-31",
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: 222, ID: "neg-init"},
+		Stock:          contractsitx.StockDescription{Ticker: "AAPL"},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.NewFromInt(150)}, Currency: "USD"},
+		SettlementDate: "2026-12-31",
+		Amount:         10,
 	}
 	optJSON, _ := json.Marshal(optDesc)
 	resp, _ := h.RecordOptionContract(context.Background(), &stockpb.RecordOptionContractRequest{
@@ -625,9 +638,11 @@ func TestPeerOTC_InitiateOptionExercise_HappyPath(t *testing.T) {
 func seedActiveBuyerContract(t *testing.T, h *handler.PeerOTCGRPCHandler, neg string) uint64 {
 	t.Helper()
 	optDesc := contractsitx.OptionDescription{
-		Ticker: "AAPL", Amount: 10, StrikePrice: decimal.NewFromInt(150), Currency: "USD",
-		SettlementDate: "2026-12-31",
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: 222, ID: neg},
+		Stock:          contractsitx.StockDescription{Ticker: "AAPL"},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.NewFromInt(150)}, Currency: "USD"},
+		SettlementDate: "2026-12-31",
+		Amount:         10,
 	}
 	optJSON, _ := json.Marshal(optDesc)
 	resp, err := h.RecordOptionContract(context.Background(), &stockpb.RecordOptionContractRequest{
@@ -730,9 +745,11 @@ func TestPeerOTC_InitiateOptionExercise_WrongDirection(t *testing.T) {
 
 	// Seed an active DEBIT-direction contract (this bank does NOT hold the buyer).
 	optDesc := contractsitx.OptionDescription{
-		Ticker: "AAPL", Amount: 10, StrikePrice: decimal.NewFromInt(150), Currency: "USD",
-		SettlementDate: "2026-12-31",
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: 222, ID: "neg-d"},
+		Stock:          contractsitx.StockDescription{Ticker: "AAPL"},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.NewFromInt(150)}, Currency: "USD"},
+		SettlementDate: "2026-12-31",
+		Amount:         10,
 	}
 	optJSON, _ := json.Marshal(optDesc)
 	resp, _ := h.RecordOptionContract(context.Background(), &stockpb.RecordOptionContractRequest{

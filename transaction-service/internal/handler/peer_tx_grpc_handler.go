@@ -418,8 +418,6 @@ func (h *PeerTxGRPCHandler) materialiseOptions(ctx context.Context, optionsJSON,
 		return err
 	}
 	for _, it := range items {
-		var od contractsitx.OptionDescription
-		_ = json.Unmarshal([]byte(it.OptionDescriptionJSON), &od)
 		_, err := h.optionRecorder.RecordOptionContract(ctx, &stockpb.RecordOptionContractRequest{
 			CrossbankTxId:         crossbankTxID,
 			PostingIndex:          int32(it.PostingIndex),
@@ -427,7 +425,7 @@ func (h *PeerTxGRPCHandler) materialiseOptions(ctx context.Context, optionsJSON,
 			BuyerId:               &stockpb.PeerForeignBankId{RoutingNumber: it.Buyer.RoutingNumber, Id: it.Buyer.ID},
 			SellerId:              &stockpb.PeerForeignBankId{RoutingNumber: it.Seller.RoutingNumber, Id: it.Seller.ID},
 			Direction:             it.Direction,
-			Intent:                od.Intent,
+			Intent:                contractsitx.OptionIntentAccept,
 		})
 		if err != nil {
 			return err

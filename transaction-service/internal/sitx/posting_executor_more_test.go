@@ -230,7 +230,7 @@ func TestPostingExecutor_OptionItem_HoldingChecker_RejectsOnInsufficient(t *test
 	stub := &stubAccountClient{}
 	exec := sitx.NewPostingExecutor(stub, 111)
 	exec.SetHoldingChecker(&stubHoldingChecker{resp: &stockpb.CheckSellerCanDeliverResponse{Ok: false}})
-	optDesc := `{"ticker":"GOOG","amount":2}`
+	optDesc := `{"stock":{"ticker":"GOOG"},"amount":2}`
 	postings := []contractsitx.InternalPosting{
 		// Option DEBIT on our routing 111 = WE are the seller.
 		option(111, "client-9", optDesc, 2, contractsitx.DirectionDebit),
@@ -302,7 +302,7 @@ func TestPostingExecutor_OptionItem_ReservesSharesAtVote(t *testing.T) {
 	exec := sitx.NewPostingExecutor(stub, 111)
 	chk := &stubHoldingChecker{resp: &stockpb.CheckSellerCanDeliverResponse{Ok: true}}
 	exec.SetHoldingChecker(chk)
-	optDesc := `{"ticker":"AAPL","amount":4}`
+	optDesc := `{"stock":{"ticker":"AAPL"},"amount":4}`
 	postings := []contractsitx.InternalPosting{
 		option(111, "client-7", optDesc, 4, contractsitx.DirectionDebit),
 		option(222, "client-8", optDesc, 4, contractsitx.DirectionCredit),
@@ -330,7 +330,7 @@ func TestPostingExecutor_ExerciseForgedStrike_NoVote(t *testing.T) {
 	exec := sitx.NewPostingExecutor(stub, 222)
 	chk := &stubHoldingChecker{validateDeny: true} // receiver's terms don't match → deny
 	exec.SetHoldingChecker(chk)
-	od := `{"ticker":"MA","amount":2,"strikePrice":"250","currency":"RSD","negotiationId":{"routingNumber":222,"id":"neg-1"},"intent":"exercise"}`
+	od := `{"negotiationId":{"routingNumber":222,"id":"neg-1"},"stock":{"ticker":"MA"},"pricePerUnit":{"amount":250,"currency":"RSD"},"settlementDate":"","amount":2}`
 	postings := []contractsitx.InternalPosting{
 		option(222, "client-1", od, 2, contractsitx.DirectionDebit),     // seller option leg (own routing)
 		money(222, "client-1", "RSD", 1, contractsitx.DirectionCredit), // forged strike = 1 (should be 500)
@@ -344,12 +344,13 @@ func TestPostingExecutor_ExerciseForgedStrike_NoVote(t *testing.T) {
 		t.Fatalf("expected exactly 1 money-leg validation, got %d", chk.validateCalls)
 	}
 	// The validator must have been handed the SELLER's paired money (the forged 1)
-	// and the exercise intent + negotiation identity, so it can compare to stored terms.
+	// and negotiation identity, so it can compare to stored terms.
+	// Intent is now always OptionIntentAccept — exercise is signalled by TX shape.
 	if got := chk.lastValidate.GetMoneyAmount(); got != "1" {
 		t.Errorf("validator money_amount = %q, want 1 (the forged seller credit)", got)
 	}
-	if chk.lastValidate.GetIntent() != "exercise" {
-		t.Errorf("validator intent = %q, want exercise", chk.lastValidate.GetIntent())
+	if chk.lastValidate.GetIntent() != contractsitx.OptionIntentAccept {
+		t.Errorf("validator intent = %q, want %q", chk.lastValidate.GetIntent(), contractsitx.OptionIntentAccept)
 	}
 	if chk.lastValidate.GetNegotiationId() != "neg-1" || chk.lastValidate.GetDirection() != "DEBIT" {
 		t.Errorf("validator neg/dir = %q/%q, want neg-1/DEBIT", chk.lastValidate.GetNegotiationId(), chk.lastValidate.GetDirection())

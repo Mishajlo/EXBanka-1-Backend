@@ -736,12 +736,11 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	// 3. Seller debits 1× OptionDescription (asset)
 	// 4. Buyer credits 1× OptionDescription
 	optDesc := contractsitx.OptionDescription{
-		Ticker:         offer.Ticker,
-		Amount:         offer.Amount,
-		StrikePrice:    offer.PricePerStock,
-		Currency:       offer.Currency,
-		SettlementDate: offer.SettlementDate,
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: h.ownRouting, ID: row.ForeignID},
+		Stock:          contractsitx.StockDescription{Ticker: offer.Ticker},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.RequireFromString(offer.PricePerStock.String())}, Currency: offer.Currency},
+		SettlementDate: offer.SettlementDate,
+		Amount:         offer.Amount,
 	}
 	optDescJSON, err := json.Marshal(optDesc)
 	if err != nil {
@@ -957,10 +956,10 @@ func (h *PeerOTCGRPCHandler) RecordOptionContract(ctx context.Context, req *stoc
 		BuyerID:                  req.GetBuyerId().GetId(),
 		SellerRoutingNumber:      req.GetSellerId().GetRoutingNumber(),
 		SellerID:                 req.GetSellerId().GetId(),
-		Ticker:                   opt.Ticker,
+		Ticker:                   opt.Stock.Ticker,
 		Quantity:                 opt.Amount,
-		StrikePrice:              opt.StrikePrice,
-		Currency:                 opt.Currency,
+		StrikePrice:              opt.PricePerUnit.Amount.Decimal,
+		Currency:                 opt.PricePerUnit.Currency,
 		SettlementDate:           opt.SettlementDate,
 		Direction:                req.GetDirection(),
 		Status:                   "active",
@@ -1448,16 +1447,15 @@ func (h *PeerOTCGRPCHandler) InitiateOptionExercise(ctx context.Context, req *st
 	strikeAmount := contract.StrikePrice.Mul(decimal.NewFromInt(contract.Quantity)).String()
 
 	// Build the OptionDescription that goes into the option-marker
-	// postings, with intent="exercise" so each receiving bank's
-	// RecordOptionContract dispatches to the exercise branch.
+	// postings. Intent is now INTERNAL ONLY (contractsitx.OptionIntentExercise)
+	// and not serialised to the wire — the receiver derives intent from
+	// transaction shape (OPTION pseudo-account = exercise).
 	optDesc := contractsitx.OptionDescription{
-		Ticker:         contract.Ticker,
-		Amount:         contract.Quantity,
-		StrikePrice:    contract.StrikePrice,
-		Currency:       contract.Currency,
-		SettlementDate: contract.SettlementDate,
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: contract.NegotiationRoutingNumber, ID: contract.NegotiationID},
-		Intent:         "exercise",
+		Stock:          contractsitx.StockDescription{Ticker: contract.Ticker},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.RequireFromString(contract.StrikePrice.String())}, Currency: contract.Currency},
+		SettlementDate: contract.SettlementDate,
+		Amount:         contract.Quantity,
 	}
 	optDescJSON, err := json.Marshal(optDesc)
 	if err != nil {
@@ -1472,12 +1470,19 @@ func (h *PeerOTCGRPCHandler) InitiateOptionExercise(ctx context.Context, req *st
 	//  4. Buyer CREDIT option (marker)
 	// Currency postings carry account numbers; option postings carry
 	// participant ids (the executor resolves via ListAccountsByClient
-	// at NEW_TX time).
+	// at NEW_TX time). AccountType/AssetType MUST be set so the executor
+	// classifies each leg correctly: it detects option legs by
+	// AssetType=="OPTION" (not by sniffing asset_id), and the outbound
+	// wire builder derives the spec account/asset tagged-unions from
+	// AccountType/AssetType. Mirrors the accept builder above — omitting
+	// these (the pre-fix bug) made the option marker legs look like MONAS
+	// legs, so resolving "client-N" for currency=<optionJSON> failed with
+	// NO_SUCH_ACCOUNT and exercise could never dispatch.
 	postings := []*transactionpb.SiTxPosting{
-		{RoutingNumber: contract.BuyerRoutingNumber, AccountId: req.GetBuyerAccountNumber(), AssetId: contract.Currency, Amount: strikeAmount, Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: contract.SellerRoutingNumber, AccountId: contract.SellerID, AssetId: contract.Currency, Amount: strikeAmount, Direction: contractsitx.DirectionCredit},
-		{RoutingNumber: contract.SellerRoutingNumber, AccountId: contract.SellerID, AssetId: optAssetID, Amount: "1", Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: contract.BuyerRoutingNumber, AccountId: contract.BuyerID, AssetId: optAssetID, Amount: "1", Direction: contractsitx.DirectionCredit},
+		{RoutingNumber: contract.BuyerRoutingNumber, AccountId: req.GetBuyerAccountNumber(), AccountType: accountTypeFor(req.GetBuyerAccountNumber()), AssetId: contract.Currency, AssetType: contractsitx.AssetTypeMonas, Amount: strikeAmount, Direction: contractsitx.DirectionDebit},
+		{RoutingNumber: contract.SellerRoutingNumber, AccountId: contract.SellerID, AccountType: accountTypeFor(contract.SellerID), AssetId: contract.Currency, AssetType: contractsitx.AssetTypeMonas, Amount: strikeAmount, Direction: contractsitx.DirectionCredit},
+		{RoutingNumber: contract.SellerRoutingNumber, AccountId: contract.SellerID, AccountType: accountTypeFor(contract.SellerID), AssetId: optAssetID, AssetType: contractsitx.AssetTypeOption, Amount: "1", Direction: contractsitx.DirectionDebit},
+		{RoutingNumber: contract.BuyerRoutingNumber, AccountId: contract.BuyerID, AccountType: accountTypeFor(contract.BuyerID), AssetId: optAssetID, AssetType: contractsitx.AssetTypeOption, Amount: "1", Direction: contractsitx.DirectionCredit},
 	}
 
 	resp, err := h.peerTx.InitiateOutboundTxWithPostings(ctx, &transactionpb.SiTxInitiateWithPostingsRequest{

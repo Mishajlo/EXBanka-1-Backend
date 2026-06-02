@@ -72,14 +72,12 @@ func TestPostingRoundTrip(t *testing.T) {
 // option description fields (ticker, strike, settlement date, negotiation id)
 // across the SpecPostingToInternal → InternalPostingToSpec round-trip.
 func TestOptionAssetRoundTrip(t *testing.T) {
-	strike := decimal.RequireFromString("5")
 	od := OptionDescription{
-		Ticker:         "AAPL",
-		Amount:         10,
-		StrikePrice:    strike,
-		Currency:       "USD",
-		SettlementDate: "2026-06-15T00:00:00Z",
 		NegotiationID:  ForeignBankId{RoutingNumber: 222, ID: "neg-1"},
+		Stock:          StockDescription{Ticker: "AAPL"},
+		PricePerUnit:   MonetaryValue{Amount: DecimalNumber{decimal.RequireFromString("5")}, Currency: "USD"},
+		SettlementDate: "2026-06-15T00:00:00Z",
+		Amount:         10,
 	}
 	orig := Posting{
 		Account: TxAccount{Type: "PERSON", ID: &ForeignBankId{RoutingNumber: 222, ID: "client-42"}},
@@ -111,11 +109,11 @@ func TestOptionAssetRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected OptionDescription, got %T", back.Asset.Asset)
 	}
-	if backOD.Ticker != "AAPL" {
-		t.Fatalf("ticker round-trip: got %q want %q", backOD.Ticker, "AAPL")
+	if backOD.Stock.Ticker != "AAPL" {
+		t.Fatalf("ticker round-trip: got %q want %q", backOD.Stock.Ticker, "AAPL")
 	}
-	if !backOD.StrikePrice.Equal(strike) {
-		t.Fatalf("strike round-trip: got %s want %s", backOD.StrikePrice, strike)
+	if !backOD.PricePerUnit.Amount.Decimal.Equal(decimal.RequireFromString("5")) {
+		t.Fatalf("strike round-trip: got %s want %s", backOD.PricePerUnit.Amount.String(), "5")
 	}
 	if backOD.NegotiationID.ID != "neg-1" {
 		t.Fatalf("negotiation id round-trip: got %q want %q", backOD.NegotiationID.ID, "neg-1")
