@@ -738,7 +738,7 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	optDesc := contractsitx.OptionDescription{
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: h.ownRouting, ID: row.ForeignID},
 		Stock:          contractsitx.StockDescription{Ticker: offer.Ticker},
-		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.RequireFromString(offer.PricePerStock.String())}, Currency: offer.Currency},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: offer.PricePerStock}, Currency: offer.Currency},
 		SettlementDate: offer.SettlementDate,
 		Amount:         offer.Amount,
 	}
@@ -1453,7 +1453,7 @@ func (h *PeerOTCGRPCHandler) InitiateOptionExercise(ctx context.Context, req *st
 	optDesc := contractsitx.OptionDescription{
 		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: contract.NegotiationRoutingNumber, ID: contract.NegotiationID},
 		Stock:          contractsitx.StockDescription{Ticker: contract.Ticker},
-		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: decimal.RequireFromString(contract.StrikePrice.String())}, Currency: contract.Currency},
+		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: contract.StrikePrice}, Currency: contract.Currency},
 		SettlementDate: contract.SettlementDate,
 		Amount:         contract.Quantity,
 	}

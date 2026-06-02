@@ -98,6 +98,7 @@ type optionDescriptionForCheck struct {
 	Amount int64             `json:"amount"`
 }
 
+// stockDescForCheck is the subset of StockDescription needed by optionDescriptionForCheck.
 type stockDescForCheck struct {
 	Ticker string `json:"ticker"`
 }
