@@ -15567,9 +15567,10 @@ func (x *RecordOptionContractResponse) GetContractId() uint64 {
 
 // InitiateOptionExerciseRequest triggers a cross-bank option exercise.
 // Called by the gateway when the buyer hits POST /api/v3/me/otc/contracts/peer/:id/exercise.
-// Stock-service composes the 4-posting Transaction (strike money +
-// option markers with intent=exercise) and dispatches via
-// transaction-service.PeerTxService.InitiateOutboundTxWithPostings.
+// Stock-service composes the 4-posting Transaction in the spec OPTION-pseudo-account
+// form (strike MONAS: buyer account -> OPTION pseudo-account; STOCK: OPTION
+// pseudo-account -> buyer PERSON record; no OPTION asset or intent on the wire)
+// and dispatches via transaction-service.PeerTxService.InitiateOutboundTxWithPostings.
 type InitiateOptionExerciseRequest struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	PeerOptionContractId uint64                 `protobuf:"varint,1,opt,name=peer_option_contract_id,json=peerOptionContractId,proto3" json:"peer_option_contract_id,omitempty"` // local row id (resolved by gateway)
@@ -16183,6 +16184,163 @@ func (x *ReleaseSellerSharesResponse) GetReleasedQuantity() int64 {
 	return 0
 }
 
+// LookupPeerOptionContractRequest identifies a contract by its negotiationId
+// (the OPTION pseudo-account id on the exercise wire). The seller-side row is
+// looked up by (negotiation_routing_number, negotiation_id, direction="DEBIT").
+type LookupPeerOptionContractRequest struct {
+	state                    protoimpl.MessageState `protogen:"open.v1"`
+	NegotiationRoutingNumber int64                  `protobuf:"varint,1,opt,name=negotiation_routing_number,json=negotiationRoutingNumber,proto3" json:"negotiation_routing_number,omitempty"`
+	NegotiationId            string                 `protobuf:"bytes,2,opt,name=negotiation_id,json=negotiationId,proto3" json:"negotiation_id,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
+}
+
+func (x *LookupPeerOptionContractRequest) Reset() {
+	*x = LookupPeerOptionContractRequest{}
+	mi := &file_stock_stock_proto_msgTypes[202]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LookupPeerOptionContractRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LookupPeerOptionContractRequest) ProtoMessage() {}
+
+func (x *LookupPeerOptionContractRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stock_stock_proto_msgTypes[202]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LookupPeerOptionContractRequest.ProtoReflect.Descriptor instead.
+func (*LookupPeerOptionContractRequest) Descriptor() ([]byte, []int) {
+	return file_stock_stock_proto_rawDescGZIP(), []int{202}
+}
+
+func (x *LookupPeerOptionContractRequest) GetNegotiationRoutingNumber() int64 {
+	if x != nil {
+		return x.NegotiationRoutingNumber
+	}
+	return 0
+}
+
+func (x *LookupPeerOptionContractRequest) GetNegotiationId() string {
+	if x != nil {
+		return x.NegotiationId
+	}
+	return ""
+}
+
+// LookupPeerOptionContractResponse carries the stored SELLER-side terms.
+// found=false ⇒ this bank does not hold the seller side (skip the leg).
+type LookupPeerOptionContractResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Found          bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	SellerId       string                 `protobuf:"bytes,2,opt,name=seller_id,json=sellerId,proto3" json:"seller_id,omitempty"` // SI-TX participant id of the seller ("client-<n>"/"bank")
+	Ticker         string                 `protobuf:"bytes,3,opt,name=ticker,proto3" json:"ticker,omitempty"`
+	StrikePrice    string                 `protobuf:"bytes,4,opt,name=strike_price,json=strikePrice,proto3" json:"strike_price,omitempty"` // per-unit strike, decimal string
+	Quantity       int64                  `protobuf:"varint,5,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	Currency       string                 `protobuf:"bytes,6,opt,name=currency,proto3" json:"currency,omitempty"`
+	SettlementDate string                 `protobuf:"bytes,7,opt,name=settlement_date,json=settlementDate,proto3" json:"settlement_date,omitempty"` // ISO-8601 string (lex-comparable, SI-TX shape)
+	Status         string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`                                       // "active" | "exercising" | "exercised" | ...
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *LookupPeerOptionContractResponse) Reset() {
+	*x = LookupPeerOptionContractResponse{}
+	mi := &file_stock_stock_proto_msgTypes[203]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LookupPeerOptionContractResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LookupPeerOptionContractResponse) ProtoMessage() {}
+
+func (x *LookupPeerOptionContractResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_stock_stock_proto_msgTypes[203]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LookupPeerOptionContractResponse.ProtoReflect.Descriptor instead.
+func (*LookupPeerOptionContractResponse) Descriptor() ([]byte, []int) {
+	return file_stock_stock_proto_rawDescGZIP(), []int{203}
+}
+
+func (x *LookupPeerOptionContractResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *LookupPeerOptionContractResponse) GetSellerId() string {
+	if x != nil {
+		return x.SellerId
+	}
+	return ""
+}
+
+func (x *LookupPeerOptionContractResponse) GetTicker() string {
+	if x != nil {
+		return x.Ticker
+	}
+	return ""
+}
+
+func (x *LookupPeerOptionContractResponse) GetStrikePrice() string {
+	if x != nil {
+		return x.StrikePrice
+	}
+	return ""
+}
+
+func (x *LookupPeerOptionContractResponse) GetQuantity() int64 {
+	if x != nil {
+		return x.Quantity
+	}
+	return 0
+}
+
+func (x *LookupPeerOptionContractResponse) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *LookupPeerOptionContractResponse) GetSettlementDate() string {
+	if x != nil {
+		return x.SettlementDate
+	}
+	return ""
+}
+
+func (x *LookupPeerOptionContractResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
 type CreateRecurringFundRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ClientId        uint64                 `protobuf:"varint,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
@@ -16196,7 +16354,7 @@ type CreateRecurringFundRequest struct {
 
 func (x *CreateRecurringFundRequest) Reset() {
 	*x = CreateRecurringFundRequest{}
-	mi := &file_stock_stock_proto_msgTypes[202]
+	mi := &file_stock_stock_proto_msgTypes[204]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16208,7 +16366,7 @@ func (x *CreateRecurringFundRequest) String() string {
 func (*CreateRecurringFundRequest) ProtoMessage() {}
 
 func (x *CreateRecurringFundRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[202]
+	mi := &file_stock_stock_proto_msgTypes[204]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16221,7 +16379,7 @@ func (x *CreateRecurringFundRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRecurringFundRequest.ProtoReflect.Descriptor instead.
 func (*CreateRecurringFundRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{202}
+	return file_stock_stock_proto_rawDescGZIP(), []int{204}
 }
 
 func (x *CreateRecurringFundRequest) GetClientId() uint64 {
@@ -16269,7 +16427,7 @@ type GetRecurringFundRequest struct {
 
 func (x *GetRecurringFundRequest) Reset() {
 	*x = GetRecurringFundRequest{}
-	mi := &file_stock_stock_proto_msgTypes[203]
+	mi := &file_stock_stock_proto_msgTypes[205]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16281,7 +16439,7 @@ func (x *GetRecurringFundRequest) String() string {
 func (*GetRecurringFundRequest) ProtoMessage() {}
 
 func (x *GetRecurringFundRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[203]
+	mi := &file_stock_stock_proto_msgTypes[205]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16294,7 +16452,7 @@ func (x *GetRecurringFundRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRecurringFundRequest.ProtoReflect.Descriptor instead.
 func (*GetRecurringFundRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{203}
+	return file_stock_stock_proto_rawDescGZIP(), []int{205}
 }
 
 func (x *GetRecurringFundRequest) GetId() uint64 {
@@ -16320,7 +16478,7 @@ type CancelRecurringFundResponse struct {
 
 func (x *CancelRecurringFundResponse) Reset() {
 	*x = CancelRecurringFundResponse{}
-	mi := &file_stock_stock_proto_msgTypes[204]
+	mi := &file_stock_stock_proto_msgTypes[206]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16332,7 +16490,7 @@ func (x *CancelRecurringFundResponse) String() string {
 func (*CancelRecurringFundResponse) ProtoMessage() {}
 
 func (x *CancelRecurringFundResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[204]
+	mi := &file_stock_stock_proto_msgTypes[206]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16345,7 +16503,7 @@ func (x *CancelRecurringFundResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelRecurringFundResponse.ProtoReflect.Descriptor instead.
 func (*CancelRecurringFundResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{204}
+	return file_stock_stock_proto_rawDescGZIP(), []int{206}
 }
 
 func (x *CancelRecurringFundResponse) GetCancelled() bool {
@@ -16364,7 +16522,7 @@ type ListMyRecurringFundsRequest struct {
 
 func (x *ListMyRecurringFundsRequest) Reset() {
 	*x = ListMyRecurringFundsRequest{}
-	mi := &file_stock_stock_proto_msgTypes[205]
+	mi := &file_stock_stock_proto_msgTypes[207]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16376,7 +16534,7 @@ func (x *ListMyRecurringFundsRequest) String() string {
 func (*ListMyRecurringFundsRequest) ProtoMessage() {}
 
 func (x *ListMyRecurringFundsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[205]
+	mi := &file_stock_stock_proto_msgTypes[207]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16389,7 +16547,7 @@ func (x *ListMyRecurringFundsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMyRecurringFundsRequest.ProtoReflect.Descriptor instead.
 func (*ListMyRecurringFundsRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{205}
+	return file_stock_stock_proto_rawDescGZIP(), []int{207}
 }
 
 func (x *ListMyRecurringFundsRequest) GetClientId() uint64 {
@@ -16416,7 +16574,7 @@ type RecurringFundResponse struct {
 
 func (x *RecurringFundResponse) Reset() {
 	*x = RecurringFundResponse{}
-	mi := &file_stock_stock_proto_msgTypes[206]
+	mi := &file_stock_stock_proto_msgTypes[208]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16428,7 +16586,7 @@ func (x *RecurringFundResponse) String() string {
 func (*RecurringFundResponse) ProtoMessage() {}
 
 func (x *RecurringFundResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[206]
+	mi := &file_stock_stock_proto_msgTypes[208]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16441,7 +16599,7 @@ func (x *RecurringFundResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecurringFundResponse.ProtoReflect.Descriptor instead.
 func (*RecurringFundResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{206}
+	return file_stock_stock_proto_rawDescGZIP(), []int{208}
 }
 
 func (x *RecurringFundResponse) GetId() uint64 {
@@ -16516,7 +16674,7 @@ type ListMyRecurringFundsResponse struct {
 
 func (x *ListMyRecurringFundsResponse) Reset() {
 	*x = ListMyRecurringFundsResponse{}
-	mi := &file_stock_stock_proto_msgTypes[207]
+	mi := &file_stock_stock_proto_msgTypes[209]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16528,7 +16686,7 @@ func (x *ListMyRecurringFundsResponse) String() string {
 func (*ListMyRecurringFundsResponse) ProtoMessage() {}
 
 func (x *ListMyRecurringFundsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[207]
+	mi := &file_stock_stock_proto_msgTypes[209]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16541,7 +16699,7 @@ func (x *ListMyRecurringFundsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMyRecurringFundsResponse.ProtoReflect.Descriptor instead.
 func (*ListMyRecurringFundsResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{207}
+	return file_stock_stock_proto_rawDescGZIP(), []int{209}
 }
 
 func (x *ListMyRecurringFundsResponse) GetItems() []*RecurringFundResponse {
@@ -16570,7 +16728,7 @@ type CreateRecurringOrderRequest struct {
 
 func (x *CreateRecurringOrderRequest) Reset() {
 	*x = CreateRecurringOrderRequest{}
-	mi := &file_stock_stock_proto_msgTypes[208]
+	mi := &file_stock_stock_proto_msgTypes[210]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16582,7 +16740,7 @@ func (x *CreateRecurringOrderRequest) String() string {
 func (*CreateRecurringOrderRequest) ProtoMessage() {}
 
 func (x *CreateRecurringOrderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[208]
+	mi := &file_stock_stock_proto_msgTypes[210]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16595,7 +16753,7 @@ func (x *CreateRecurringOrderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRecurringOrderRequest.ProtoReflect.Descriptor instead.
 func (*CreateRecurringOrderRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{208}
+	return file_stock_stock_proto_rawDescGZIP(), []int{210}
 }
 
 func (x *CreateRecurringOrderRequest) GetOwnerType() string {
@@ -16686,7 +16844,7 @@ type GetRecurringOrderRequest struct {
 
 func (x *GetRecurringOrderRequest) Reset() {
 	*x = GetRecurringOrderRequest{}
-	mi := &file_stock_stock_proto_msgTypes[209]
+	mi := &file_stock_stock_proto_msgTypes[211]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16698,7 +16856,7 @@ func (x *GetRecurringOrderRequest) String() string {
 func (*GetRecurringOrderRequest) ProtoMessage() {}
 
 func (x *GetRecurringOrderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[209]
+	mi := &file_stock_stock_proto_msgTypes[211]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16711,7 +16869,7 @@ func (x *GetRecurringOrderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRecurringOrderRequest.ProtoReflect.Descriptor instead.
 func (*GetRecurringOrderRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{209}
+	return file_stock_stock_proto_rawDescGZIP(), []int{211}
 }
 
 func (x *GetRecurringOrderRequest) GetId() uint64 {
@@ -16745,7 +16903,7 @@ type ListMyRecurringOrdersRequest struct {
 
 func (x *ListMyRecurringOrdersRequest) Reset() {
 	*x = ListMyRecurringOrdersRequest{}
-	mi := &file_stock_stock_proto_msgTypes[210]
+	mi := &file_stock_stock_proto_msgTypes[212]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16757,7 +16915,7 @@ func (x *ListMyRecurringOrdersRequest) String() string {
 func (*ListMyRecurringOrdersRequest) ProtoMessage() {}
 
 func (x *ListMyRecurringOrdersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[210]
+	mi := &file_stock_stock_proto_msgTypes[212]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16770,7 +16928,7 @@ func (x *ListMyRecurringOrdersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMyRecurringOrdersRequest.ProtoReflect.Descriptor instead.
 func (*ListMyRecurringOrdersRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{210}
+	return file_stock_stock_proto_rawDescGZIP(), []int{212}
 }
 
 func (x *ListMyRecurringOrdersRequest) GetOwnerType() string {
@@ -16809,7 +16967,7 @@ type RecurringOrderResponse struct {
 
 func (x *RecurringOrderResponse) Reset() {
 	*x = RecurringOrderResponse{}
-	mi := &file_stock_stock_proto_msgTypes[211]
+	mi := &file_stock_stock_proto_msgTypes[213]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16821,7 +16979,7 @@ func (x *RecurringOrderResponse) String() string {
 func (*RecurringOrderResponse) ProtoMessage() {}
 
 func (x *RecurringOrderResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[211]
+	mi := &file_stock_stock_proto_msgTypes[213]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16834,7 +16992,7 @@ func (x *RecurringOrderResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecurringOrderResponse.ProtoReflect.Descriptor instead.
 func (*RecurringOrderResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{211}
+	return file_stock_stock_proto_rawDescGZIP(), []int{213}
 }
 
 func (x *RecurringOrderResponse) GetId() uint64 {
@@ -16944,7 +17102,7 @@ type ListMyRecurringOrdersResponse struct {
 
 func (x *ListMyRecurringOrdersResponse) Reset() {
 	*x = ListMyRecurringOrdersResponse{}
-	mi := &file_stock_stock_proto_msgTypes[212]
+	mi := &file_stock_stock_proto_msgTypes[214]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16956,7 +17114,7 @@ func (x *ListMyRecurringOrdersResponse) String() string {
 func (*ListMyRecurringOrdersResponse) ProtoMessage() {}
 
 func (x *ListMyRecurringOrdersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[212]
+	mi := &file_stock_stock_proto_msgTypes[214]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16969,7 +17127,7 @@ func (x *ListMyRecurringOrdersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMyRecurringOrdersResponse.ProtoReflect.Descriptor instead.
 func (*ListMyRecurringOrdersResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{212}
+	return file_stock_stock_proto_rawDescGZIP(), []int{214}
 }
 
 func (x *ListMyRecurringOrdersResponse) GetItems() []*RecurringOrderResponse {
@@ -16995,7 +17153,7 @@ type CreatePriceAlertRequest struct {
 
 func (x *CreatePriceAlertRequest) Reset() {
 	*x = CreatePriceAlertRequest{}
-	mi := &file_stock_stock_proto_msgTypes[213]
+	mi := &file_stock_stock_proto_msgTypes[215]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17007,7 +17165,7 @@ func (x *CreatePriceAlertRequest) String() string {
 func (*CreatePriceAlertRequest) ProtoMessage() {}
 
 func (x *CreatePriceAlertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[213]
+	mi := &file_stock_stock_proto_msgTypes[215]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17020,7 +17178,7 @@ func (x *CreatePriceAlertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePriceAlertRequest.ProtoReflect.Descriptor instead.
 func (*CreatePriceAlertRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{213}
+	return file_stock_stock_proto_rawDescGZIP(), []int{215}
 }
 
 func (x *CreatePriceAlertRequest) GetOwnerType() string {
@@ -17096,7 +17254,7 @@ type UpdatePriceAlertRequest struct {
 
 func (x *UpdatePriceAlertRequest) Reset() {
 	*x = UpdatePriceAlertRequest{}
-	mi := &file_stock_stock_proto_msgTypes[214]
+	mi := &file_stock_stock_proto_msgTypes[216]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17108,7 +17266,7 @@ func (x *UpdatePriceAlertRequest) String() string {
 func (*UpdatePriceAlertRequest) ProtoMessage() {}
 
 func (x *UpdatePriceAlertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[214]
+	mi := &file_stock_stock_proto_msgTypes[216]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17121,7 +17279,7 @@ func (x *UpdatePriceAlertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePriceAlertRequest.ProtoReflect.Descriptor instead.
 func (*UpdatePriceAlertRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{214}
+	return file_stock_stock_proto_rawDescGZIP(), []int{216}
 }
 
 func (x *UpdatePriceAlertRequest) GetId() uint64 {
@@ -17198,7 +17356,7 @@ type GetPriceAlertRequest struct {
 
 func (x *GetPriceAlertRequest) Reset() {
 	*x = GetPriceAlertRequest{}
-	mi := &file_stock_stock_proto_msgTypes[215]
+	mi := &file_stock_stock_proto_msgTypes[217]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17210,7 +17368,7 @@ func (x *GetPriceAlertRequest) String() string {
 func (*GetPriceAlertRequest) ProtoMessage() {}
 
 func (x *GetPriceAlertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[215]
+	mi := &file_stock_stock_proto_msgTypes[217]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17223,7 +17381,7 @@ func (x *GetPriceAlertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPriceAlertRequest.ProtoReflect.Descriptor instead.
 func (*GetPriceAlertRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{215}
+	return file_stock_stock_proto_rawDescGZIP(), []int{217}
 }
 
 func (x *GetPriceAlertRequest) GetId() uint64 {
@@ -17258,7 +17416,7 @@ type DeletePriceAlertRequest struct {
 
 func (x *DeletePriceAlertRequest) Reset() {
 	*x = DeletePriceAlertRequest{}
-	mi := &file_stock_stock_proto_msgTypes[216]
+	mi := &file_stock_stock_proto_msgTypes[218]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17270,7 +17428,7 @@ func (x *DeletePriceAlertRequest) String() string {
 func (*DeletePriceAlertRequest) ProtoMessage() {}
 
 func (x *DeletePriceAlertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[216]
+	mi := &file_stock_stock_proto_msgTypes[218]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17283,7 +17441,7 @@ func (x *DeletePriceAlertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePriceAlertRequest.ProtoReflect.Descriptor instead.
 func (*DeletePriceAlertRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{216}
+	return file_stock_stock_proto_rawDescGZIP(), []int{218}
 }
 
 func (x *DeletePriceAlertRequest) GetId() uint64 {
@@ -17316,7 +17474,7 @@ type DeletePriceAlertResponse struct {
 
 func (x *DeletePriceAlertResponse) Reset() {
 	*x = DeletePriceAlertResponse{}
-	mi := &file_stock_stock_proto_msgTypes[217]
+	mi := &file_stock_stock_proto_msgTypes[219]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17328,7 +17486,7 @@ func (x *DeletePriceAlertResponse) String() string {
 func (*DeletePriceAlertResponse) ProtoMessage() {}
 
 func (x *DeletePriceAlertResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[217]
+	mi := &file_stock_stock_proto_msgTypes[219]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17341,7 +17499,7 @@ func (x *DeletePriceAlertResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePriceAlertResponse.ProtoReflect.Descriptor instead.
 func (*DeletePriceAlertResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{217}
+	return file_stock_stock_proto_rawDescGZIP(), []int{219}
 }
 
 func (x *DeletePriceAlertResponse) GetDeleted() bool {
@@ -17361,7 +17519,7 @@ type ListMyPriceAlertsRequest struct {
 
 func (x *ListMyPriceAlertsRequest) Reset() {
 	*x = ListMyPriceAlertsRequest{}
-	mi := &file_stock_stock_proto_msgTypes[218]
+	mi := &file_stock_stock_proto_msgTypes[220]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17373,7 +17531,7 @@ func (x *ListMyPriceAlertsRequest) String() string {
 func (*ListMyPriceAlertsRequest) ProtoMessage() {}
 
 func (x *ListMyPriceAlertsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[218]
+	mi := &file_stock_stock_proto_msgTypes[220]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17386,7 +17544,7 @@ func (x *ListMyPriceAlertsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMyPriceAlertsRequest.ProtoReflect.Descriptor instead.
 func (*ListMyPriceAlertsRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{218}
+	return file_stock_stock_proto_rawDescGZIP(), []int{220}
 }
 
 func (x *ListMyPriceAlertsRequest) GetOwnerType() string {
@@ -17421,7 +17579,7 @@ type PriceAlertResponse struct {
 
 func (x *PriceAlertResponse) Reset() {
 	*x = PriceAlertResponse{}
-	mi := &file_stock_stock_proto_msgTypes[219]
+	mi := &file_stock_stock_proto_msgTypes[221]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17433,7 +17591,7 @@ func (x *PriceAlertResponse) String() string {
 func (*PriceAlertResponse) ProtoMessage() {}
 
 func (x *PriceAlertResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[219]
+	mi := &file_stock_stock_proto_msgTypes[221]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17446,7 +17604,7 @@ func (x *PriceAlertResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PriceAlertResponse.ProtoReflect.Descriptor instead.
 func (*PriceAlertResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{219}
+	return file_stock_stock_proto_rawDescGZIP(), []int{221}
 }
 
 func (x *PriceAlertResponse) GetId() uint64 {
@@ -17528,7 +17686,7 @@ type ListMyPriceAlertsResponse struct {
 
 func (x *ListMyPriceAlertsResponse) Reset() {
 	*x = ListMyPriceAlertsResponse{}
-	mi := &file_stock_stock_proto_msgTypes[220]
+	mi := &file_stock_stock_proto_msgTypes[222]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17540,7 +17698,7 @@ func (x *ListMyPriceAlertsResponse) String() string {
 func (*ListMyPriceAlertsResponse) ProtoMessage() {}
 
 func (x *ListMyPriceAlertsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[220]
+	mi := &file_stock_stock_proto_msgTypes[222]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17553,7 +17711,7 @@ func (x *ListMyPriceAlertsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMyPriceAlertsResponse.ProtoReflect.Descriptor instead.
 func (*ListMyPriceAlertsResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{220}
+	return file_stock_stock_proto_rawDescGZIP(), []int{222}
 }
 
 func (x *ListMyPriceAlertsResponse) GetAlerts() []*PriceAlertResponse {
@@ -17574,7 +17732,7 @@ type AddWatchlistItemRequest struct {
 
 func (x *AddWatchlistItemRequest) Reset() {
 	*x = AddWatchlistItemRequest{}
-	mi := &file_stock_stock_proto_msgTypes[221]
+	mi := &file_stock_stock_proto_msgTypes[223]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17586,7 +17744,7 @@ func (x *AddWatchlistItemRequest) String() string {
 func (*AddWatchlistItemRequest) ProtoMessage() {}
 
 func (x *AddWatchlistItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[221]
+	mi := &file_stock_stock_proto_msgTypes[223]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17599,7 +17757,7 @@ func (x *AddWatchlistItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddWatchlistItemRequest.ProtoReflect.Descriptor instead.
 func (*AddWatchlistItemRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{221}
+	return file_stock_stock_proto_rawDescGZIP(), []int{223}
 }
 
 func (x *AddWatchlistItemRequest) GetOwnerType() string {
@@ -17634,7 +17792,7 @@ type RemoveWatchlistItemRequest struct {
 
 func (x *RemoveWatchlistItemRequest) Reset() {
 	*x = RemoveWatchlistItemRequest{}
-	mi := &file_stock_stock_proto_msgTypes[222]
+	mi := &file_stock_stock_proto_msgTypes[224]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17646,7 +17804,7 @@ func (x *RemoveWatchlistItemRequest) String() string {
 func (*RemoveWatchlistItemRequest) ProtoMessage() {}
 
 func (x *RemoveWatchlistItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[222]
+	mi := &file_stock_stock_proto_msgTypes[224]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17659,7 +17817,7 @@ func (x *RemoveWatchlistItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveWatchlistItemRequest.ProtoReflect.Descriptor instead.
 func (*RemoveWatchlistItemRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{222}
+	return file_stock_stock_proto_rawDescGZIP(), []int{224}
 }
 
 func (x *RemoveWatchlistItemRequest) GetOwnerType() string {
@@ -17692,7 +17850,7 @@ type RemoveWatchlistItemResponse struct {
 
 func (x *RemoveWatchlistItemResponse) Reset() {
 	*x = RemoveWatchlistItemResponse{}
-	mi := &file_stock_stock_proto_msgTypes[223]
+	mi := &file_stock_stock_proto_msgTypes[225]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17704,7 +17862,7 @@ func (x *RemoveWatchlistItemResponse) String() string {
 func (*RemoveWatchlistItemResponse) ProtoMessage() {}
 
 func (x *RemoveWatchlistItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[223]
+	mi := &file_stock_stock_proto_msgTypes[225]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17717,7 +17875,7 @@ func (x *RemoveWatchlistItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveWatchlistItemResponse.ProtoReflect.Descriptor instead.
 func (*RemoveWatchlistItemResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{223}
+	return file_stock_stock_proto_rawDescGZIP(), []int{225}
 }
 
 func (x *RemoveWatchlistItemResponse) GetRemoved() bool {
@@ -17738,7 +17896,7 @@ type ListMyWatchlistRequest struct {
 
 func (x *ListMyWatchlistRequest) Reset() {
 	*x = ListMyWatchlistRequest{}
-	mi := &file_stock_stock_proto_msgTypes[224]
+	mi := &file_stock_stock_proto_msgTypes[226]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17750,7 +17908,7 @@ func (x *ListMyWatchlistRequest) String() string {
 func (*ListMyWatchlistRequest) ProtoMessage() {}
 
 func (x *ListMyWatchlistRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[224]
+	mi := &file_stock_stock_proto_msgTypes[226]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17763,7 +17921,7 @@ func (x *ListMyWatchlistRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMyWatchlistRequest.ProtoReflect.Descriptor instead.
 func (*ListMyWatchlistRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{224}
+	return file_stock_stock_proto_rawDescGZIP(), []int{226}
 }
 
 func (x *ListMyWatchlistRequest) GetOwnerType() string {
@@ -17803,7 +17961,7 @@ type WatchlistItemResponse struct {
 
 func (x *WatchlistItemResponse) Reset() {
 	*x = WatchlistItemResponse{}
-	mi := &file_stock_stock_proto_msgTypes[225]
+	mi := &file_stock_stock_proto_msgTypes[227]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17815,7 +17973,7 @@ func (x *WatchlistItemResponse) String() string {
 func (*WatchlistItemResponse) ProtoMessage() {}
 
 func (x *WatchlistItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[225]
+	mi := &file_stock_stock_proto_msgTypes[227]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17828,7 +17986,7 @@ func (x *WatchlistItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchlistItemResponse.ProtoReflect.Descriptor instead.
 func (*WatchlistItemResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{225}
+	return file_stock_stock_proto_rawDescGZIP(), []int{227}
 }
 
 func (x *WatchlistItemResponse) GetId() uint64 {
@@ -17896,7 +18054,7 @@ type ListMyWatchlistResponse struct {
 
 func (x *ListMyWatchlistResponse) Reset() {
 	*x = ListMyWatchlistResponse{}
-	mi := &file_stock_stock_proto_msgTypes[226]
+	mi := &file_stock_stock_proto_msgTypes[228]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17908,7 +18066,7 @@ func (x *ListMyWatchlistResponse) String() string {
 func (*ListMyWatchlistResponse) ProtoMessage() {}
 
 func (x *ListMyWatchlistResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[226]
+	mi := &file_stock_stock_proto_msgTypes[228]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17921,7 +18079,7 @@ func (x *ListMyWatchlistResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMyWatchlistResponse.ProtoReflect.Descriptor instead.
 func (*ListMyWatchlistResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{226}
+	return file_stock_stock_proto_rawDescGZIP(), []int{228}
 }
 
 func (x *ListMyWatchlistResponse) GetItems() []*WatchlistItemResponse {
@@ -17944,7 +18102,7 @@ type DeclareDividendRequest struct {
 
 func (x *DeclareDividendRequest) Reset() {
 	*x = DeclareDividendRequest{}
-	mi := &file_stock_stock_proto_msgTypes[227]
+	mi := &file_stock_stock_proto_msgTypes[229]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17956,7 +18114,7 @@ func (x *DeclareDividendRequest) String() string {
 func (*DeclareDividendRequest) ProtoMessage() {}
 
 func (x *DeclareDividendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[227]
+	mi := &file_stock_stock_proto_msgTypes[229]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17969,7 +18127,7 @@ func (x *DeclareDividendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeclareDividendRequest.ProtoReflect.Descriptor instead.
 func (*DeclareDividendRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{227}
+	return file_stock_stock_proto_rawDescGZIP(), []int{229}
 }
 
 func (x *DeclareDividendRequest) GetDeclaredByEmployeeId() int64 {
@@ -18024,7 +18182,7 @@ type DividendPaymentResponse struct {
 
 func (x *DividendPaymentResponse) Reset() {
 	*x = DividendPaymentResponse{}
-	mi := &file_stock_stock_proto_msgTypes[228]
+	mi := &file_stock_stock_proto_msgTypes[230]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18036,7 +18194,7 @@ func (x *DividendPaymentResponse) String() string {
 func (*DividendPaymentResponse) ProtoMessage() {}
 
 func (x *DividendPaymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[228]
+	mi := &file_stock_stock_proto_msgTypes[230]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18049,7 +18207,7 @@ func (x *DividendPaymentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DividendPaymentResponse.ProtoReflect.Descriptor instead.
 func (*DividendPaymentResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{228}
+	return file_stock_stock_proto_rawDescGZIP(), []int{230}
 }
 
 func (x *DividendPaymentResponse) GetId() uint64 {
@@ -18124,7 +18282,7 @@ type PayoutDividendRequest struct {
 
 func (x *PayoutDividendRequest) Reset() {
 	*x = PayoutDividendRequest{}
-	mi := &file_stock_stock_proto_msgTypes[229]
+	mi := &file_stock_stock_proto_msgTypes[231]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18136,7 +18294,7 @@ func (x *PayoutDividendRequest) String() string {
 func (*PayoutDividendRequest) ProtoMessage() {}
 
 func (x *PayoutDividendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[229]
+	mi := &file_stock_stock_proto_msgTypes[231]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18149,7 +18307,7 @@ func (x *PayoutDividendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PayoutDividendRequest.ProtoReflect.Descriptor instead.
 func (*PayoutDividendRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{229}
+	return file_stock_stock_proto_rawDescGZIP(), []int{231}
 }
 
 func (x *PayoutDividendRequest) GetDividendPaymentId() uint64 {
@@ -18170,7 +18328,7 @@ type PayoutDividendResponse struct {
 
 func (x *PayoutDividendResponse) Reset() {
 	*x = PayoutDividendResponse{}
-	mi := &file_stock_stock_proto_msgTypes[230]
+	mi := &file_stock_stock_proto_msgTypes[232]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18182,7 +18340,7 @@ func (x *PayoutDividendResponse) String() string {
 func (*PayoutDividendResponse) ProtoMessage() {}
 
 func (x *PayoutDividendResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[230]
+	mi := &file_stock_stock_proto_msgTypes[232]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18195,7 +18353,7 @@ func (x *PayoutDividendResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PayoutDividendResponse.ProtoReflect.Descriptor instead.
 func (*PayoutDividendResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{230}
+	return file_stock_stock_proto_rawDescGZIP(), []int{232}
 }
 
 func (x *PayoutDividendResponse) GetPayoutsCreated() int32 {
@@ -18231,7 +18389,7 @@ type ListMyDividendsRequest struct {
 
 func (x *ListMyDividendsRequest) Reset() {
 	*x = ListMyDividendsRequest{}
-	mi := &file_stock_stock_proto_msgTypes[231]
+	mi := &file_stock_stock_proto_msgTypes[233]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18243,7 +18401,7 @@ func (x *ListMyDividendsRequest) String() string {
 func (*ListMyDividendsRequest) ProtoMessage() {}
 
 func (x *ListMyDividendsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[231]
+	mi := &file_stock_stock_proto_msgTypes[233]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18256,7 +18414,7 @@ func (x *ListMyDividendsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMyDividendsRequest.ProtoReflect.Descriptor instead.
 func (*ListMyDividendsRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{231}
+	return file_stock_stock_proto_rawDescGZIP(), []int{233}
 }
 
 func (x *ListMyDividendsRequest) GetOwnerType() string {
@@ -18306,7 +18464,7 @@ type DividendPayoutItem struct {
 
 func (x *DividendPayoutItem) Reset() {
 	*x = DividendPayoutItem{}
-	mi := &file_stock_stock_proto_msgTypes[232]
+	mi := &file_stock_stock_proto_msgTypes[234]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18318,7 +18476,7 @@ func (x *DividendPayoutItem) String() string {
 func (*DividendPayoutItem) ProtoMessage() {}
 
 func (x *DividendPayoutItem) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[232]
+	mi := &file_stock_stock_proto_msgTypes[234]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18331,7 +18489,7 @@ func (x *DividendPayoutItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DividendPayoutItem.ProtoReflect.Descriptor instead.
 func (*DividendPayoutItem) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{232}
+	return file_stock_stock_proto_rawDescGZIP(), []int{234}
 }
 
 func (x *DividendPayoutItem) GetId() uint64 {
@@ -18421,7 +18579,7 @@ type ListDividendPayoutsResponse struct {
 
 func (x *ListDividendPayoutsResponse) Reset() {
 	*x = ListDividendPayoutsResponse{}
-	mi := &file_stock_stock_proto_msgTypes[233]
+	mi := &file_stock_stock_proto_msgTypes[235]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18433,7 +18591,7 @@ func (x *ListDividendPayoutsResponse) String() string {
 func (*ListDividendPayoutsResponse) ProtoMessage() {}
 
 func (x *ListDividendPayoutsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[233]
+	mi := &file_stock_stock_proto_msgTypes[235]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18446,7 +18604,7 @@ func (x *ListDividendPayoutsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDividendPayoutsResponse.ProtoReflect.Descriptor instead.
 func (*ListDividendPayoutsResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{233}
+	return file_stock_stock_proto_rawDescGZIP(), []int{235}
 }
 
 func (x *ListDividendPayoutsResponse) GetPayouts() []*DividendPayoutItem {
@@ -18474,7 +18632,7 @@ type ListFundDividendsRequest struct {
 
 func (x *ListFundDividendsRequest) Reset() {
 	*x = ListFundDividendsRequest{}
-	mi := &file_stock_stock_proto_msgTypes[234]
+	mi := &file_stock_stock_proto_msgTypes[236]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18486,7 +18644,7 @@ func (x *ListFundDividendsRequest) String() string {
 func (*ListFundDividendsRequest) ProtoMessage() {}
 
 func (x *ListFundDividendsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[234]
+	mi := &file_stock_stock_proto_msgTypes[236]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18499,7 +18657,7 @@ func (x *ListFundDividendsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListFundDividendsRequest.ProtoReflect.Descriptor instead.
 func (*ListFundDividendsRequest) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{234}
+	return file_stock_stock_proto_rawDescGZIP(), []int{236}
 }
 
 func (x *ListFundDividendsRequest) GetFundId() uint64 {
@@ -18537,7 +18695,7 @@ type FundDividendPaymentItem struct {
 
 func (x *FundDividendPaymentItem) Reset() {
 	*x = FundDividendPaymentItem{}
-	mi := &file_stock_stock_proto_msgTypes[235]
+	mi := &file_stock_stock_proto_msgTypes[237]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18549,7 +18707,7 @@ func (x *FundDividendPaymentItem) String() string {
 func (*FundDividendPaymentItem) ProtoMessage() {}
 
 func (x *FundDividendPaymentItem) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[235]
+	mi := &file_stock_stock_proto_msgTypes[237]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18562,7 +18720,7 @@ func (x *FundDividendPaymentItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FundDividendPaymentItem.ProtoReflect.Descriptor instead.
 func (*FundDividendPaymentItem) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{235}
+	return file_stock_stock_proto_rawDescGZIP(), []int{237}
 }
 
 func (x *FundDividendPaymentItem) GetId() uint64 {
@@ -18617,7 +18775,7 @@ type ListFundDividendPaymentsResponse struct {
 
 func (x *ListFundDividendPaymentsResponse) Reset() {
 	*x = ListFundDividendPaymentsResponse{}
-	mi := &file_stock_stock_proto_msgTypes[236]
+	mi := &file_stock_stock_proto_msgTypes[238]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18629,7 +18787,7 @@ func (x *ListFundDividendPaymentsResponse) String() string {
 func (*ListFundDividendPaymentsResponse) ProtoMessage() {}
 
 func (x *ListFundDividendPaymentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_stock_proto_msgTypes[236]
+	mi := &file_stock_stock_proto_msgTypes[238]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18642,7 +18800,7 @@ func (x *ListFundDividendPaymentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListFundDividendPaymentsResponse.ProtoReflect.Descriptor instead.
 func (*ListFundDividendPaymentsResponse) Descriptor() ([]byte, []int) {
-	return file_stock_stock_proto_rawDescGZIP(), []int{236}
+	return file_stock_stock_proto_rawDescGZIP(), []int{238}
 }
 
 func (x *ListFundDividendPaymentsResponse) GetPayments() []*FundDividendPaymentItem {
@@ -20155,7 +20313,19 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x1aReleaseSellerSharesRequest\x12&\n" +
 	"\x0fcrossbank_tx_id\x18\x01 \x01(\tR\rcrossbankTxId\"J\n" +
 	"\x1bReleaseSellerSharesResponse\x12+\n" +
-	"\x11released_quantity\x18\x01 \x01(\x03R\x10releasedQuantity\"\xbf\x01\n" +
+	"\x11released_quantity\x18\x01 \x01(\x03R\x10releasedQuantity\"\x86\x01\n" +
+	"\x1fLookupPeerOptionContractRequest\x12<\n" +
+	"\x1anegotiation_routing_number\x18\x01 \x01(\x03R\x18negotiationRoutingNumber\x12%\n" +
+	"\x0enegotiation_id\x18\x02 \x01(\tR\rnegotiationId\"\x89\x02\n" +
+	" LookupPeerOptionContractResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
+	"\tseller_id\x18\x02 \x01(\tR\bsellerId\x12\x16\n" +
+	"\x06ticker\x18\x03 \x01(\tR\x06ticker\x12!\n" +
+	"\fstrike_price\x18\x04 \x01(\tR\vstrikePrice\x12\x1a\n" +
+	"\bquantity\x18\x05 \x01(\x03R\bquantity\x12\x1a\n" +
+	"\bcurrency\x18\x06 \x01(\tR\bcurrency\x12'\n" +
+	"\x0fsettlement_date\x18\a \x01(\tR\x0esettlementDate\x12\x16\n" +
+	"\x06status\x18\b \x01(\tR\x06status\"\xbf\x01\n" +
 	"\x1aCreateRecurringFundRequest\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\x04R\bclientId\x12\x17\n" +
 	"\afund_id\x18\x02 \x01(\x04R\x06fundId\x12\x1d\n" +
@@ -20485,7 +20655,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x13CreateOTCStockOffer\x12!.stock.CreateOTCStockOfferRequest\x1a\x1c.stock.OTCStockOfferResponse\x12\\\n" +
 	"\x13CancelOTCStockOffer\x12!.stock.CancelOTCStockOfferRequest\x1a\".stock.CancelOTCStockOfferResponse\x12P\n" +
 	"\x0fListMyOTCStocks\x12\x1d.stock.ListMyOTCStocksRequest\x1a\x1e.stock.ListMyOTCStocksResponse\x12O\n" +
-	"\x11SellOTCStockOffer\x12\x1f.stock.SellOTCStockOfferRequest\x1a\x19.stock.OTCStockFillResult2\x85\r\n" +
+	"\x11SellOTCStockOffer\x12\x1f.stock.SellOTCStockOfferRequest\x1a\x19.stock.OTCStockFillResult2\xf2\r\n" +
 	"\x0ePeerOTCService\x12P\n" +
 	"\x0fGetPublicStocks\x12\x1d.stock.GetPublicStocksRequest\x1a\x1e.stock.GetPublicStocksResponse\x12b\n" +
 	"\x15GetPublicOptionOffers\x12#.stock.GetPublicOptionOffersRequest\x1a$.stock.GetPublicOptionOffersResponse\x12V\n" +
@@ -20498,7 +20668,8 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x15CheckSellerCanDeliver\x12#.stock.CheckSellerCanDeliverRequest\x1a$.stock.CheckSellerCanDeliverResponse\x12d\n" +
 	"\x1bReserveSellerSharesForNewTx\x12!.stock.ReserveSellerSharesRequest\x1a\".stock.ReserveSellerSharesResponse\x12d\n" +
 	"\x1bReleaseSellerSharesForNewTx\x12!.stock.ReleaseSellerSharesRequest\x1a\".stock.ReleaseSellerSharesResponse\x12q\n" +
-	"\x1aValidatePeerOptionMoneyLeg\x12(.stock.ValidatePeerOptionMoneyLegRequest\x1a).stock.ValidatePeerOptionMoneyLegResponse\x12e\n" +
+	"\x1aValidatePeerOptionMoneyLeg\x12(.stock.ValidatePeerOptionMoneyLegRequest\x1a).stock.ValidatePeerOptionMoneyLegResponse\x12k\n" +
+	"\x18LookupPeerOptionContract\x12&.stock.LookupPeerOptionContractRequest\x1a'.stock.LookupPeerOptionContractResponse\x12e\n" +
 	"\x16InitiateOptionExercise\x12$.stock.InitiateOptionExerciseRequest\x1a%.stock.InitiateOptionExerciseResponse\x12n\n" +
 	"\x19RecordOutboundNegotiation\x12'.stock.RecordOutboundNegotiationRequest\x1a(.stock.RecordOutboundNegotiationResponse\x12e\n" +
 	"\x16ListMyPeerNegotiations\x12$.stock.ListMyPeerNegotiationsRequest\x1a%.stock.ListMyPeerNegotiationsResponse\x12h\n" +
@@ -20544,7 +20715,7 @@ func file_stock_stock_proto_rawDescGZIP() []byte {
 }
 
 var file_stock_stock_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_stock_stock_proto_msgTypes = make([]protoimpl.MessageInfo, 237)
+var file_stock_stock_proto_msgTypes = make([]protoimpl.MessageInfo, 239)
 var file_stock_stock_proto_goTypes = []any{
 	(OwnerType)(0),                             // 0: stock.OwnerType
 	(*Exchange)(nil),                           // 1: stock.Exchange
@@ -20749,41 +20920,43 @@ var file_stock_stock_proto_goTypes = []any{
 	(*ValidatePeerOptionMoneyLegResponse)(nil), // 200: stock.ValidatePeerOptionMoneyLegResponse
 	(*ReleaseSellerSharesRequest)(nil),         // 201: stock.ReleaseSellerSharesRequest
 	(*ReleaseSellerSharesResponse)(nil),        // 202: stock.ReleaseSellerSharesResponse
-	(*CreateRecurringFundRequest)(nil),         // 203: stock.CreateRecurringFundRequest
-	(*GetRecurringFundRequest)(nil),            // 204: stock.GetRecurringFundRequest
-	(*CancelRecurringFundResponse)(nil),        // 205: stock.CancelRecurringFundResponse
-	(*ListMyRecurringFundsRequest)(nil),        // 206: stock.ListMyRecurringFundsRequest
-	(*RecurringFundResponse)(nil),              // 207: stock.RecurringFundResponse
-	(*ListMyRecurringFundsResponse)(nil),       // 208: stock.ListMyRecurringFundsResponse
-	(*CreateRecurringOrderRequest)(nil),        // 209: stock.CreateRecurringOrderRequest
-	(*GetRecurringOrderRequest)(nil),           // 210: stock.GetRecurringOrderRequest
-	(*ListMyRecurringOrdersRequest)(nil),       // 211: stock.ListMyRecurringOrdersRequest
-	(*RecurringOrderResponse)(nil),             // 212: stock.RecurringOrderResponse
-	(*ListMyRecurringOrdersResponse)(nil),      // 213: stock.ListMyRecurringOrdersResponse
-	(*CreatePriceAlertRequest)(nil),            // 214: stock.CreatePriceAlertRequest
-	(*UpdatePriceAlertRequest)(nil),            // 215: stock.UpdatePriceAlertRequest
-	(*GetPriceAlertRequest)(nil),               // 216: stock.GetPriceAlertRequest
-	(*DeletePriceAlertRequest)(nil),            // 217: stock.DeletePriceAlertRequest
-	(*DeletePriceAlertResponse)(nil),           // 218: stock.DeletePriceAlertResponse
-	(*ListMyPriceAlertsRequest)(nil),           // 219: stock.ListMyPriceAlertsRequest
-	(*PriceAlertResponse)(nil),                 // 220: stock.PriceAlertResponse
-	(*ListMyPriceAlertsResponse)(nil),          // 221: stock.ListMyPriceAlertsResponse
-	(*AddWatchlistItemRequest)(nil),            // 222: stock.AddWatchlistItemRequest
-	(*RemoveWatchlistItemRequest)(nil),         // 223: stock.RemoveWatchlistItemRequest
-	(*RemoveWatchlistItemResponse)(nil),        // 224: stock.RemoveWatchlistItemResponse
-	(*ListMyWatchlistRequest)(nil),             // 225: stock.ListMyWatchlistRequest
-	(*WatchlistItemResponse)(nil),              // 226: stock.WatchlistItemResponse
-	(*ListMyWatchlistResponse)(nil),            // 227: stock.ListMyWatchlistResponse
-	(*DeclareDividendRequest)(nil),             // 228: stock.DeclareDividendRequest
-	(*DividendPaymentResponse)(nil),            // 229: stock.DividendPaymentResponse
-	(*PayoutDividendRequest)(nil),              // 230: stock.PayoutDividendRequest
-	(*PayoutDividendResponse)(nil),             // 231: stock.PayoutDividendResponse
-	(*ListMyDividendsRequest)(nil),             // 232: stock.ListMyDividendsRequest
-	(*DividendPayoutItem)(nil),                 // 233: stock.DividendPayoutItem
-	(*ListDividendPayoutsResponse)(nil),        // 234: stock.ListDividendPayoutsResponse
-	(*ListFundDividendsRequest)(nil),           // 235: stock.ListFundDividendsRequest
-	(*FundDividendPaymentItem)(nil),            // 236: stock.FundDividendPaymentItem
-	(*ListFundDividendPaymentsResponse)(nil),   // 237: stock.ListFundDividendPaymentsResponse
+	(*LookupPeerOptionContractRequest)(nil),    // 203: stock.LookupPeerOptionContractRequest
+	(*LookupPeerOptionContractResponse)(nil),   // 204: stock.LookupPeerOptionContractResponse
+	(*CreateRecurringFundRequest)(nil),         // 205: stock.CreateRecurringFundRequest
+	(*GetRecurringFundRequest)(nil),            // 206: stock.GetRecurringFundRequest
+	(*CancelRecurringFundResponse)(nil),        // 207: stock.CancelRecurringFundResponse
+	(*ListMyRecurringFundsRequest)(nil),        // 208: stock.ListMyRecurringFundsRequest
+	(*RecurringFundResponse)(nil),              // 209: stock.RecurringFundResponse
+	(*ListMyRecurringFundsResponse)(nil),       // 210: stock.ListMyRecurringFundsResponse
+	(*CreateRecurringOrderRequest)(nil),        // 211: stock.CreateRecurringOrderRequest
+	(*GetRecurringOrderRequest)(nil),           // 212: stock.GetRecurringOrderRequest
+	(*ListMyRecurringOrdersRequest)(nil),       // 213: stock.ListMyRecurringOrdersRequest
+	(*RecurringOrderResponse)(nil),             // 214: stock.RecurringOrderResponse
+	(*ListMyRecurringOrdersResponse)(nil),      // 215: stock.ListMyRecurringOrdersResponse
+	(*CreatePriceAlertRequest)(nil),            // 216: stock.CreatePriceAlertRequest
+	(*UpdatePriceAlertRequest)(nil),            // 217: stock.UpdatePriceAlertRequest
+	(*GetPriceAlertRequest)(nil),               // 218: stock.GetPriceAlertRequest
+	(*DeletePriceAlertRequest)(nil),            // 219: stock.DeletePriceAlertRequest
+	(*DeletePriceAlertResponse)(nil),           // 220: stock.DeletePriceAlertResponse
+	(*ListMyPriceAlertsRequest)(nil),           // 221: stock.ListMyPriceAlertsRequest
+	(*PriceAlertResponse)(nil),                 // 222: stock.PriceAlertResponse
+	(*ListMyPriceAlertsResponse)(nil),          // 223: stock.ListMyPriceAlertsResponse
+	(*AddWatchlistItemRequest)(nil),            // 224: stock.AddWatchlistItemRequest
+	(*RemoveWatchlistItemRequest)(nil),         // 225: stock.RemoveWatchlistItemRequest
+	(*RemoveWatchlistItemResponse)(nil),        // 226: stock.RemoveWatchlistItemResponse
+	(*ListMyWatchlistRequest)(nil),             // 227: stock.ListMyWatchlistRequest
+	(*WatchlistItemResponse)(nil),              // 228: stock.WatchlistItemResponse
+	(*ListMyWatchlistResponse)(nil),            // 229: stock.ListMyWatchlistResponse
+	(*DeclareDividendRequest)(nil),             // 230: stock.DeclareDividendRequest
+	(*DividendPaymentResponse)(nil),            // 231: stock.DividendPaymentResponse
+	(*PayoutDividendRequest)(nil),              // 232: stock.PayoutDividendRequest
+	(*PayoutDividendResponse)(nil),             // 233: stock.PayoutDividendResponse
+	(*ListMyDividendsRequest)(nil),             // 234: stock.ListMyDividendsRequest
+	(*DividendPayoutItem)(nil),                 // 235: stock.DividendPayoutItem
+	(*ListDividendPayoutsResponse)(nil),        // 236: stock.ListDividendPayoutsResponse
+	(*ListFundDividendsRequest)(nil),           // 237: stock.ListFundDividendsRequest
+	(*FundDividendPaymentItem)(nil),            // 238: stock.FundDividendPaymentItem
+	(*ListFundDividendPaymentsResponse)(nil),   // 239: stock.ListFundDividendPaymentsResponse
 }
 var file_stock_stock_proto_depIdxs = []int32{
 	1,   // 0: stock.ListExchangesResponse.exchanges:type_name -> stock.Exchange
@@ -20888,12 +21061,12 @@ var file_stock_stock_proto_depIdxs = []int32{
 	173, // 99: stock.RecordOptionContractRequest.seller_id:type_name -> stock.PeerForeignBankId
 	173, // 100: stock.CheckSellerCanDeliverRequest.seller_id:type_name -> stock.PeerForeignBankId
 	173, // 101: stock.ReserveSellerSharesRequest.seller_id:type_name -> stock.PeerForeignBankId
-	207, // 102: stock.ListMyRecurringFundsResponse.items:type_name -> stock.RecurringFundResponse
-	212, // 103: stock.ListMyRecurringOrdersResponse.items:type_name -> stock.RecurringOrderResponse
-	220, // 104: stock.ListMyPriceAlertsResponse.alerts:type_name -> stock.PriceAlertResponse
-	226, // 105: stock.ListMyWatchlistResponse.items:type_name -> stock.WatchlistItemResponse
-	233, // 106: stock.ListDividendPayoutsResponse.payouts:type_name -> stock.DividendPayoutItem
-	236, // 107: stock.ListFundDividendPaymentsResponse.payments:type_name -> stock.FundDividendPaymentItem
+	209, // 102: stock.ListMyRecurringFundsResponse.items:type_name -> stock.RecurringFundResponse
+	214, // 103: stock.ListMyRecurringOrdersResponse.items:type_name -> stock.RecurringOrderResponse
+	222, // 104: stock.ListMyPriceAlertsResponse.alerts:type_name -> stock.PriceAlertResponse
+	228, // 105: stock.ListMyWatchlistResponse.items:type_name -> stock.WatchlistItemResponse
+	235, // 106: stock.ListDividendPayoutsResponse.payouts:type_name -> stock.DividendPayoutItem
+	238, // 107: stock.ListFundDividendPaymentsResponse.payments:type_name -> stock.FundDividendPaymentItem
 	2,   // 108: stock.StockExchangeGRPCService.ListExchanges:input_type -> stock.ListExchangesRequest
 	4,   // 109: stock.StockExchangeGRPCService.GetExchange:input_type -> stock.GetExchangeRequest
 	5,   // 110: stock.StockExchangeGRPCService.SetTestingMode:input_type -> stock.SetTestingModeRequest
@@ -20944,10 +21117,10 @@ var file_stock_stock_proto_depIdxs = []int32{
 	103, // 155: stock.InvestmentFundService.ListMyPositions:input_type -> stock.ListMyPositionsRequest
 	104, // 156: stock.InvestmentFundService.ListBankPositions:input_type -> stock.ListBankPositionsRequest
 	107, // 157: stock.InvestmentFundService.GetActuaryPerformance:input_type -> stock.GetActuaryPerformanceRequest
-	228, // 158: stock.InvestmentFundService.DeclareDividend:input_type -> stock.DeclareDividendRequest
-	230, // 159: stock.InvestmentFundService.PayoutDividend:input_type -> stock.PayoutDividendRequest
-	232, // 160: stock.InvestmentFundService.ListMyDividends:input_type -> stock.ListMyDividendsRequest
-	235, // 161: stock.InvestmentFundService.ListFundDividends:input_type -> stock.ListFundDividendsRequest
+	230, // 158: stock.InvestmentFundService.DeclareDividend:input_type -> stock.DeclareDividendRequest
+	232, // 159: stock.InvestmentFundService.PayoutDividend:input_type -> stock.PayoutDividendRequest
+	234, // 160: stock.InvestmentFundService.ListMyDividends:input_type -> stock.ListMyDividendsRequest
+	237, // 161: stock.InvestmentFundService.ListFundDividends:input_type -> stock.ListFundDividendsRequest
 	145, // 162: stock.OTCOptionsService.CreateOffer:input_type -> stock.CreateOTCOfferRequest
 	149, // 163: stock.OTCOptionsService.ListMyOffers:input_type -> stock.ListMyOTCOffersRequest
 	151, // 164: stock.OTCOptionsService.GetOffer:input_type -> stock.GetOTCOfferRequest
@@ -20987,151 +21160,153 @@ var file_stock_stock_proto_depIdxs = []int32{
 	197, // 198: stock.PeerOTCService.ReserveSellerSharesForNewTx:input_type -> stock.ReserveSellerSharesRequest
 	201, // 199: stock.PeerOTCService.ReleaseSellerSharesForNewTx:input_type -> stock.ReleaseSellerSharesRequest
 	199, // 200: stock.PeerOTCService.ValidatePeerOptionMoneyLeg:input_type -> stock.ValidatePeerOptionMoneyLegRequest
-	193, // 201: stock.PeerOTCService.InitiateOptionExercise:input_type -> stock.InitiateOptionExerciseRequest
-	168, // 202: stock.PeerOTCService.RecordOutboundNegotiation:input_type -> stock.RecordOutboundNegotiationRequest
-	170, // 203: stock.PeerOTCService.ListMyPeerNegotiations:input_type -> stock.ListMyPeerNegotiationsRequest
-	166, // 204: stock.PeerOTCService.MarkNegotiationAccepted:input_type -> stock.MarkNegotiationAcceptedRequest
-	163, // 205: stock.PeerOTCService.CascadeCancelSiblings:input_type -> stock.CascadeCancelSiblingsRequest
-	203, // 206: stock.RecurringFundService.Create:input_type -> stock.CreateRecurringFundRequest
-	204, // 207: stock.RecurringFundService.Get:input_type -> stock.GetRecurringFundRequest
-	204, // 208: stock.RecurringFundService.Pause:input_type -> stock.GetRecurringFundRequest
-	204, // 209: stock.RecurringFundService.Resume:input_type -> stock.GetRecurringFundRequest
-	204, // 210: stock.RecurringFundService.Cancel:input_type -> stock.GetRecurringFundRequest
-	206, // 211: stock.RecurringFundService.ListMy:input_type -> stock.ListMyRecurringFundsRequest
-	209, // 212: stock.RecurringOrderService.CreateOrder:input_type -> stock.CreateRecurringOrderRequest
-	210, // 213: stock.RecurringOrderService.GetOrder:input_type -> stock.GetRecurringOrderRequest
-	210, // 214: stock.RecurringOrderService.PauseOrder:input_type -> stock.GetRecurringOrderRequest
-	210, // 215: stock.RecurringOrderService.ResumeOrder:input_type -> stock.GetRecurringOrderRequest
-	210, // 216: stock.RecurringOrderService.CancelOrder:input_type -> stock.GetRecurringOrderRequest
-	211, // 217: stock.RecurringOrderService.ListMy:input_type -> stock.ListMyRecurringOrdersRequest
-	214, // 218: stock.PriceAlertService.CreateAlert:input_type -> stock.CreatePriceAlertRequest
-	215, // 219: stock.PriceAlertService.UpdateAlert:input_type -> stock.UpdatePriceAlertRequest
-	216, // 220: stock.PriceAlertService.GetAlert:input_type -> stock.GetPriceAlertRequest
-	217, // 221: stock.PriceAlertService.DeleteAlert:input_type -> stock.DeletePriceAlertRequest
-	219, // 222: stock.PriceAlertService.ListMy:input_type -> stock.ListMyPriceAlertsRequest
-	222, // 223: stock.WatchlistService.AddItem:input_type -> stock.AddWatchlistItemRequest
-	223, // 224: stock.WatchlistService.RemoveItem:input_type -> stock.RemoveWatchlistItemRequest
-	225, // 225: stock.WatchlistService.ListMy:input_type -> stock.ListMyWatchlistRequest
-	3,   // 226: stock.StockExchangeGRPCService.ListExchanges:output_type -> stock.ListExchangesResponse
-	1,   // 227: stock.StockExchangeGRPCService.GetExchange:output_type -> stock.Exchange
-	6,   // 228: stock.StockExchangeGRPCService.SetTestingMode:output_type -> stock.SetTestingModeResponse
-	8,   // 229: stock.StockExchangeGRPCService.GetTestingMode:output_type -> stock.GetTestingModeResponse
-	17,  // 230: stock.SecurityGRPCService.ListStocks:output_type -> stock.ListStocksResponse
-	15,  // 231: stock.SecurityGRPCService.GetStock:output_type -> stock.StockDetail
-	15,  // 232: stock.SecurityGRPCService.GetStockByTicker:output_type -> stock.StockDetail
-	13,  // 233: stock.SecurityGRPCService.GetStockHistory:output_type -> stock.PriceHistoryResponse
-	23,  // 234: stock.SecurityGRPCService.ListFutures:output_type -> stock.ListFuturesResponse
-	21,  // 235: stock.SecurityGRPCService.GetFutures:output_type -> stock.FuturesDetail
-	13,  // 236: stock.SecurityGRPCService.GetFuturesHistory:output_type -> stock.PriceHistoryResponse
-	28,  // 237: stock.SecurityGRPCService.ListForexPairs:output_type -> stock.ListForexPairsResponse
-	26,  // 238: stock.SecurityGRPCService.GetForexPair:output_type -> stock.ForexPairDetail
-	13,  // 239: stock.SecurityGRPCService.GetForexPairHistory:output_type -> stock.PriceHistoryResponse
-	33,  // 240: stock.SecurityGRPCService.ListOptions:output_type -> stock.ListOptionsResponse
-	31,  // 241: stock.SecurityGRPCService.GetOption:output_type -> stock.OptionDetail
-	37,  // 242: stock.SecurityGRPCService.GetCandles:output_type -> stock.GetCandlesResponse
-	38,  // 243: stock.OrderGRPCService.CreateOrder:output_type -> stock.Order
-	40,  // 244: stock.OrderGRPCService.GetOrder:output_type -> stock.OrderDetail
-	45,  // 245: stock.OrderGRPCService.ListMyOrders:output_type -> stock.ListOrdersResponse
-	38,  // 246: stock.OrderGRPCService.CancelOrder:output_type -> stock.Order
-	45,  // 247: stock.OrderGRPCService.ListOrders:output_type -> stock.ListOrdersResponse
-	38,  // 248: stock.OrderGRPCService.ApproveOrder:output_type -> stock.Order
-	38,  // 249: stock.OrderGRPCService.DeclineOrder:output_type -> stock.Order
-	55,  // 250: stock.PortfolioGRPCService.ListHoldings:output_type -> stock.ListHoldingsResponse
-	59,  // 251: stock.PortfolioGRPCService.GetPortfolioSummary:output_type -> stock.PortfolioSummary
-	53,  // 252: stock.PortfolioGRPCService.MakePublic:output_type -> stock.Holding
-	63,  // 253: stock.PortfolioGRPCService.ExerciseOption:output_type -> stock.ExerciseResult
-	63,  // 254: stock.PortfolioGRPCService.ExerciseOptionByOptionID:output_type -> stock.ExerciseResult
-	57,  // 255: stock.PortfolioGRPCService.GetHolding:output_type -> stock.HoldingWithOwner
-	66,  // 256: stock.PortfolioGRPCService.ListHoldingTransactions:output_type -> stock.ListHoldingTransactionsResponse
-	52,  // 257: stock.PortfolioGRPCService.GetUnifiedPortfolio:output_type -> stock.UnifiedPortfolioResponse
-	69,  // 258: stock.OTCGRPCService.ListOffers:output_type -> stock.ListOTCOffersResponse
-	77,  // 259: stock.OTCGRPCService.BuyOffer:output_type -> stock.OTCTransaction
-	72,  // 260: stock.OTCGRPCService.ListUnifiedOffers:output_type -> stock.ListUnifiedOTCOffersResponse
-	75,  // 261: stock.OTCGRPCService.ListUnifiedOptionOffers:output_type -> stock.ListUnifiedOptionOffersResponse
-	80,  // 262: stock.TaxGRPCService.ListTaxRecords:output_type -> stock.ListTaxRecordsResponse
-	82,  // 263: stock.TaxGRPCService.CollectTax:output_type -> stock.CollectTaxResponse
-	85,  // 264: stock.TaxGRPCService.ListUserTaxRecords:output_type -> stock.ListUserTaxRecordsResponse
-	88,  // 265: stock.SourceAdminService.SwitchSource:output_type -> stock.SwitchSourceResponse
-	90,  // 266: stock.SourceAdminService.GetSourceStatus:output_type -> stock.SourceStatus
-	93,  // 267: stock.InvestmentFundService.CreateFund:output_type -> stock.FundResponse
-	95,  // 268: stock.InvestmentFundService.ListFunds:output_type -> stock.ListFundsResponse
-	97,  // 269: stock.InvestmentFundService.GetFund:output_type -> stock.FundDetailResponse
-	93,  // 270: stock.InvestmentFundService.UpdateFund:output_type -> stock.FundResponse
-	102, // 271: stock.InvestmentFundService.InvestInFund:output_type -> stock.ContributionResponse
-	102, // 272: stock.InvestmentFundService.RedeemFromFund:output_type -> stock.ContributionResponse
-	105, // 273: stock.InvestmentFundService.ListMyPositions:output_type -> stock.ListPositionsResponse
-	105, // 274: stock.InvestmentFundService.ListBankPositions:output_type -> stock.ListPositionsResponse
-	108, // 275: stock.InvestmentFundService.GetActuaryPerformance:output_type -> stock.GetActuaryPerformanceResponse
-	229, // 276: stock.InvestmentFundService.DeclareDividend:output_type -> stock.DividendPaymentResponse
-	231, // 277: stock.InvestmentFundService.PayoutDividend:output_type -> stock.PayoutDividendResponse
-	234, // 278: stock.InvestmentFundService.ListMyDividends:output_type -> stock.ListDividendPayoutsResponse
-	237, // 279: stock.InvestmentFundService.ListFundDividends:output_type -> stock.ListFundDividendPaymentsResponse
-	146, // 280: stock.OTCOptionsService.CreateOffer:output_type -> stock.OTCOfferResponse
-	150, // 281: stock.OTCOptionsService.ListMyOffers:output_type -> stock.ListMyOTCOffersResponse
-	148, // 282: stock.OTCOptionsService.GetOffer:output_type -> stock.OTCOfferDetailResponse
-	146, // 283: stock.OTCOptionsService.CounterOffer:output_type -> stock.OTCOfferResponse
-	154, // 284: stock.OTCOptionsService.AcceptOffer:output_type -> stock.AcceptOfferResponse
-	146, // 285: stock.OTCOptionsService.RejectOffer:output_type -> stock.OTCOfferResponse
-	158, // 286: stock.OTCOptionsService.ListMyContracts:output_type -> stock.ListContractsResponse
-	156, // 287: stock.OTCOptionsService.GetContract:output_type -> stock.OptionContractResponse
-	162, // 288: stock.OTCOptionsService.ExerciseContract:output_type -> stock.ExerciseResponse
-	150, // 289: stock.OTCOptionsService.ListNegotiationHistory:output_type -> stock.ListMyOTCOffersResponse
-	138, // 290: stock.OTCOptionsService.SubmitRating:output_type -> stock.OTCRatingResponse
-	140, // 291: stock.OTCOptionsService.GetTraderProfile:output_type -> stock.TraderProfileResponse
-	142, // 292: stock.OTCOptionsService.ListReceivedRatings:output_type -> stock.ListOTCRatingsResponse
-	110, // 293: stock.OTCOptionsService.OpenNegotiation:output_type -> stock.OTCNegotiationResponse
-	110, // 294: stock.OTCOptionsService.CounterNegotiation:output_type -> stock.OTCNegotiationResponse
-	117, // 295: stock.OTCOptionsService.AcceptNegotiationChain:output_type -> stock.OTCAcceptNegotiationResponse
-	110, // 296: stock.OTCOptionsService.RejectNegotiation:output_type -> stock.OTCNegotiationResponse
-	110, // 297: stock.OTCOptionsService.CancelNegotiation:output_type -> stock.OTCNegotiationResponse
-	122, // 298: stock.OTCOptionsService.CancelListing:output_type -> stock.CancelListingResponse
-	128, // 299: stock.OTCOptionsService.ListMyNegotiations:output_type -> stock.ListNegotiationsResponse
-	128, // 300: stock.OTCOptionsService.ListNegotiationsByListing:output_type -> stock.ListNegotiationsResponse
-	113, // 301: stock.OTCOptionsService.ListNegotiationRevisions:output_type -> stock.ListNegotiationRevisionsResponse
-	127, // 302: stock.OTCOptionsService.GetOfferTimeline:output_type -> stock.GetOfferTimelineResponse
-	131, // 303: stock.OTCStockMarketGRPCService.CreateOTCStockOffer:output_type -> stock.OTCStockOfferResponse
-	134, // 304: stock.OTCStockMarketGRPCService.CancelOTCStockOffer:output_type -> stock.CancelOTCStockOfferResponse
-	136, // 305: stock.OTCStockMarketGRPCService.ListMyOTCStocks:output_type -> stock.ListMyOTCStocksResponse
-	130, // 306: stock.OTCStockMarketGRPCService.SellOTCStockOffer:output_type -> stock.OTCStockFillResult
-	177, // 307: stock.PeerOTCService.GetPublicStocks:output_type -> stock.GetPublicStocksResponse
-	180, // 308: stock.PeerOTCService.GetPublicOptionOffers:output_type -> stock.GetPublicOptionOffersResponse
-	182, // 309: stock.PeerOTCService.CreateNegotiation:output_type -> stock.CreateNegotiationResponse
-	184, // 310: stock.PeerOTCService.UpdateNegotiation:output_type -> stock.UpdateNegotiationResponse
-	186, // 311: stock.PeerOTCService.GetNegotiation:output_type -> stock.GetNegotiationResponse
-	188, // 312: stock.PeerOTCService.DeleteNegotiation:output_type -> stock.DeleteNegotiationResponse
-	190, // 313: stock.PeerOTCService.AcceptNegotiation:output_type -> stock.AcceptNegotiationResponse
-	192, // 314: stock.PeerOTCService.RecordOptionContract:output_type -> stock.RecordOptionContractResponse
-	196, // 315: stock.PeerOTCService.CheckSellerCanDeliver:output_type -> stock.CheckSellerCanDeliverResponse
-	198, // 316: stock.PeerOTCService.ReserveSellerSharesForNewTx:output_type -> stock.ReserveSellerSharesResponse
-	202, // 317: stock.PeerOTCService.ReleaseSellerSharesForNewTx:output_type -> stock.ReleaseSellerSharesResponse
-	200, // 318: stock.PeerOTCService.ValidatePeerOptionMoneyLeg:output_type -> stock.ValidatePeerOptionMoneyLegResponse
-	194, // 319: stock.PeerOTCService.InitiateOptionExercise:output_type -> stock.InitiateOptionExerciseResponse
-	169, // 320: stock.PeerOTCService.RecordOutboundNegotiation:output_type -> stock.RecordOutboundNegotiationResponse
-	171, // 321: stock.PeerOTCService.ListMyPeerNegotiations:output_type -> stock.ListMyPeerNegotiationsResponse
-	167, // 322: stock.PeerOTCService.MarkNegotiationAccepted:output_type -> stock.MarkNegotiationAcceptedResponse
-	165, // 323: stock.PeerOTCService.CascadeCancelSiblings:output_type -> stock.CascadeCancelSiblingsResponse
-	207, // 324: stock.RecurringFundService.Create:output_type -> stock.RecurringFundResponse
-	207, // 325: stock.RecurringFundService.Get:output_type -> stock.RecurringFundResponse
-	207, // 326: stock.RecurringFundService.Pause:output_type -> stock.RecurringFundResponse
-	207, // 327: stock.RecurringFundService.Resume:output_type -> stock.RecurringFundResponse
-	205, // 328: stock.RecurringFundService.Cancel:output_type -> stock.CancelRecurringFundResponse
-	208, // 329: stock.RecurringFundService.ListMy:output_type -> stock.ListMyRecurringFundsResponse
-	212, // 330: stock.RecurringOrderService.CreateOrder:output_type -> stock.RecurringOrderResponse
-	212, // 331: stock.RecurringOrderService.GetOrder:output_type -> stock.RecurringOrderResponse
-	212, // 332: stock.RecurringOrderService.PauseOrder:output_type -> stock.RecurringOrderResponse
-	212, // 333: stock.RecurringOrderService.ResumeOrder:output_type -> stock.RecurringOrderResponse
-	212, // 334: stock.RecurringOrderService.CancelOrder:output_type -> stock.RecurringOrderResponse
-	213, // 335: stock.RecurringOrderService.ListMy:output_type -> stock.ListMyRecurringOrdersResponse
-	220, // 336: stock.PriceAlertService.CreateAlert:output_type -> stock.PriceAlertResponse
-	220, // 337: stock.PriceAlertService.UpdateAlert:output_type -> stock.PriceAlertResponse
-	220, // 338: stock.PriceAlertService.GetAlert:output_type -> stock.PriceAlertResponse
-	218, // 339: stock.PriceAlertService.DeleteAlert:output_type -> stock.DeletePriceAlertResponse
-	221, // 340: stock.PriceAlertService.ListMy:output_type -> stock.ListMyPriceAlertsResponse
-	226, // 341: stock.WatchlistService.AddItem:output_type -> stock.WatchlistItemResponse
-	224, // 342: stock.WatchlistService.RemoveItem:output_type -> stock.RemoveWatchlistItemResponse
-	227, // 343: stock.WatchlistService.ListMy:output_type -> stock.ListMyWatchlistResponse
-	226, // [226:344] is the sub-list for method output_type
-	108, // [108:226] is the sub-list for method input_type
+	203, // 201: stock.PeerOTCService.LookupPeerOptionContract:input_type -> stock.LookupPeerOptionContractRequest
+	193, // 202: stock.PeerOTCService.InitiateOptionExercise:input_type -> stock.InitiateOptionExerciseRequest
+	168, // 203: stock.PeerOTCService.RecordOutboundNegotiation:input_type -> stock.RecordOutboundNegotiationRequest
+	170, // 204: stock.PeerOTCService.ListMyPeerNegotiations:input_type -> stock.ListMyPeerNegotiationsRequest
+	166, // 205: stock.PeerOTCService.MarkNegotiationAccepted:input_type -> stock.MarkNegotiationAcceptedRequest
+	163, // 206: stock.PeerOTCService.CascadeCancelSiblings:input_type -> stock.CascadeCancelSiblingsRequest
+	205, // 207: stock.RecurringFundService.Create:input_type -> stock.CreateRecurringFundRequest
+	206, // 208: stock.RecurringFundService.Get:input_type -> stock.GetRecurringFundRequest
+	206, // 209: stock.RecurringFundService.Pause:input_type -> stock.GetRecurringFundRequest
+	206, // 210: stock.RecurringFundService.Resume:input_type -> stock.GetRecurringFundRequest
+	206, // 211: stock.RecurringFundService.Cancel:input_type -> stock.GetRecurringFundRequest
+	208, // 212: stock.RecurringFundService.ListMy:input_type -> stock.ListMyRecurringFundsRequest
+	211, // 213: stock.RecurringOrderService.CreateOrder:input_type -> stock.CreateRecurringOrderRequest
+	212, // 214: stock.RecurringOrderService.GetOrder:input_type -> stock.GetRecurringOrderRequest
+	212, // 215: stock.RecurringOrderService.PauseOrder:input_type -> stock.GetRecurringOrderRequest
+	212, // 216: stock.RecurringOrderService.ResumeOrder:input_type -> stock.GetRecurringOrderRequest
+	212, // 217: stock.RecurringOrderService.CancelOrder:input_type -> stock.GetRecurringOrderRequest
+	213, // 218: stock.RecurringOrderService.ListMy:input_type -> stock.ListMyRecurringOrdersRequest
+	216, // 219: stock.PriceAlertService.CreateAlert:input_type -> stock.CreatePriceAlertRequest
+	217, // 220: stock.PriceAlertService.UpdateAlert:input_type -> stock.UpdatePriceAlertRequest
+	218, // 221: stock.PriceAlertService.GetAlert:input_type -> stock.GetPriceAlertRequest
+	219, // 222: stock.PriceAlertService.DeleteAlert:input_type -> stock.DeletePriceAlertRequest
+	221, // 223: stock.PriceAlertService.ListMy:input_type -> stock.ListMyPriceAlertsRequest
+	224, // 224: stock.WatchlistService.AddItem:input_type -> stock.AddWatchlistItemRequest
+	225, // 225: stock.WatchlistService.RemoveItem:input_type -> stock.RemoveWatchlistItemRequest
+	227, // 226: stock.WatchlistService.ListMy:input_type -> stock.ListMyWatchlistRequest
+	3,   // 227: stock.StockExchangeGRPCService.ListExchanges:output_type -> stock.ListExchangesResponse
+	1,   // 228: stock.StockExchangeGRPCService.GetExchange:output_type -> stock.Exchange
+	6,   // 229: stock.StockExchangeGRPCService.SetTestingMode:output_type -> stock.SetTestingModeResponse
+	8,   // 230: stock.StockExchangeGRPCService.GetTestingMode:output_type -> stock.GetTestingModeResponse
+	17,  // 231: stock.SecurityGRPCService.ListStocks:output_type -> stock.ListStocksResponse
+	15,  // 232: stock.SecurityGRPCService.GetStock:output_type -> stock.StockDetail
+	15,  // 233: stock.SecurityGRPCService.GetStockByTicker:output_type -> stock.StockDetail
+	13,  // 234: stock.SecurityGRPCService.GetStockHistory:output_type -> stock.PriceHistoryResponse
+	23,  // 235: stock.SecurityGRPCService.ListFutures:output_type -> stock.ListFuturesResponse
+	21,  // 236: stock.SecurityGRPCService.GetFutures:output_type -> stock.FuturesDetail
+	13,  // 237: stock.SecurityGRPCService.GetFuturesHistory:output_type -> stock.PriceHistoryResponse
+	28,  // 238: stock.SecurityGRPCService.ListForexPairs:output_type -> stock.ListForexPairsResponse
+	26,  // 239: stock.SecurityGRPCService.GetForexPair:output_type -> stock.ForexPairDetail
+	13,  // 240: stock.SecurityGRPCService.GetForexPairHistory:output_type -> stock.PriceHistoryResponse
+	33,  // 241: stock.SecurityGRPCService.ListOptions:output_type -> stock.ListOptionsResponse
+	31,  // 242: stock.SecurityGRPCService.GetOption:output_type -> stock.OptionDetail
+	37,  // 243: stock.SecurityGRPCService.GetCandles:output_type -> stock.GetCandlesResponse
+	38,  // 244: stock.OrderGRPCService.CreateOrder:output_type -> stock.Order
+	40,  // 245: stock.OrderGRPCService.GetOrder:output_type -> stock.OrderDetail
+	45,  // 246: stock.OrderGRPCService.ListMyOrders:output_type -> stock.ListOrdersResponse
+	38,  // 247: stock.OrderGRPCService.CancelOrder:output_type -> stock.Order
+	45,  // 248: stock.OrderGRPCService.ListOrders:output_type -> stock.ListOrdersResponse
+	38,  // 249: stock.OrderGRPCService.ApproveOrder:output_type -> stock.Order
+	38,  // 250: stock.OrderGRPCService.DeclineOrder:output_type -> stock.Order
+	55,  // 251: stock.PortfolioGRPCService.ListHoldings:output_type -> stock.ListHoldingsResponse
+	59,  // 252: stock.PortfolioGRPCService.GetPortfolioSummary:output_type -> stock.PortfolioSummary
+	53,  // 253: stock.PortfolioGRPCService.MakePublic:output_type -> stock.Holding
+	63,  // 254: stock.PortfolioGRPCService.ExerciseOption:output_type -> stock.ExerciseResult
+	63,  // 255: stock.PortfolioGRPCService.ExerciseOptionByOptionID:output_type -> stock.ExerciseResult
+	57,  // 256: stock.PortfolioGRPCService.GetHolding:output_type -> stock.HoldingWithOwner
+	66,  // 257: stock.PortfolioGRPCService.ListHoldingTransactions:output_type -> stock.ListHoldingTransactionsResponse
+	52,  // 258: stock.PortfolioGRPCService.GetUnifiedPortfolio:output_type -> stock.UnifiedPortfolioResponse
+	69,  // 259: stock.OTCGRPCService.ListOffers:output_type -> stock.ListOTCOffersResponse
+	77,  // 260: stock.OTCGRPCService.BuyOffer:output_type -> stock.OTCTransaction
+	72,  // 261: stock.OTCGRPCService.ListUnifiedOffers:output_type -> stock.ListUnifiedOTCOffersResponse
+	75,  // 262: stock.OTCGRPCService.ListUnifiedOptionOffers:output_type -> stock.ListUnifiedOptionOffersResponse
+	80,  // 263: stock.TaxGRPCService.ListTaxRecords:output_type -> stock.ListTaxRecordsResponse
+	82,  // 264: stock.TaxGRPCService.CollectTax:output_type -> stock.CollectTaxResponse
+	85,  // 265: stock.TaxGRPCService.ListUserTaxRecords:output_type -> stock.ListUserTaxRecordsResponse
+	88,  // 266: stock.SourceAdminService.SwitchSource:output_type -> stock.SwitchSourceResponse
+	90,  // 267: stock.SourceAdminService.GetSourceStatus:output_type -> stock.SourceStatus
+	93,  // 268: stock.InvestmentFundService.CreateFund:output_type -> stock.FundResponse
+	95,  // 269: stock.InvestmentFundService.ListFunds:output_type -> stock.ListFundsResponse
+	97,  // 270: stock.InvestmentFundService.GetFund:output_type -> stock.FundDetailResponse
+	93,  // 271: stock.InvestmentFundService.UpdateFund:output_type -> stock.FundResponse
+	102, // 272: stock.InvestmentFundService.InvestInFund:output_type -> stock.ContributionResponse
+	102, // 273: stock.InvestmentFundService.RedeemFromFund:output_type -> stock.ContributionResponse
+	105, // 274: stock.InvestmentFundService.ListMyPositions:output_type -> stock.ListPositionsResponse
+	105, // 275: stock.InvestmentFundService.ListBankPositions:output_type -> stock.ListPositionsResponse
+	108, // 276: stock.InvestmentFundService.GetActuaryPerformance:output_type -> stock.GetActuaryPerformanceResponse
+	231, // 277: stock.InvestmentFundService.DeclareDividend:output_type -> stock.DividendPaymentResponse
+	233, // 278: stock.InvestmentFundService.PayoutDividend:output_type -> stock.PayoutDividendResponse
+	236, // 279: stock.InvestmentFundService.ListMyDividends:output_type -> stock.ListDividendPayoutsResponse
+	239, // 280: stock.InvestmentFundService.ListFundDividends:output_type -> stock.ListFundDividendPaymentsResponse
+	146, // 281: stock.OTCOptionsService.CreateOffer:output_type -> stock.OTCOfferResponse
+	150, // 282: stock.OTCOptionsService.ListMyOffers:output_type -> stock.ListMyOTCOffersResponse
+	148, // 283: stock.OTCOptionsService.GetOffer:output_type -> stock.OTCOfferDetailResponse
+	146, // 284: stock.OTCOptionsService.CounterOffer:output_type -> stock.OTCOfferResponse
+	154, // 285: stock.OTCOptionsService.AcceptOffer:output_type -> stock.AcceptOfferResponse
+	146, // 286: stock.OTCOptionsService.RejectOffer:output_type -> stock.OTCOfferResponse
+	158, // 287: stock.OTCOptionsService.ListMyContracts:output_type -> stock.ListContractsResponse
+	156, // 288: stock.OTCOptionsService.GetContract:output_type -> stock.OptionContractResponse
+	162, // 289: stock.OTCOptionsService.ExerciseContract:output_type -> stock.ExerciseResponse
+	150, // 290: stock.OTCOptionsService.ListNegotiationHistory:output_type -> stock.ListMyOTCOffersResponse
+	138, // 291: stock.OTCOptionsService.SubmitRating:output_type -> stock.OTCRatingResponse
+	140, // 292: stock.OTCOptionsService.GetTraderProfile:output_type -> stock.TraderProfileResponse
+	142, // 293: stock.OTCOptionsService.ListReceivedRatings:output_type -> stock.ListOTCRatingsResponse
+	110, // 294: stock.OTCOptionsService.OpenNegotiation:output_type -> stock.OTCNegotiationResponse
+	110, // 295: stock.OTCOptionsService.CounterNegotiation:output_type -> stock.OTCNegotiationResponse
+	117, // 296: stock.OTCOptionsService.AcceptNegotiationChain:output_type -> stock.OTCAcceptNegotiationResponse
+	110, // 297: stock.OTCOptionsService.RejectNegotiation:output_type -> stock.OTCNegotiationResponse
+	110, // 298: stock.OTCOptionsService.CancelNegotiation:output_type -> stock.OTCNegotiationResponse
+	122, // 299: stock.OTCOptionsService.CancelListing:output_type -> stock.CancelListingResponse
+	128, // 300: stock.OTCOptionsService.ListMyNegotiations:output_type -> stock.ListNegotiationsResponse
+	128, // 301: stock.OTCOptionsService.ListNegotiationsByListing:output_type -> stock.ListNegotiationsResponse
+	113, // 302: stock.OTCOptionsService.ListNegotiationRevisions:output_type -> stock.ListNegotiationRevisionsResponse
+	127, // 303: stock.OTCOptionsService.GetOfferTimeline:output_type -> stock.GetOfferTimelineResponse
+	131, // 304: stock.OTCStockMarketGRPCService.CreateOTCStockOffer:output_type -> stock.OTCStockOfferResponse
+	134, // 305: stock.OTCStockMarketGRPCService.CancelOTCStockOffer:output_type -> stock.CancelOTCStockOfferResponse
+	136, // 306: stock.OTCStockMarketGRPCService.ListMyOTCStocks:output_type -> stock.ListMyOTCStocksResponse
+	130, // 307: stock.OTCStockMarketGRPCService.SellOTCStockOffer:output_type -> stock.OTCStockFillResult
+	177, // 308: stock.PeerOTCService.GetPublicStocks:output_type -> stock.GetPublicStocksResponse
+	180, // 309: stock.PeerOTCService.GetPublicOptionOffers:output_type -> stock.GetPublicOptionOffersResponse
+	182, // 310: stock.PeerOTCService.CreateNegotiation:output_type -> stock.CreateNegotiationResponse
+	184, // 311: stock.PeerOTCService.UpdateNegotiation:output_type -> stock.UpdateNegotiationResponse
+	186, // 312: stock.PeerOTCService.GetNegotiation:output_type -> stock.GetNegotiationResponse
+	188, // 313: stock.PeerOTCService.DeleteNegotiation:output_type -> stock.DeleteNegotiationResponse
+	190, // 314: stock.PeerOTCService.AcceptNegotiation:output_type -> stock.AcceptNegotiationResponse
+	192, // 315: stock.PeerOTCService.RecordOptionContract:output_type -> stock.RecordOptionContractResponse
+	196, // 316: stock.PeerOTCService.CheckSellerCanDeliver:output_type -> stock.CheckSellerCanDeliverResponse
+	198, // 317: stock.PeerOTCService.ReserveSellerSharesForNewTx:output_type -> stock.ReserveSellerSharesResponse
+	202, // 318: stock.PeerOTCService.ReleaseSellerSharesForNewTx:output_type -> stock.ReleaseSellerSharesResponse
+	200, // 319: stock.PeerOTCService.ValidatePeerOptionMoneyLeg:output_type -> stock.ValidatePeerOptionMoneyLegResponse
+	204, // 320: stock.PeerOTCService.LookupPeerOptionContract:output_type -> stock.LookupPeerOptionContractResponse
+	194, // 321: stock.PeerOTCService.InitiateOptionExercise:output_type -> stock.InitiateOptionExerciseResponse
+	169, // 322: stock.PeerOTCService.RecordOutboundNegotiation:output_type -> stock.RecordOutboundNegotiationResponse
+	171, // 323: stock.PeerOTCService.ListMyPeerNegotiations:output_type -> stock.ListMyPeerNegotiationsResponse
+	167, // 324: stock.PeerOTCService.MarkNegotiationAccepted:output_type -> stock.MarkNegotiationAcceptedResponse
+	165, // 325: stock.PeerOTCService.CascadeCancelSiblings:output_type -> stock.CascadeCancelSiblingsResponse
+	209, // 326: stock.RecurringFundService.Create:output_type -> stock.RecurringFundResponse
+	209, // 327: stock.RecurringFundService.Get:output_type -> stock.RecurringFundResponse
+	209, // 328: stock.RecurringFundService.Pause:output_type -> stock.RecurringFundResponse
+	209, // 329: stock.RecurringFundService.Resume:output_type -> stock.RecurringFundResponse
+	207, // 330: stock.RecurringFundService.Cancel:output_type -> stock.CancelRecurringFundResponse
+	210, // 331: stock.RecurringFundService.ListMy:output_type -> stock.ListMyRecurringFundsResponse
+	214, // 332: stock.RecurringOrderService.CreateOrder:output_type -> stock.RecurringOrderResponse
+	214, // 333: stock.RecurringOrderService.GetOrder:output_type -> stock.RecurringOrderResponse
+	214, // 334: stock.RecurringOrderService.PauseOrder:output_type -> stock.RecurringOrderResponse
+	214, // 335: stock.RecurringOrderService.ResumeOrder:output_type -> stock.RecurringOrderResponse
+	214, // 336: stock.RecurringOrderService.CancelOrder:output_type -> stock.RecurringOrderResponse
+	215, // 337: stock.RecurringOrderService.ListMy:output_type -> stock.ListMyRecurringOrdersResponse
+	222, // 338: stock.PriceAlertService.CreateAlert:output_type -> stock.PriceAlertResponse
+	222, // 339: stock.PriceAlertService.UpdateAlert:output_type -> stock.PriceAlertResponse
+	222, // 340: stock.PriceAlertService.GetAlert:output_type -> stock.PriceAlertResponse
+	220, // 341: stock.PriceAlertService.DeleteAlert:output_type -> stock.DeletePriceAlertResponse
+	223, // 342: stock.PriceAlertService.ListMy:output_type -> stock.ListMyPriceAlertsResponse
+	228, // 343: stock.WatchlistService.AddItem:output_type -> stock.WatchlistItemResponse
+	226, // 344: stock.WatchlistService.RemoveItem:output_type -> stock.RemoveWatchlistItemResponse
+	229, // 345: stock.WatchlistService.ListMy:output_type -> stock.ListMyWatchlistResponse
+	227, // [227:346] is the sub-list for method output_type
+	108, // [108:227] is the sub-list for method input_type
 	108, // [108:108] is the sub-list for extension type_name
 	108, // [108:108] is the sub-list for extension extendee
 	0,   // [0:108] is the sub-list for field type_name
@@ -21152,7 +21327,7 @@ func file_stock_stock_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stock_stock_proto_rawDesc), len(file_stock_stock_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   237,
+			NumMessages:   239,
 			NumExtensions: 0,
 			NumServices:   15,
 		},

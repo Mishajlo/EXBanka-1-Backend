@@ -3849,6 +3849,7 @@ const (
 	PeerOTCService_ReserveSellerSharesForNewTx_FullMethodName = "/stock.PeerOTCService/ReserveSellerSharesForNewTx"
 	PeerOTCService_ReleaseSellerSharesForNewTx_FullMethodName = "/stock.PeerOTCService/ReleaseSellerSharesForNewTx"
 	PeerOTCService_ValidatePeerOptionMoneyLeg_FullMethodName  = "/stock.PeerOTCService/ValidatePeerOptionMoneyLeg"
+	PeerOTCService_LookupPeerOptionContract_FullMethodName    = "/stock.PeerOTCService/LookupPeerOptionContract"
 	PeerOTCService_InitiateOptionExercise_FullMethodName      = "/stock.PeerOTCService/InitiateOptionExercise"
 	PeerOTCService_RecordOutboundNegotiation_FullMethodName   = "/stock.PeerOTCService/RecordOutboundNegotiation"
 	PeerOTCService_ListMyPeerNegotiations_FullMethodName      = "/stock.PeerOTCService/ListMyPeerNegotiations"
@@ -3911,6 +3912,16 @@ type PeerOTCServiceClient interface {
 	// Closes the forged-strike theft (a peer crafting an exercise that delivers
 	// full shares for an under-stated strike). Idempotent / read-only.
 	ValidatePeerOptionMoneyLeg(ctx context.Context, in *ValidatePeerOptionMoneyLegRequest, opts ...grpc.CallOption) (*ValidatePeerOptionMoneyLegResponse, error)
+	// LookupPeerOptionContract returns the SELLER-side (DEBIT) peer_option_contract
+	// this bank holds for a negotiationId, with enough stored terms for the
+	// transaction-service executor to (a) decide ownership of an OPTION pseudo-
+	// account exercise leg ("do I hold the seller side of this negotiation?"),
+	// (b) resolve + credit the seller's money account, and (c) gate the exercise
+	// on settlement-date/used-status and validate the strike money. found=false
+	// means this bank does NOT hold the seller side (a different bank does) — the
+	// executor then SKIPS the pseudo-account leg. See the option wire-conformance
+	// design §3.3.1 (ownership-by-contract, not routing-prefix). Read-only.
+	LookupPeerOptionContract(ctx context.Context, in *LookupPeerOptionContractRequest, opts ...grpc.CallOption) (*LookupPeerOptionContractResponse, error)
 	InitiateOptionExercise(ctx context.Context, in *InitiateOptionExerciseRequest, opts ...grpc.CallOption) (*InitiateOptionExerciseResponse, error)
 	// Buyer-side mirror persistence so the buyer's bank also has a local
 	// row to surface in /me/peer-otc/negotiations. Called by the gateway
@@ -4071,6 +4082,16 @@ func (c *peerOTCServiceClient) ValidatePeerOptionMoneyLeg(ctx context.Context, i
 	return out, nil
 }
 
+func (c *peerOTCServiceClient) LookupPeerOptionContract(ctx context.Context, in *LookupPeerOptionContractRequest, opts ...grpc.CallOption) (*LookupPeerOptionContractResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LookupPeerOptionContractResponse)
+	err := c.cc.Invoke(ctx, PeerOTCService_LookupPeerOptionContract_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *peerOTCServiceClient) InitiateOptionExercise(ctx context.Context, in *InitiateOptionExerciseRequest, opts ...grpc.CallOption) (*InitiateOptionExerciseResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(InitiateOptionExerciseResponse)
@@ -4176,6 +4197,16 @@ type PeerOTCServiceServer interface {
 	// Closes the forged-strike theft (a peer crafting an exercise that delivers
 	// full shares for an under-stated strike). Idempotent / read-only.
 	ValidatePeerOptionMoneyLeg(context.Context, *ValidatePeerOptionMoneyLegRequest) (*ValidatePeerOptionMoneyLegResponse, error)
+	// LookupPeerOptionContract returns the SELLER-side (DEBIT) peer_option_contract
+	// this bank holds for a negotiationId, with enough stored terms for the
+	// transaction-service executor to (a) decide ownership of an OPTION pseudo-
+	// account exercise leg ("do I hold the seller side of this negotiation?"),
+	// (b) resolve + credit the seller's money account, and (c) gate the exercise
+	// on settlement-date/used-status and validate the strike money. found=false
+	// means this bank does NOT hold the seller side (a different bank does) — the
+	// executor then SKIPS the pseudo-account leg. See the option wire-conformance
+	// design §3.3.1 (ownership-by-contract, not routing-prefix). Read-only.
+	LookupPeerOptionContract(context.Context, *LookupPeerOptionContractRequest) (*LookupPeerOptionContractResponse, error)
 	InitiateOptionExercise(context.Context, *InitiateOptionExerciseRequest) (*InitiateOptionExerciseResponse, error)
 	// Buyer-side mirror persistence so the buyer's bank also has a local
 	// row to surface in /me/peer-otc/negotiations. Called by the gateway
@@ -4251,6 +4282,9 @@ func (UnimplementedPeerOTCServiceServer) ReleaseSellerSharesForNewTx(context.Con
 }
 func (UnimplementedPeerOTCServiceServer) ValidatePeerOptionMoneyLeg(context.Context, *ValidatePeerOptionMoneyLegRequest) (*ValidatePeerOptionMoneyLegResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ValidatePeerOptionMoneyLeg not implemented")
+}
+func (UnimplementedPeerOTCServiceServer) LookupPeerOptionContract(context.Context, *LookupPeerOptionContractRequest) (*LookupPeerOptionContractResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method LookupPeerOptionContract not implemented")
 }
 func (UnimplementedPeerOTCServiceServer) InitiateOptionExercise(context.Context, *InitiateOptionExerciseRequest) (*InitiateOptionExerciseResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InitiateOptionExercise not implemented")
@@ -4504,6 +4538,24 @@ func _PeerOTCService_ValidatePeerOptionMoneyLeg_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PeerOTCService_LookupPeerOptionContract_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LookupPeerOptionContractRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerOTCServiceServer).LookupPeerOptionContract(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerOTCService_LookupPeerOptionContract_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerOTCServiceServer).LookupPeerOptionContract(ctx, req.(*LookupPeerOptionContractRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PeerOTCService_InitiateOptionExercise_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(InitiateOptionExerciseRequest)
 	if err := dec(in); err != nil {
@@ -4648,6 +4700,10 @@ var PeerOTCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidatePeerOptionMoneyLeg",
 			Handler:    _PeerOTCService_ValidatePeerOptionMoneyLeg_Handler,
+		},
+		{
+			MethodName: "LookupPeerOptionContract",
+			Handler:    _PeerOTCService_LookupPeerOptionContract_Handler,
 		},
 		{
 			MethodName: "InitiateOptionExercise",

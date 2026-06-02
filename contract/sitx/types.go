@@ -88,6 +88,13 @@ type MonetaryAsset struct {
 	Currency string `json:"currency"`
 }
 
+// MonetaryValue is the §2.5 {amount, currency} money value used inside
+// OptionDescription.pricePerUnit. Amount is a bare JSON number (DecimalNumber).
+type MonetaryValue struct {
+	Amount   DecimalNumber `json:"amount"`
+	Currency string        `json:"currency"`
+}
+
 // StockDescription is the §2.7 stock asset payload (asset Type "STOCK").
 type StockDescription struct {
 	Ticker string `json:"ticker"`

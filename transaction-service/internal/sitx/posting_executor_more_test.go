@@ -31,16 +31,37 @@ type stubHoldingChecker struct {
 	resp *stockpb.CheckSellerCanDeliverResponse
 	err  error
 	// reserve/release tracking (Celina-5 vote-time share hold)
-	reserveCalls    int
-	releaseCalls    int
-	lastReserveTxID string
-	lastReleaseTxID string
+	reserveCalls       int
+	releaseCalls       int
+	lastReserveTxID    string
+	lastReleaseTxID    string
+	lastReserveTicker  string
+	lastReserveQty     int64
 	// money-leg validation (forged-strike defense). validateOK defaults to true
 	// (nil) so existing tests keep voting YES; set validateDeny to force a NO.
 	validateCalls int
 	lastValidate  *stockpb.ValidatePeerOptionMoneyLegRequest
 	validateDeny  bool
 	validateErr   error
+	// OPTION pseudo-account exercise-leg ownership lookup (design §3.3.1). When
+	// lookupResp is nil the checker reports found=false (this bank doesn't hold
+	// the seller side). lookupErr forces a transport error.
+	lookupCalls int
+	lastLookup  *stockpb.LookupPeerOptionContractRequest
+	lookupResp  *stockpb.LookupPeerOptionContractResponse
+	lookupErr   error
+}
+
+func (s *stubHoldingChecker) LookupPeerOptionContract(ctx context.Context, in *stockpb.LookupPeerOptionContractRequest, opts ...grpc.CallOption) (*stockpb.LookupPeerOptionContractResponse, error) {
+	s.lookupCalls++
+	s.lastLookup = in
+	if s.lookupErr != nil {
+		return nil, s.lookupErr
+	}
+	if s.lookupResp != nil {
+		return s.lookupResp, nil
+	}
+	return &stockpb.LookupPeerOptionContractResponse{Found: false}, nil
 }
 
 func (s *stubHoldingChecker) CheckSellerCanDeliver(ctx context.Context, in *stockpb.CheckSellerCanDeliverRequest, opts ...grpc.CallOption) (*stockpb.CheckSellerCanDeliverResponse, error) {
@@ -53,6 +74,8 @@ func (s *stubHoldingChecker) CheckSellerCanDeliver(ctx context.Context, in *stoc
 func (s *stubHoldingChecker) ReserveSellerSharesForNewTx(ctx context.Context, in *stockpb.ReserveSellerSharesRequest, opts ...grpc.CallOption) (*stockpb.ReserveSellerSharesResponse, error) {
 	s.reserveCalls++
 	s.lastReserveTxID = in.GetCrossbankTxId()
+	s.lastReserveTicker = in.GetTicker()
+	s.lastReserveQty = in.GetQuantity()
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -186,7 +209,7 @@ func TestPostingExecutor_DebitFails_InsufficientAsset(t *testing.T) {
 func TestPostingExecutor_OptionItem_NoChecker_AlwaysIncluded(t *testing.T) {
 	stub := &stubAccountClient{}
 	exec := sitx.NewPostingExecutor(stub, 111)
-	optDesc := `{"ticker":"AAPL","amount":1}`
+	optDesc := `{"negotiationId":{"routingNumber":222,"id":"neg-3"},"stock":{"ticker":"AAPL"},"pricePerUnit":{"amount":10,"currency":"RSD"},"settlementDate":"2026-12-31","amount":1}`
 	postings := []contractsitx.InternalPosting{
 		// Money leg balances out.
 		money(111, "111-pay", "RSD", 100, contractsitx.DirectionDebit),
@@ -230,7 +253,7 @@ func TestPostingExecutor_OptionItem_HoldingChecker_RejectsOnInsufficient(t *test
 	stub := &stubAccountClient{}
 	exec := sitx.NewPostingExecutor(stub, 111)
 	exec.SetHoldingChecker(&stubHoldingChecker{resp: &stockpb.CheckSellerCanDeliverResponse{Ok: false}})
-	optDesc := `{"ticker":"GOOG","amount":2}`
+	optDesc := `{"stock":{"ticker":"GOOG"},"amount":2}`
 	postings := []contractsitx.InternalPosting{
 		// Option DEBIT on our routing 111 = WE are the seller.
 		option(111, "client-9", optDesc, 2, contractsitx.DirectionDebit),
@@ -245,41 +268,48 @@ func TestPostingExecutor_OptionItem_HoldingChecker_RejectsOnInsufficient(t *test
 	}
 }
 
-// TestPostingExecutor_OptionItem_ExerciseDoesNotReserve is the regression test
-// for the exercise over-reservation bug: an EXERCISE-intent DEBIT option leg
-// must NOT reserve seller shares at vote time (the shares were already held at
-// accept and are consumed at COMMIT). Reserving again orphaned a second hold
-// that nothing released, permanently locking those shares.
-func TestPostingExecutor_OptionItem_ExerciseDoesNotReserve(t *testing.T) {
+// TestPostingExecutor_OptionAssetDebitLeg_ReservesSellerShares verifies that a
+// DEBIT OPTION-asset leg on our routing (we are the seller) with a valid nested
+// OptionDescription DOES call ReserveSellerSharesForNewTx. The executor always
+// treats OPTION-asset postings as accept-phase: the intent is supplied internally
+// and is no longer carried on the wire, so any well-formed OptionDescription
+// (with stock.ticker populated) must trigger a seller-share hold at vote time.
+func TestPostingExecutor_OptionAssetDebitLeg_ReservesSellerShares(t *testing.T) {
 	stub := &stubAccountClient{}
 	exec := sitx.NewPostingExecutor(stub, 111)
 	hc := &stubHoldingChecker{resp: &stockpb.CheckSellerCanDeliverResponse{Ok: true}}
 	exec.SetHoldingChecker(hc)
-	// Option DEBIT on our routing 111 = WE are the seller; intent=exercise.
-	optDesc := `{"ticker":"MSFT","amount":3,"intent":"exercise"}`
+	// Nested OptionDescription — matches the wire format after the reshape.
+	optDesc := `{"negotiationId":{"routingNumber":222,"id":"neg-1"},"stock":{"ticker":"MSFT"},"pricePerUnit":{"amount":50,"currency":"RSD"},"settlementDate":"2026-12-31","amount":3}`
 	postings := []contractsitx.InternalPosting{
 		option(111, "client-1", optDesc, 3, contractsitx.DirectionDebit),
 		option(222, "client-2", optDesc, 3, contractsitx.DirectionCredit),
 	}
 	res := exec.Reserve(context.Background(), postings, "222", "idem-EX")
 	if res.Vote.Type != contractsitx.VoteYes {
-		t.Fatalf("expected YES on exercise leg, got %+v", res.Vote)
+		t.Fatalf("expected YES, got %+v", res.Vote)
 	}
-	if hc.reserveCalls != 0 {
-		t.Errorf("exercise must NOT reserve seller shares at vote; got %d reserve calls", hc.reserveCalls)
+	if hc.reserveCalls != 1 {
+		t.Errorf("expected exactly 1 ReserveSellerSharesForNewTx call; got %d", hc.reserveCalls)
 	}
+	if hc.lastReserveTxID != "222:idem-EX" {
+		t.Errorf("reserve keyed on %q, want 222:idem-EX", hc.lastReserveTxID)
+	}
+	// Verify the reserve was for the correct ticker and quantity.
 	if len(res.OptionItems) != 1 {
-		t.Errorf("expected the exercise option leg still emitted as an OptionItem, got %d", len(res.OptionItems))
+		t.Errorf("expected 1 option item, got %d", len(res.OptionItems))
 	}
 }
 
 // TestPostingExecutor_OptionItem_HoldingChecker_OK verifies the YES path
-// when the seller has sufficient holdings.
+// when the seller has sufficient holdings, and that ReserveSellerSharesForNewTx
+// is called with the correct Ticker and Quantity extracted from the nested wire JSON.
 func TestPostingExecutor_OptionItem_HoldingChecker_OK(t *testing.T) {
 	stub := &stubAccountClient{}
 	exec := sitx.NewPostingExecutor(stub, 111)
-	exec.SetHoldingChecker(&stubHoldingChecker{resp: &stockpb.CheckSellerCanDeliverResponse{Ok: true}})
-	optDesc := `{"ticker":"MSFT","amount":3}`
+	hc := &stubHoldingChecker{resp: &stockpb.CheckSellerCanDeliverResponse{Ok: true}}
+	exec.SetHoldingChecker(hc)
+	optDesc := `{"negotiationId":{"routingNumber":222,"id":"neg-4"},"stock":{"ticker":"MSFT"},"pricePerUnit":{"amount":75,"currency":"RSD"},"settlementDate":"2026-12-31","amount":3}`
 	postings := []contractsitx.InternalPosting{
 		option(111, "client-1", optDesc, 3, contractsitx.DirectionDebit),
 		option(222, "client-2", optDesc, 3, contractsitx.DirectionCredit),
@@ -290,6 +320,21 @@ func TestPostingExecutor_OptionItem_HoldingChecker_OK(t *testing.T) {
 	}
 	if len(res.OptionItems) != 1 {
 		t.Errorf("expected 1 option item, got %d", len(res.OptionItems))
+	}
+	// Verify the ticker extraction: ReserveSellerSharesForNewTx must have been
+	// called with Ticker="MSFT" and Quantity=3 — proving the nested stock.ticker
+	// field is correctly parsed from the wire JSON.
+	if hc.reserveCalls != 1 {
+		t.Fatalf("expected exactly 1 ReserveSellerSharesForNewTx call; got %d", hc.reserveCalls)
+	}
+	if hc.lastReserveTxID != "222:idem-OO" {
+		t.Errorf("reserve keyed on %q, want 222:idem-OO", hc.lastReserveTxID)
+	}
+	if hc.lastReserveTicker != "MSFT" {
+		t.Errorf("reserve Ticker = %q, want MSFT", hc.lastReserveTicker)
+	}
+	if hc.lastReserveQty != 3 {
+		t.Errorf("reserve Quantity = %d, want 3", hc.lastReserveQty)
 	}
 }
 
@@ -302,7 +347,7 @@ func TestPostingExecutor_OptionItem_ReservesSharesAtVote(t *testing.T) {
 	exec := sitx.NewPostingExecutor(stub, 111)
 	chk := &stubHoldingChecker{resp: &stockpb.CheckSellerCanDeliverResponse{Ok: true}}
 	exec.SetHoldingChecker(chk)
-	optDesc := `{"ticker":"AAPL","amount":4}`
+	optDesc := `{"stock":{"ticker":"AAPL"},"amount":4}`
 	postings := []contractsitx.InternalPosting{
 		option(111, "client-7", optDesc, 4, contractsitx.DirectionDebit),
 		option(222, "client-8", optDesc, 4, contractsitx.DirectionCredit),
@@ -330,7 +375,7 @@ func TestPostingExecutor_ExerciseForgedStrike_NoVote(t *testing.T) {
 	exec := sitx.NewPostingExecutor(stub, 222)
 	chk := &stubHoldingChecker{validateDeny: true} // receiver's terms don't match → deny
 	exec.SetHoldingChecker(chk)
-	od := `{"ticker":"MA","amount":2,"strikePrice":"250","currency":"RSD","negotiationId":{"routingNumber":222,"id":"neg-1"},"intent":"exercise"}`
+	od := `{"negotiationId":{"routingNumber":222,"id":"neg-1"},"stock":{"ticker":"MA"},"pricePerUnit":{"amount":250,"currency":"RSD"},"settlementDate":"","amount":2}`
 	postings := []contractsitx.InternalPosting{
 		option(222, "client-1", od, 2, contractsitx.DirectionDebit),     // seller option leg (own routing)
 		money(222, "client-1", "RSD", 1, contractsitx.DirectionCredit), // forged strike = 1 (should be 500)
@@ -344,12 +389,13 @@ func TestPostingExecutor_ExerciseForgedStrike_NoVote(t *testing.T) {
 		t.Fatalf("expected exactly 1 money-leg validation, got %d", chk.validateCalls)
 	}
 	// The validator must have been handed the SELLER's paired money (the forged 1)
-	// and the exercise intent + negotiation identity, so it can compare to stored terms.
+	// and negotiation identity, so it can compare to stored terms.
+	// Intent is now always OptionIntentAccept — exercise is signalled by TX shape.
 	if got := chk.lastValidate.GetMoneyAmount(); got != "1" {
 		t.Errorf("validator money_amount = %q, want 1 (the forged seller credit)", got)
 	}
-	if chk.lastValidate.GetIntent() != "exercise" {
-		t.Errorf("validator intent = %q, want exercise", chk.lastValidate.GetIntent())
+	if chk.lastValidate.GetIntent() != contractsitx.OptionIntentAccept {
+		t.Errorf("validator intent = %q, want %q", chk.lastValidate.GetIntent(), contractsitx.OptionIntentAccept)
 	}
 	if chk.lastValidate.GetNegotiationId() != "neg-1" || chk.lastValidate.GetDirection() != "DEBIT" {
 		t.Errorf("validator neg/dir = %q/%q, want neg-1/DEBIT", chk.lastValidate.GetNegotiationId(), chk.lastValidate.GetDirection())
@@ -360,12 +406,14 @@ func TestPostingExecutor_ExerciseForgedStrike_NoVote(t *testing.T) {
 // forged-strike test for the BUYER's bank: a CREDIT (buyer) option leg whose
 // paired money DEBIT (the buyer's strike payment) exceeds the receiver's stored
 // terms must produce a NO vote, so a malicious peer cannot overcharge the buyer.
+// Intent is no longer wire-carried; the executor always passes OptionIntentAccept
+// to the validator regardless of the transaction shape.
 func TestPostingExecutor_ExerciseBuyerOvercharge_NoVote(t *testing.T) {
 	stub := &stubAccountClient{}
 	exec := sitx.NewPostingExecutor(stub, 111) // buyer's bank
 	chk := &stubHoldingChecker{validateDeny: true}
 	exec.SetHoldingChecker(chk)
-	od := `{"ticker":"MA","amount":2,"strikePrice":"250","currency":"RSD","negotiationId":{"routingNumber":222,"id":"neg-9"},"intent":"exercise"}`
+	od := `{"negotiationId":{"routingNumber":222,"id":"neg-9"},"stock":{"ticker":"MA"},"pricePerUnit":{"amount":250,"currency":"RSD"},"settlementDate":"","amount":2}`
 	postings := []contractsitx.InternalPosting{
 		option(111, "client-1", od, 2, contractsitx.DirectionCredit),            // buyer option leg (own routing)
 		money(111, "111-BUYER-ACCT", "RSD", 9000, contractsitx.DirectionDebit), // forged-high strike 9000 (should be 500)
@@ -384,11 +432,21 @@ func TestPostingExecutor_ExerciseBuyerOvercharge_NoVote(t *testing.T) {
 	if got := chk.lastValidate.GetMoneyAmount(); got != "9000" {
 		t.Errorf("validator money_amount = %q, want 9000 (the forged buyer debit)", got)
 	}
+	// Verify the validator received the correct Ticker and NegotiationId from the wire.
+	if chk.lastValidate.GetTicker() != "MA" {
+		t.Errorf("validator ticker = %q, want MA", chk.lastValidate.GetTicker())
+	}
+	if chk.lastValidate.GetNegotiationId() != "neg-9" {
+		t.Errorf("validator negotiation_id = %q, want neg-9", chk.lastValidate.GetNegotiationId())
+	}
 }
 
 // TestPostingExecutor_ExerciseHonestStrike_Yes verifies the happy path: when the
 // seller's paired money CREDIT matches stored terms the validator approves and
-// the vote is YES, and the validator received the correctly-summed seller money.
+// the vote is YES, and the validator received the correctly-summed seller money,
+// correct Ticker, and correct NegotiationId from the nested wire JSON.
+// Intent is no longer wire-carried; the executor always passes OptionIntentAccept
+// to the validator regardless of the transaction shape.
 func TestPostingExecutor_ExerciseHonestStrike_Yes(t *testing.T) {
 	stub := &stubAccountClientList{
 		stubAccountClient: stubAccountClient{
@@ -406,7 +464,7 @@ func TestPostingExecutor_ExerciseHonestStrike_Yes(t *testing.T) {
 	exec := sitx.NewPostingExecutor(stub, 222)
 	chk := &stubHoldingChecker{} // validateDeny false → approve
 	exec.SetHoldingChecker(chk)
-	od := `{"ticker":"MA","amount":2,"strikePrice":"250","currency":"RSD","negotiationId":{"routingNumber":222,"id":"neg-2"},"intent":"exercise"}`
+	od := `{"negotiationId":{"routingNumber":222,"id":"neg-2"},"stock":{"ticker":"MA"},"pricePerUnit":{"amount":250,"currency":"RSD"},"settlementDate":"","amount":2}`
 	postings := []contractsitx.InternalPosting{
 		money(222, "client-1", "RSD", 500, contractsitx.DirectionCredit), // honest strike 250*2
 		option(222, "client-1", od, 2, contractsitx.DirectionDebit),
@@ -422,6 +480,13 @@ func TestPostingExecutor_ExerciseHonestStrike_Yes(t *testing.T) {
 	if got := chk.lastValidate.GetMoneyAmount(); got != "500" {
 		t.Errorf("validator money_amount = %q, want 500 (summed seller credit)", got)
 	}
+	// Verify the validator received the correct Ticker and NegotiationId from the wire.
+	if chk.lastValidate.GetTicker() != "MA" {
+		t.Errorf("validator ticker = %q, want MA", chk.lastValidate.GetTicker())
+	}
+	if chk.lastValidate.GetNegotiationId() != "neg-2" {
+		t.Errorf("validator negotiation_id = %q, want neg-2", chk.lastValidate.GetNegotiationId())
+	}
 }
 
 // TestPostingExecutor_ReverseLocal_ReleasesShareHold verifies a rollback of a
@@ -436,7 +501,7 @@ func TestPostingExecutor_ReverseLocal_ReleasesShareHold(t *testing.T) {
 	exec := sitx.NewPostingExecutor(stub, 111)
 	chk := &stubHoldingChecker{resp: &stockpb.CheckSellerCanDeliverResponse{Ok: true}}
 	exec.SetHoldingChecker(chk)
-	optDesc := `{"ticker":"AAPL","amount":4}`
+	optDesc := `{"negotiationId":{"routingNumber":222,"id":"neg-5"},"stock":{"ticker":"AAPL"},"pricePerUnit":{"amount":20,"currency":"RSD"},"settlementDate":"2026-12-31","amount":4}`
 	postings := []contractsitx.InternalPosting{
 		option(111, "client-7", optDesc, 4, contractsitx.DirectionDebit),
 		option(222, "client-8", optDesc, 4, contractsitx.DirectionCredit),
@@ -526,6 +591,158 @@ func TestPostingExecutor_UnknownDirection_Unacceptable(t *testing.T) {
 	}
 	if res.Vote.NoVotes[0].Reason != contractsitx.NoVoteReasonUnacceptableAsset {
 		t.Errorf("got %+v", res.Vote.NoVotes)
+	}
+}
+
+// optionPseudo builds an OPTION pseudo-account posting (exercise form): the
+// AccountType is OPTION, AccountID is the negotiationId, RoutingNumber is the
+// negotiation's routing, and the asset (MONAS strike or STOCK underlying) leaves
+// the pseudo-account.
+func optionPseudo(rn int64, negID, assetType, assetID string, amount int64, dir string) contractsitx.InternalPosting {
+	return contractsitx.InternalPosting{
+		RoutingNumber: rn,
+		AccountType:   contractsitx.AccountTypeOption,
+		AccountID:     negID,
+		AssetType:     assetType,
+		AssetID:       assetID,
+		Amount:        decimalStr(amount),
+		Direction:     dir,
+	}
+}
+
+// TestPostingExecutor_PseudoLeg_LookupError_FailsClosed verifies a transient
+// LookupPeerOptionContract error on an OPTION pseudo-account leg fails closed:
+// the executor votes NO OPTION_NEGOTIATION_NOT_FOUND so money never moves on an
+// exercise it couldn't verify ownership of.
+func TestPostingExecutor_PseudoLeg_LookupError_FailsClosed(t *testing.T) {
+	stub := &stubAccountClient{}
+	exec := sitx.NewPostingExecutor(stub, 222)
+	exec.SetHoldingChecker(&stubHoldingChecker{lookupErr: errors.New("stock-service down")})
+	postings := []contractsitx.InternalPosting{
+		optionPseudo(222, "neg-7", contractsitx.AssetTypeMonas, "RSD", 500, contractsitx.DirectionDebit),
+	}
+	// peerBankCode != ownRouting → receiver path, so a lookup failure is a hard NO.
+	res := exec.Reserve(context.Background(), postings, "111", "idem-LE")
+	if res.Vote.Type != contractsitx.VoteNo {
+		t.Fatalf("expected NO, got %+v", res.Vote)
+	}
+	if res.Vote.NoVotes[0].Reason != contractsitx.NoVoteReasonOptionNegotiationNotFound {
+		t.Errorf("expected OPTION_NEGOTIATION_NOT_FOUND, got %+v", res.Vote.NoVotes)
+	}
+}
+
+// TestPostingExecutor_PseudoLeg_NilChecker_Skipped verifies that with no holding
+// checker wired the executor cannot prove ownership of an OPTION pseudo-account
+// leg, so it SKIPS the leg (does not vote NO) — matching the current code at the
+// nil-checker guard. With only the (skipped) pseudo leg present the vote is YES.
+func TestPostingExecutor_PseudoLeg_NilChecker_Skipped(t *testing.T) {
+	stub := &stubAccountClient{}
+	exec := sitx.NewPostingExecutor(stub, 222) // no SetHoldingChecker → nil checker
+	postings := []contractsitx.InternalPosting{
+		optionPseudo(222, "neg-8", contractsitx.AssetTypeStock, "MSFT", 3, contractsitx.DirectionDebit),
+	}
+	res := exec.Reserve(context.Background(), postings, "111", "idem-NC")
+	if res.Vote.Type != contractsitx.VoteYes {
+		t.Fatalf("expected YES (leg skipped), got %+v", res.Vote)
+	}
+	if len(res.OptionItems) != 0 {
+		t.Errorf("expected no option items for a skipped leg, got %d", len(res.OptionItems))
+	}
+}
+
+// lookupFound is a holding-checker preset that returns a found seller contract
+// with the given terms for the pseudo-MONAS-credit gate tests.
+func lookupFound(strike string, qty int64) *stubHoldingChecker {
+	return &stubHoldingChecker{lookupResp: &stockpb.LookupPeerOptionContractResponse{
+		Found:       true,
+		SellerId:    "client-1",
+		StrikePrice: strike,
+		Quantity:    qty,
+		Status:      "active",
+	}}
+}
+
+// TestPostingExecutor_PseudoMonas_InactiveSeller_Unacceptable verifies that on a
+// pseudo-MONAS strike credit, an inactive seller money account yields
+// UNACCEPTABLE_ASSET (the active-gate, shared with the generic credit path).
+func TestPostingExecutor_PseudoMonas_InactiveSeller_Unacceptable(t *testing.T) {
+	stub := &stubAccountClientList{
+		stubAccountClient: stubAccountClient{
+			getAccountFn: func(ctx context.Context, in *accountpb.GetAccountByNumberRequest, opts ...grpc.CallOption) (*accountpb.AccountResponse, error) {
+				return &accountpb.AccountResponse{AccountNumber: in.AccountNumber, CurrencyCode: "RSD", Status: "inactive"}, nil
+			},
+		},
+		listFn: func(ctx context.Context, in *accountpb.ListAccountsByClientRequest, opts ...grpc.CallOption) (*accountpb.ListAccountsResponse, error) {
+			// Resolver needs an active match; GetAccountByNumber then reports inactive.
+			return &accountpb.ListAccountsResponse{Accounts: []*accountpb.AccountResponse{{AccountNumber: "222-acct", CurrencyCode: "RSD", Status: "active"}}}, nil
+		},
+	}
+	exec := sitx.NewPostingExecutor(stub, 222)
+	exec.SetHoldingChecker(lookupFound("250", 2))
+	postings := []contractsitx.InternalPosting{
+		optionPseudo(222, "neg-9", contractsitx.AssetTypeMonas, "RSD", 500, contractsitx.DirectionDebit), // 250*2
+	}
+	res := exec.Reserve(context.Background(), postings, "111", "idem-IS")
+	if res.Vote.Type != contractsitx.VoteNo {
+		t.Fatalf("expected NO, got %+v", res.Vote)
+	}
+	if res.Vote.NoVotes[0].Reason != contractsitx.NoVoteReasonUnacceptableAsset {
+		t.Errorf("expected UNACCEPTABLE_ASSET, got %+v", res.Vote.NoVotes)
+	}
+}
+
+// TestPostingExecutor_PseudoMonas_CurrencyMismatch_NoSuchAsset verifies that a
+// resolved seller account in the wrong currency yields NO_SUCH_ASSET (the
+// currency-gate, shared with the generic credit path).
+func TestPostingExecutor_PseudoMonas_CurrencyMismatch_NoSuchAsset(t *testing.T) {
+	stub := &stubAccountClientList{
+		stubAccountClient: stubAccountClient{
+			getAccountFn: func(ctx context.Context, in *accountpb.GetAccountByNumberRequest, opts ...grpc.CallOption) (*accountpb.AccountResponse, error) {
+				return &accountpb.AccountResponse{AccountNumber: in.AccountNumber, CurrencyCode: "EUR", Status: "active"}, nil
+			},
+		},
+		listFn: func(ctx context.Context, in *accountpb.ListAccountsByClientRequest, opts ...grpc.CallOption) (*accountpb.ListAccountsResponse, error) {
+			// Return an explicit account number so resolveAccountForPosting succeeds;
+			// GetAccountByNumber then reports the (mismatched) EUR currency.
+			return &accountpb.ListAccountsResponse{Accounts: []*accountpb.AccountResponse{{AccountNumber: "222-acct", CurrencyCode: "RSD", Status: "active"}}}, nil
+		},
+	}
+	exec := sitx.NewPostingExecutor(stub, 222)
+	exec.SetHoldingChecker(lookupFound("250", 2))
+	postings := []contractsitx.InternalPosting{
+		optionPseudo(222, "neg-10", contractsitx.AssetTypeMonas, "RSD", 500, contractsitx.DirectionDebit),
+	}
+	res := exec.Reserve(context.Background(), postings, "111", "idem-CM")
+	if res.Vote.Type != contractsitx.VoteNo {
+		t.Fatalf("expected NO, got %+v", res.Vote)
+	}
+	if res.Vote.NoVotes[0].Reason != contractsitx.NoVoteReasonNoSuchAsset {
+		t.Errorf("expected NO_SUCH_ASSET, got %+v", res.Vote.NoVotes)
+	}
+}
+
+// TestPostingExecutor_PseudoMonas_UnresolvableSeller_NoSuchAccount verifies that
+// when the seller's "client-<n>" id resolves to no active account in the
+// currency, the leg yields NO_SUCH_ACCOUNT (the resolve-gate, shared with the
+// generic credit path).
+func TestPostingExecutor_PseudoMonas_UnresolvableSeller_NoSuchAccount(t *testing.T) {
+	stub := &stubAccountClientList{
+		listFn: func(ctx context.Context, in *accountpb.ListAccountsByClientRequest, opts ...grpc.CallOption) (*accountpb.ListAccountsResponse, error) {
+			// No RSD account → resolveAccountForPosting returns an error.
+			return &accountpb.ListAccountsResponse{Accounts: []*accountpb.AccountResponse{{AccountNumber: "222-eur", CurrencyCode: "EUR", Status: "active"}}}, nil
+		},
+	}
+	exec := sitx.NewPostingExecutor(stub, 222)
+	exec.SetHoldingChecker(lookupFound("250", 2))
+	postings := []contractsitx.InternalPosting{
+		optionPseudo(222, "neg-11", contractsitx.AssetTypeMonas, "RSD", 500, contractsitx.DirectionDebit),
+	}
+	res := exec.Reserve(context.Background(), postings, "111", "idem-UR")
+	if res.Vote.Type != contractsitx.VoteNo {
+		t.Fatalf("expected NO, got %+v", res.Vote)
+	}
+	if res.Vote.NoVotes[0].Reason != contractsitx.NoVoteReasonNoSuchAccount {
+		t.Errorf("expected NO_SUCH_ACCOUNT, got %+v", res.Vote.NoVotes)
 	}
 }
 

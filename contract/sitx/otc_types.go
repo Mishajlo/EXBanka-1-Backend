@@ -56,26 +56,25 @@ type OtcNegotiation struct {
 	UpdatedAt string        `json:"updatedAt"`
 }
 
-// OptionDescription is the SI-TX `assetId` shape for option-contract
-// postings inside a NEW_TX. When acceptance triggers TX formation, the
-// 4 postings reference the option's terms via this struct (encoded as
-// JSON in the assetId field per cohort convention).
-//
-// Intent is a local extension (cohort partners ignore unknown fields)
-// that differentiates an accept TX (intent="" or "accept") from an
-// exercise TX (intent="exercise"). On exercise, the same 4-posting
-// envelope reuses the option's terms but tells each bank's executor
-// "transition the existing contract to exercised + run holding ops"
-// rather than "form a new contract + lock seller holdings".
+// OptionDescription is the §2.7.2 option asset payload (asset Type "OPTION").
+// Spec shape: nested stock + pricePerUnit, no internal "intent" field — the
+// transaction SHAPE (OPTION asset = accept; OPTION pseudo-account = exercise)
+// encodes the operation, per the design doc.
 type OptionDescription struct {
-	Ticker         string          `json:"ticker"`
-	Amount         int64           `json:"amount"`
-	StrikePrice    decimal.Decimal `json:"strikePrice"`
-	Currency       string          `json:"currency"`
-	SettlementDate string          `json:"settlementDate"`
-	NegotiationID  ForeignBankId   `json:"negotiationId"`
-	Intent         string          `json:"intent,omitempty"`
+	NegotiationID  ForeignBankId    `json:"negotiationId"`
+	Stock          StockDescription `json:"stock"`
+	PricePerUnit   MonetaryValue    `json:"pricePerUnit"`
+	SettlementDate string           `json:"settlementDate"`
+	Amount         int64            `json:"amount"`
 }
+
+// Option intents are INTERNAL ONLY — never serialized to the wire. The
+// receiver derives accept vs exercise from transaction shape (OPTION asset
+// vs OPTION pseudo-account) and passes the right intent to RecordOptionContract.
+const (
+	OptionIntentAccept   = "accept"
+	OptionIntentExercise = "exercise"
+)
 
 // UserInformation is the response shape of GET /user/{rid}/{id} (SI-TX §3.7).
 type UserInformation struct {
