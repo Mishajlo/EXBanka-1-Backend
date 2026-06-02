@@ -53,6 +53,11 @@ func TestOptionDescriptionSpecShape(t *testing.T) {
 		t.Errorf("shape mismatch:\n got: %s\nwant: %s", g.String(), w.String())
 	}
 	// Verify removed flat fields do not appear anywhere in the output.
+	// Note: "ticker" and "currency" are NOT checked here because they legitimately
+	// appear nested inside "stock":{"ticker":...} and "pricePerUnit":{"currency":...}
+	// respectively — a bytes.Contains check cannot distinguish top-level from nested
+	// occurrences. The shape equality check above (got vs want) is the authoritative
+	// assertion that no unexpected top-level flat fields are present.
 	for _, bad := range []string{`"strikePrice"`, `"intent"`} {
 		if bytes.Contains(got, []byte(bad)) {
 			t.Errorf("unexpected legacy field %s in %s", bad, got)

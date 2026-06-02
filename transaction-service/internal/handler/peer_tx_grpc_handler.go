@@ -383,11 +383,11 @@ func (h *PeerTxGRPCHandler) HandleCommitTx(ctx context.Context, req *transaction
 // crossbankTxID is "<peerCode>:<idem>" so both banks key contracts
 // the same way (idempotency is on (crossbank_tx_id, posting_index)).
 //
-// The OptionDescription's intent field flows through to the gRPC
-// request: empty/"accept" creates new contract rows, "exercise"
-// transitions existing rows and runs role-specific stock ops on
-// stock-service. Decoded per item so a single TX could mix intents
-// in principle (today they're homogeneous per-TX).
+// OPTION-asset legs are always accept-phase: the executor supplies
+// OptionIntentAccept unconditionally. The intent field is no longer
+// carried on the wire — it was removed from OptionDescription as part
+// of the SI-TX wire-conformance reshape. Exercise flows use a different
+// account shape handled by a later task, not the OPTION-asset path.
 //
 // No-op when optionRecorder is nil or list is empty/`[]`.
 // optionsJSONHasDebitLeg reports whether the persisted NEW_TX OptionsJSON

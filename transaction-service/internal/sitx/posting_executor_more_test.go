@@ -245,31 +245,36 @@ func TestPostingExecutor_OptionItem_HoldingChecker_RejectsOnInsufficient(t *test
 	}
 }
 
-// TestPostingExecutor_OptionItem_ExerciseDoesNotReserve is the regression test
-// for the exercise over-reservation bug: an EXERCISE-intent DEBIT option leg
-// must NOT reserve seller shares at vote time (the shares were already held at
-// accept and are consumed at COMMIT). Reserving again orphaned a second hold
-// that nothing released, permanently locking those shares.
-func TestPostingExecutor_OptionItem_ExerciseDoesNotReserve(t *testing.T) {
+// TestPostingExecutor_OptionAssetDebitLeg_ReservesSellerShares verifies that a
+// DEBIT OPTION-asset leg on our routing (we are the seller) with a valid nested
+// OptionDescription DOES call ReserveSellerSharesForNewTx. The executor always
+// treats OPTION-asset postings as accept-phase: the intent is supplied internally
+// and is no longer carried on the wire, so any well-formed OptionDescription
+// (with stock.ticker populated) must trigger a seller-share hold at vote time.
+func TestPostingExecutor_OptionAssetDebitLeg_ReservesSellerShares(t *testing.T) {
 	stub := &stubAccountClient{}
 	exec := sitx.NewPostingExecutor(stub, 111)
 	hc := &stubHoldingChecker{resp: &stockpb.CheckSellerCanDeliverResponse{Ok: true}}
 	exec.SetHoldingChecker(hc)
-	// Option DEBIT on our routing 111 = WE are the seller; intent=exercise.
-	optDesc := `{"ticker":"MSFT","amount":3,"intent":"exercise"}`
+	// Nested OptionDescription — matches the wire format after the reshape.
+	optDesc := `{"negotiationId":{"routingNumber":222,"id":"neg-1"},"stock":{"ticker":"MSFT"},"pricePerUnit":{"amount":50,"currency":"RSD"},"settlementDate":"2026-12-31","amount":3}`
 	postings := []contractsitx.InternalPosting{
 		option(111, "client-1", optDesc, 3, contractsitx.DirectionDebit),
 		option(222, "client-2", optDesc, 3, contractsitx.DirectionCredit),
 	}
 	res := exec.Reserve(context.Background(), postings, "222", "idem-EX")
 	if res.Vote.Type != contractsitx.VoteYes {
-		t.Fatalf("expected YES on exercise leg, got %+v", res.Vote)
+		t.Fatalf("expected YES, got %+v", res.Vote)
 	}
-	if hc.reserveCalls != 0 {
-		t.Errorf("exercise must NOT reserve seller shares at vote; got %d reserve calls", hc.reserveCalls)
+	if hc.reserveCalls != 1 {
+		t.Errorf("expected exactly 1 ReserveSellerSharesForNewTx call; got %d", hc.reserveCalls)
 	}
+	if hc.lastReserveTxID != "222:idem-EX" {
+		t.Errorf("reserve keyed on %q, want 222:idem-EX", hc.lastReserveTxID)
+	}
+	// Verify the reserve was for the correct ticker and quantity.
 	if len(res.OptionItems) != 1 {
-		t.Errorf("expected the exercise option leg still emitted as an OptionItem, got %d", len(res.OptionItems))
+		t.Errorf("expected 1 option item, got %d", len(res.OptionItems))
 	}
 }
 
