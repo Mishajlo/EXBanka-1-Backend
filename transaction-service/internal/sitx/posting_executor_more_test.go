@@ -594,6 +594,158 @@ func TestPostingExecutor_UnknownDirection_Unacceptable(t *testing.T) {
 	}
 }
 
+// optionPseudo builds an OPTION pseudo-account posting (exercise form): the
+// AccountType is OPTION, AccountID is the negotiationId, RoutingNumber is the
+// negotiation's routing, and the asset (MONAS strike or STOCK underlying) leaves
+// the pseudo-account.
+func optionPseudo(rn int64, negID, assetType, assetID string, amount int64, dir string) contractsitx.InternalPosting {
+	return contractsitx.InternalPosting{
+		RoutingNumber: rn,
+		AccountType:   contractsitx.AccountTypeOption,
+		AccountID:     negID,
+		AssetType:     assetType,
+		AssetID:       assetID,
+		Amount:        decimalStr(amount),
+		Direction:     dir,
+	}
+}
+
+// TestPostingExecutor_PseudoLeg_LookupError_FailsClosed verifies a transient
+// LookupPeerOptionContract error on an OPTION pseudo-account leg fails closed:
+// the executor votes NO OPTION_NEGOTIATION_NOT_FOUND so money never moves on an
+// exercise it couldn't verify ownership of.
+func TestPostingExecutor_PseudoLeg_LookupError_FailsClosed(t *testing.T) {
+	stub := &stubAccountClient{}
+	exec := sitx.NewPostingExecutor(stub, 222)
+	exec.SetHoldingChecker(&stubHoldingChecker{lookupErr: errors.New("stock-service down")})
+	postings := []contractsitx.InternalPosting{
+		optionPseudo(222, "neg-7", contractsitx.AssetTypeMonas, "RSD", 500, contractsitx.DirectionDebit),
+	}
+	// peerBankCode != ownRouting → receiver path, so a lookup failure is a hard NO.
+	res := exec.Reserve(context.Background(), postings, "111", "idem-LE")
+	if res.Vote.Type != contractsitx.VoteNo {
+		t.Fatalf("expected NO, got %+v", res.Vote)
+	}
+	if res.Vote.NoVotes[0].Reason != contractsitx.NoVoteReasonOptionNegotiationNotFound {
+		t.Errorf("expected OPTION_NEGOTIATION_NOT_FOUND, got %+v", res.Vote.NoVotes)
+	}
+}
+
+// TestPostingExecutor_PseudoLeg_NilChecker_Skipped verifies that with no holding
+// checker wired the executor cannot prove ownership of an OPTION pseudo-account
+// leg, so it SKIPS the leg (does not vote NO) — matching the current code at the
+// nil-checker guard. With only the (skipped) pseudo leg present the vote is YES.
+func TestPostingExecutor_PseudoLeg_NilChecker_Skipped(t *testing.T) {
+	stub := &stubAccountClient{}
+	exec := sitx.NewPostingExecutor(stub, 222) // no SetHoldingChecker → nil checker
+	postings := []contractsitx.InternalPosting{
+		optionPseudo(222, "neg-8", contractsitx.AssetTypeStock, "MSFT", 3, contractsitx.DirectionDebit),
+	}
+	res := exec.Reserve(context.Background(), postings, "111", "idem-NC")
+	if res.Vote.Type != contractsitx.VoteYes {
+		t.Fatalf("expected YES (leg skipped), got %+v", res.Vote)
+	}
+	if len(res.OptionItems) != 0 {
+		t.Errorf("expected no option items for a skipped leg, got %d", len(res.OptionItems))
+	}
+}
+
+// lookupFound is a holding-checker preset that returns a found seller contract
+// with the given terms for the pseudo-MONAS-credit gate tests.
+func lookupFound(strike string, qty int64) *stubHoldingChecker {
+	return &stubHoldingChecker{lookupResp: &stockpb.LookupPeerOptionContractResponse{
+		Found:       true,
+		SellerId:    "client-1",
+		StrikePrice: strike,
+		Quantity:    qty,
+		Status:      "active",
+	}}
+}
+
+// TestPostingExecutor_PseudoMonas_InactiveSeller_Unacceptable verifies that on a
+// pseudo-MONAS strike credit, an inactive seller money account yields
+// UNACCEPTABLE_ASSET (the active-gate, shared with the generic credit path).
+func TestPostingExecutor_PseudoMonas_InactiveSeller_Unacceptable(t *testing.T) {
+	stub := &stubAccountClientList{
+		stubAccountClient: stubAccountClient{
+			getAccountFn: func(ctx context.Context, in *accountpb.GetAccountByNumberRequest, opts ...grpc.CallOption) (*accountpb.AccountResponse, error) {
+				return &accountpb.AccountResponse{AccountNumber: in.AccountNumber, CurrencyCode: "RSD", Status: "inactive"}, nil
+			},
+		},
+		listFn: func(ctx context.Context, in *accountpb.ListAccountsByClientRequest, opts ...grpc.CallOption) (*accountpb.ListAccountsResponse, error) {
+			// Resolver needs an active match; GetAccountByNumber then reports inactive.
+			return &accountpb.ListAccountsResponse{Accounts: []*accountpb.AccountResponse{{AccountNumber: "222-acct", CurrencyCode: "RSD", Status: "active"}}}, nil
+		},
+	}
+	exec := sitx.NewPostingExecutor(stub, 222)
+	exec.SetHoldingChecker(lookupFound("250", 2))
+	postings := []contractsitx.InternalPosting{
+		optionPseudo(222, "neg-9", contractsitx.AssetTypeMonas, "RSD", 500, contractsitx.DirectionDebit), // 250*2
+	}
+	res := exec.Reserve(context.Background(), postings, "111", "idem-IS")
+	if res.Vote.Type != contractsitx.VoteNo {
+		t.Fatalf("expected NO, got %+v", res.Vote)
+	}
+	if res.Vote.NoVotes[0].Reason != contractsitx.NoVoteReasonUnacceptableAsset {
+		t.Errorf("expected UNACCEPTABLE_ASSET, got %+v", res.Vote.NoVotes)
+	}
+}
+
+// TestPostingExecutor_PseudoMonas_CurrencyMismatch_NoSuchAsset verifies that a
+// resolved seller account in the wrong currency yields NO_SUCH_ASSET (the
+// currency-gate, shared with the generic credit path).
+func TestPostingExecutor_PseudoMonas_CurrencyMismatch_NoSuchAsset(t *testing.T) {
+	stub := &stubAccountClientList{
+		stubAccountClient: stubAccountClient{
+			getAccountFn: func(ctx context.Context, in *accountpb.GetAccountByNumberRequest, opts ...grpc.CallOption) (*accountpb.AccountResponse, error) {
+				return &accountpb.AccountResponse{AccountNumber: in.AccountNumber, CurrencyCode: "EUR", Status: "active"}, nil
+			},
+		},
+		listFn: func(ctx context.Context, in *accountpb.ListAccountsByClientRequest, opts ...grpc.CallOption) (*accountpb.ListAccountsResponse, error) {
+			// Return an explicit account number so resolveAccountForPosting succeeds;
+			// GetAccountByNumber then reports the (mismatched) EUR currency.
+			return &accountpb.ListAccountsResponse{Accounts: []*accountpb.AccountResponse{{AccountNumber: "222-acct", CurrencyCode: "RSD", Status: "active"}}}, nil
+		},
+	}
+	exec := sitx.NewPostingExecutor(stub, 222)
+	exec.SetHoldingChecker(lookupFound("250", 2))
+	postings := []contractsitx.InternalPosting{
+		optionPseudo(222, "neg-10", contractsitx.AssetTypeMonas, "RSD", 500, contractsitx.DirectionDebit),
+	}
+	res := exec.Reserve(context.Background(), postings, "111", "idem-CM")
+	if res.Vote.Type != contractsitx.VoteNo {
+		t.Fatalf("expected NO, got %+v", res.Vote)
+	}
+	if res.Vote.NoVotes[0].Reason != contractsitx.NoVoteReasonNoSuchAsset {
+		t.Errorf("expected NO_SUCH_ASSET, got %+v", res.Vote.NoVotes)
+	}
+}
+
+// TestPostingExecutor_PseudoMonas_UnresolvableSeller_NoSuchAccount verifies that
+// when the seller's "client-<n>" id resolves to no active account in the
+// currency, the leg yields NO_SUCH_ACCOUNT (the resolve-gate, shared with the
+// generic credit path).
+func TestPostingExecutor_PseudoMonas_UnresolvableSeller_NoSuchAccount(t *testing.T) {
+	stub := &stubAccountClientList{
+		listFn: func(ctx context.Context, in *accountpb.ListAccountsByClientRequest, opts ...grpc.CallOption) (*accountpb.ListAccountsResponse, error) {
+			// No RSD account → resolveAccountForPosting returns an error.
+			return &accountpb.ListAccountsResponse{Accounts: []*accountpb.AccountResponse{{AccountNumber: "222-eur", CurrencyCode: "EUR", Status: "active"}}}, nil
+		},
+	}
+	exec := sitx.NewPostingExecutor(stub, 222)
+	exec.SetHoldingChecker(lookupFound("250", 2))
+	postings := []contractsitx.InternalPosting{
+		optionPseudo(222, "neg-11", contractsitx.AssetTypeMonas, "RSD", 500, contractsitx.DirectionDebit),
+	}
+	res := exec.Reserve(context.Background(), postings, "111", "idem-UR")
+	if res.Vote.Type != contractsitx.VoteNo {
+		t.Fatalf("expected NO, got %+v", res.Vote)
+	}
+	if res.Vote.NoVotes[0].Reason != contractsitx.NoVoteReasonNoSuchAccount {
+		t.Errorf("expected NO_SUCH_ACCOUNT, got %+v", res.Vote.NoVotes)
+	}
+}
+
 // TestVoteBuilder_BalancedPostings_YES verifies BuildPrelimVote returns YES
 // when net per assetId is zero.
 func TestVoteBuilder_BalancedPostings_YES(t *testing.T) {

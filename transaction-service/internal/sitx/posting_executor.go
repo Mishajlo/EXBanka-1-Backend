@@ -204,7 +204,7 @@ func findExerciseNegotiationID(postings []contractsitx.InternalPosting) (contrac
 // exercise OptionItem carries so recordOptionExercise can extract the
 // negotiationId. recordOptionExercise reads ONLY opt.NegotiationID from this JSON
 // (all other terms come from the stored peer_option_contract row), so we populate
-// just that; ticker/strike/qty are filled best-effort when known for clarity.
+// just that.
 func reconstructExerciseOptionDesc(negID contractsitx.ForeignBankId) string {
 	od := contractsitx.OptionDescription{NegotiationID: negID}
 	b, err := json.Marshal(od)
@@ -212,6 +212,157 @@ func reconstructExerciseOptionDesc(negID contractsitx.ForeignBankId) string {
 		return ""
 	}
 	return string(b)
+}
+
+// exercisePseudoResult is the outcome of reserveExercisePseudoLeg for one
+// OPTION pseudo-account leg. Exactly one of the three states is set:
+//   - skip: the leg is not ours to settle (no checker wired, or we hold the
+//     buyer side as the sender) — the caller continues to the next posting.
+//   - noVote: a closed-failure reason — the caller returns it immediately.
+//   - reservationKey / optionItem: a successful reservation key to append (MONAS
+//     strike credit) or an OptionItem to merge (STOCK consume-at-commit).
+type exercisePseudoResult struct {
+	skip           bool
+	noVote         *ReserveResult
+	reservationKey string
+	optionItem     *OptionItem
+}
+
+// reserveExercisePseudoLeg handles an OPTION pseudo-account leg (exercise form,
+// spec §2.7.2). These are processed by OWNERSHIP-BY-CONTRACT, not routing-prefix:
+// the pseudo-account's id is the negotiationId, whose routing is the negotiation's
+// bank — NOT necessarily the settling (seller) bank. So we ask stock-service "do I
+// hold the SELLER side of this negotiationId?"; only the bank that does settles
+// these legs. The buyer bank (holds the buyer side, lookup found=false) SKIPS them
+// even when the routing matches its own. See the option wire-conformance design
+// §3.3.1.
+//
+// Returns one of: skip (not ours), a NO vote, or a successful reservation key /
+// option item to merge. Behaviour is identical to the prior inline block: same
+// gate order (not-found→OPTION_NEGOTIATION_NOT_FOUND, status/expired→
+// OPTION_USED_OR_EXPIRED, amount→OPTION_AMOUNT_INCORRECT), same skip-vs-NO
+// discriminator (peerBankCode == strconv(ownRouting)), same key derivation.
+func (e *PostingExecutor) reserveExercisePseudoLeg(ctx context.Context, p contractsitx.InternalPosting, i int, peerBankCode, locallyGeneratedKey string) exercisePseudoResult {
+	negID := contractsitx.ForeignBankId{RoutingNumber: p.RoutingNumber, ID: p.AccountID}
+	if e.holdingChecker == nil {
+		// No checker wired → cannot prove ownership; skip (don't vote NO so a
+		// misconfigured/test executor doesn't reject the whole TX).
+		return exercisePseudoResult{skip: true}
+	}
+	look, lerr := e.holdingChecker.LookupPeerOptionContract(ctx, &stockpb.LookupPeerOptionContractRequest{
+		NegotiationRoutingNumber: negID.RoutingNumber,
+		NegotiationId:            negID.ID,
+	})
+	if lerr != nil {
+		// Transient lookup failure on a leg we might own → fail closed so money
+		// never moves on an unverified exercise.
+		nv := noVote(contractsitx.NoVoteReasonOptionNegotiationNotFound, i)
+		return exercisePseudoResult{noVote: &nv}
+	}
+	if look == nil || !look.GetFound() {
+		// We do NOT hold the seller side. Two cases:
+		//  - We are the SENDER (buyer's bank, local reserve): peerBankCode is
+		//    our own routing. We hold the BUYER side, so skipping the seller-
+		//    side pseudo legs is correct (they settle at the seller's bank).
+		//  - We are the RECEIVER (seller's bank, inbound NEW_TX): peerBankCode
+		//    is the counterparty's. The pseudo legs MUST settle here, so a
+		//    missing seller contract is a closed-failure → vote NO.
+		// Distinguish by whether peerBankCode == our own routing (sender path).
+		if peerBankCode == strconv.FormatInt(e.ownRouting, 10) {
+			return exercisePseudoResult{skip: true}
+		}
+		nv := noVote(contractsitx.NoVoteReasonOptionNegotiationNotFound, i)
+		return exercisePseudoResult{noVote: &nv}
+	}
+	// We hold the seller side. Gate: used/expired/amount BEFORE any reserve.
+	if look.GetStatus() != "active" && look.GetStatus() != "exercising" {
+		nv := noVote(contractsitx.NoVoteReasonOptionUsedOrExpired, i)
+		return exercisePseudoResult{noVote: &nv}
+	}
+	if optionExpired(look.GetSettlementDate()) {
+		nv := noVote(contractsitx.NoVoteReasonOptionUsedOrExpired, i)
+		return exercisePseudoResult{noVote: &nv}
+	}
+	switch p.AssetType {
+	case contractsitx.AssetTypeMonas:
+		// Strike arrives at the pseudo-account → credit the SELLER's money
+		// account. Validate amount == StrikePrice*Quantity first.
+		strike, serr := decimal.NewFromString(look.GetStrikePrice())
+		if serr != nil {
+			nv := noVote(contractsitx.NoVoteReasonOptionAmountIncorrect, i)
+			return exercisePseudoResult{noVote: &nv}
+		}
+		expected := strike.Mul(decimal.NewFromInt(look.GetQuantity()))
+		legAmt, aerr := decimal.NewFromString(p.Amount)
+		if aerr != nil || !legAmt.Equal(expected) {
+			nv := noVote(contractsitx.NoVoteReasonOptionAmountIncorrect, i)
+			return exercisePseudoResult{noVote: &nv}
+		}
+		// Resolve + credit the seller's money account, tracked like any MONAS
+		// credit so COMMIT settles (CommitIncoming) and ROLLBACK releases.
+		currency := p.AssetID
+		key, reason, ok := e.reserveIncomingCredit(ctx, look.GetSellerId(), currency, p.Amount, peerBankCode, locallyGeneratedKey)
+		if !ok {
+			nv := noVote(reason, i)
+			return exercisePseudoResult{noVote: &nv}
+		}
+		return exercisePseudoResult{reservationKey: key}
+	case contractsitx.AssetTypeStock:
+		// Underlying leaves the pseudo-account → at COMMIT, consume the
+		// seller's RESERVED shares (placed at ACCEPT) + mark exercised. We do
+		// NOT place a new share reservation here.
+		return exercisePseudoResult{optionItem: &OptionItem{
+			PostingIndex:          i,
+			Direction:             contractsitx.DirectionDebit,
+			OptionDescriptionJSON: reconstructExerciseOptionDesc(negID),
+			Kind:                  OptionKindExerciseSeller,
+		}}
+	}
+	// Non-MONAS/non-STOCK asset on a pseudo-account leg: nothing to do here
+	// (mirrors the prior inline switch falling through to the trailing continue).
+	return exercisePseudoResult{skip: true}
+}
+
+// reserveIncomingCredit resolves the account for a credit posting, applies the
+// standard credit gates, and places the incoming hold (ReserveIncoming). Returns
+// the reservation key on success, or (ok=false) with the NoVote reason for the
+// first failing gate. Used by BOTH the generic MONAS-CREDIT arm and the exercise
+// pseudo-account MONAS-CREDIT path so the five gate-reason mappings can't diverge:
+//
+//	resolve fail   → NO_SUCH_ACCOUNT
+//	lookup fail    → NO_SUCH_ACCOUNT
+//	inactive acct  → UNACCEPTABLE_ASSET
+//	currency wrong → NO_SUCH_ASSET
+//	reserve fail   → UNACCEPTABLE_ASSET
+//
+// The reservation key is "<peer>:<idem>" and the idempotency key is
+// "sitx-reserve-<key>" — identical to the prior inline derivation at both sites.
+func (e *PostingExecutor) reserveIncomingCredit(ctx context.Context, accountID, currency, amount, peerBankCode, locallyGeneratedKey string) (key string, noVoteReason string, ok bool) {
+	accountNumber, resolveErr := e.resolveAccountForPosting(ctx, accountID, currency)
+	if resolveErr != nil {
+		return "", contractsitx.NoVoteReasonNoSuchAccount, false
+	}
+	acct, err := e.client.GetAccountByNumber(ctx, &accountpb.GetAccountByNumberRequest{AccountNumber: accountNumber})
+	if err != nil || acct == nil {
+		return "", contractsitx.NoVoteReasonNoSuchAccount, false
+	}
+	if acct.Status != "active" {
+		return "", contractsitx.NoVoteReasonUnacceptableAsset, false
+	}
+	if acct.CurrencyCode != currency {
+		return "", contractsitx.NoVoteReasonNoSuchAsset, false
+	}
+	key = peerBankCode + ":" + locallyGeneratedKey
+	if _, err := e.client.ReserveIncoming(ctx, &accountpb.ReserveIncomingRequest{
+		AccountNumber:  accountNumber,
+		Amount:         amount,
+		Currency:       currency,
+		ReservationKey: key,
+		IdempotencyKey: "sitx-reserve-" + key,
+	}); err != nil {
+		return "", contractsitx.NoVoteReasonUnacceptableAsset, false
+	}
+	return key, "", true
 }
 
 // Reserve runs the receive-side reserve phase of a NEW_TX. It walks each
@@ -313,93 +464,15 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.I
 		// lookup found=false) SKIPS them even when the routing matches its own. See
 		// the option wire-conformance design §3.3.1.
 		if isOptionPseudoAccount(p) {
-			negID := contractsitx.ForeignBankId{RoutingNumber: p.RoutingNumber, ID: p.AccountID}
-			if e.holdingChecker == nil {
-				// No checker wired → cannot prove ownership; skip (don't vote NO so a
-				// misconfigured/test executor doesn't reject the whole TX).
-				continue
+			r := e.reserveExercisePseudoLeg(ctx, p, i, peerBankCode, locallyGeneratedKey)
+			if r.noVote != nil {
+				return *r.noVote
 			}
-			look, lerr := e.holdingChecker.LookupPeerOptionContract(ctx, &stockpb.LookupPeerOptionContractRequest{
-				NegotiationRoutingNumber: negID.RoutingNumber,
-				NegotiationId:            negID.ID,
-			})
-			if lerr != nil {
-				// Transient lookup failure on a leg we might own → fail closed so money
-				// never moves on an unverified exercise.
-				return noVote(contractsitx.NoVoteReasonOptionNegotiationNotFound, i)
+			if r.reservationKey != "" {
+				keys = append(keys, r.reservationKey)
 			}
-			if look == nil || !look.GetFound() {
-				// We do NOT hold the seller side. Two cases:
-				//  - We are the SENDER (buyer's bank, local reserve): peerBankCode is
-				//    our own routing. We hold the BUYER side, so skipping the seller-
-				//    side pseudo legs is correct (they settle at the seller's bank).
-				//  - We are the RECEIVER (seller's bank, inbound NEW_TX): peerBankCode
-				//    is the counterparty's. The pseudo legs MUST settle here, so a
-				//    missing seller contract is a closed-failure → vote NO.
-				// Distinguish by whether peerBankCode == our own routing (sender path).
-				if peerBankCode == strconv.FormatInt(e.ownRouting, 10) {
-					continue
-				}
-				return noVote(contractsitx.NoVoteReasonOptionNegotiationNotFound, i)
-			}
-			// We hold the seller side. Gate: used/expired/amount BEFORE any reserve.
-			if look.GetStatus() != "active" && look.GetStatus() != "exercising" {
-				return noVote(contractsitx.NoVoteReasonOptionUsedOrExpired, i)
-			}
-			if optionExpired(look.GetSettlementDate()) {
-				return noVote(contractsitx.NoVoteReasonOptionUsedOrExpired, i)
-			}
-			switch p.AssetType {
-			case contractsitx.AssetTypeMonas:
-				// Strike arrives at the pseudo-account → credit the SELLER's money
-				// account. Validate amount == StrikePrice*Quantity first.
-				strike, serr := decimal.NewFromString(look.GetStrikePrice())
-				if serr != nil {
-					return noVote(contractsitx.NoVoteReasonOptionAmountIncorrect, i)
-				}
-				expected := strike.Mul(decimal.NewFromInt(look.GetQuantity()))
-				legAmt, aerr := decimal.NewFromString(p.Amount)
-				if aerr != nil || !legAmt.Equal(expected) {
-					return noVote(contractsitx.NoVoteReasonOptionAmountIncorrect, i)
-				}
-				// Resolve + credit the seller's money account, tracked like any MONAS
-				// credit so COMMIT settles (CommitIncoming) and ROLLBACK releases.
-				currency := p.AssetID
-				acctNum, rerr := e.resolveAccountForPosting(ctx, look.GetSellerId(), currency)
-				if rerr != nil {
-					return noVote(contractsitx.NoVoteReasonNoSuchAccount, i)
-				}
-				acct, gerr := e.client.GetAccountByNumber(ctx, &accountpb.GetAccountByNumberRequest{AccountNumber: acctNum})
-				if gerr != nil || acct == nil {
-					return noVote(contractsitx.NoVoteReasonNoSuchAccount, i)
-				}
-				if acct.Status != "active" {
-					return noVote(contractsitx.NoVoteReasonUnacceptableAsset, i)
-				}
-				if acct.CurrencyCode != currency {
-					return noVote(contractsitx.NoVoteReasonNoSuchAsset, i)
-				}
-				key := peerBankCode + ":" + locallyGeneratedKey
-				if _, err := e.client.ReserveIncoming(ctx, &accountpb.ReserveIncomingRequest{
-					AccountNumber:  acctNum,
-					Amount:         p.Amount,
-					Currency:       currency,
-					ReservationKey: key,
-					IdempotencyKey: "sitx-reserve-" + key,
-				}); err != nil {
-					return noVote(contractsitx.NoVoteReasonUnacceptableAsset, i)
-				}
-				keys = append(keys, key)
-			case contractsitx.AssetTypeStock:
-				// Underlying leaves the pseudo-account → at COMMIT, consume the
-				// seller's RESERVED shares (placed at ACCEPT) + mark exercised. We do
-				// NOT place a new share reservation here.
-				options = append(options, OptionItem{
-					PostingIndex:          i,
-					Direction:             contractsitx.DirectionDebit,
-					OptionDescriptionJSON: reconstructExerciseOptionDesc(negID),
-					Kind:                  OptionKindExerciseSeller,
-				})
+			if r.optionItem != nil {
+				options = append(options, *r.optionItem)
 			}
 			continue
 		}
@@ -485,9 +558,24 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.I
 		// MONAS leg: the currency is the AssetID.
 		currency := p.AssetID
 		amountStr := p.Amount
-		// Resolve participant-ID-style accountId ("client-7") to a concrete bank
-		// account number for the requested currency when this is a PERSON leg;
-		// 18-digit account numbers (ACCOUNT legs) pass through unchanged.
+
+		if p.Direction == contractsitx.DirectionCredit {
+			// Shared with the exercise pseudo-account MONAS-credit path so the
+			// resolve/lookup/active/currency/reserve gate-reason mappings can't
+			// diverge between the two sites.
+			key, reason, ok := e.reserveIncomingCredit(ctx, p.AccountID, currency, amountStr, peerBankCode, locallyGeneratedKey)
+			if !ok {
+				return noVote(reason, i)
+			}
+			keys = append(keys, key)
+			continue
+		}
+
+		// Non-CREDIT MONAS legs (DEBIT / unknown): resolve + gate the account up
+		// front, exactly as before, then branch. Resolve participant-ID-style
+		// accountId ("client-7") to a concrete bank account number for the
+		// requested currency when this is a PERSON leg; 18-digit account numbers
+		// (ACCOUNT legs) pass through unchanged.
 		accountNumber, resolveErr := e.resolveAccountForPosting(ctx, p.AccountID, currency)
 		if resolveErr != nil {
 			return noVote(contractsitx.NoVoteReasonNoSuchAccount, i)
@@ -504,19 +592,6 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.I
 		}
 
 		switch p.Direction {
-		case contractsitx.DirectionCredit:
-			key := peerBankCode + ":" + locallyGeneratedKey
-			if _, err := e.client.ReserveIncoming(ctx, &accountpb.ReserveIncomingRequest{
-				AccountNumber:  accountNumber,
-				Amount:         amountStr,
-				Currency:       currency,
-				ReservationKey: key,
-				IdempotencyKey: "sitx-reserve-" + key,
-			}); err != nil {
-				return noVote(contractsitx.NoVoteReasonUnacceptableAsset, i)
-			}
-			keys = append(keys, key)
-
 		case contractsitx.DirectionDebit:
 			// Reserve-then-settle: place a HOLD now (AvailableBalance -= amount),
 			// not an immediate debit. The reservation key is the per-posting tag
