@@ -2141,9 +2141,10 @@ message RecordOptionContractResponse {
 
 // InitiateOptionExerciseRequest triggers a cross-bank option exercise.
 // Called by the gateway when the buyer hits POST /api/v3/me/otc/contracts/peer/:id/exercise.
-// Stock-service composes the 4-posting Transaction (strike money +
-// option markers with intent=exercise) and dispatches via
-// transaction-service.PeerTxService.InitiateOutboundTxWithPostings.
+// Stock-service composes the 4-posting Transaction in the spec OPTION-pseudo-account
+// form (strike MONAS: buyer account -> OPTION pseudo-account; STOCK: OPTION
+// pseudo-account -> buyer PERSON record; no OPTION asset or intent on the wire)
+// and dispatches via transaction-service.PeerTxService.InitiateOutboundTxWithPostings.
 message InitiateOptionExerciseRequest {
   uint64 peer_option_contract_id = 1; // local row id (resolved by gateway)
   // Buyer's currency account that pays the strike on this bank.

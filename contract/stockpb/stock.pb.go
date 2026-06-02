@@ -15567,9 +15567,10 @@ func (x *RecordOptionContractResponse) GetContractId() uint64 {
 
 // InitiateOptionExerciseRequest triggers a cross-bank option exercise.
 // Called by the gateway when the buyer hits POST /api/v3/me/otc/contracts/peer/:id/exercise.
-// Stock-service composes the 4-posting Transaction (strike money +
-// option markers with intent=exercise) and dispatches via
-// transaction-service.PeerTxService.InitiateOutboundTxWithPostings.
+// Stock-service composes the 4-posting Transaction in the spec OPTION-pseudo-account
+// form (strike MONAS: buyer account -> OPTION pseudo-account; STOCK: OPTION
+// pseudo-account -> buyer PERSON record; no OPTION asset or intent on the wire)
+// and dispatches via transaction-service.PeerTxService.InitiateOutboundTxWithPostings.
 type InitiateOptionExerciseRequest struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	PeerOptionContractId uint64                 `protobuf:"varint,1,opt,name=peer_option_contract_id,json=peerOptionContractId,proto3" json:"peer_option_contract_id,omitempty"` // local row id (resolved by gateway)
