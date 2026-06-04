@@ -37,22 +37,22 @@ type RemoteOTCOffer struct {
     Direction          string    `gorm:"size:24"`   // sell_initiated | buy_initiated
     Ticker             string    `gorm:"size:32"`
     Amount             int64
-    StrikePrice        decimal.Decimal `gorm:"type:decimal(38,18)"`
+    StrikePrice        decimal.Decimal `gorm:"type:numeric(20,8)"`
     StrikeCurrency     string    `gorm:"size:8"`
-    Premium            decimal.Decimal `gorm:"type:decimal(38,18)"`
+    Premium            decimal.Decimal `gorm:"type:numeric(20,8)"`
     PremiumCurrency    string    `gorm:"size:8"`
-    SettlementDate     time.Time
-    Status             string    `gorm:"size:24;index;default:open"` // open | cancelled (terminal-on-peer)
+    SettlementDate     string    `gorm:"size:64"` // RFC3339 UTC as published by the peer
+    Status             string    `gorm:"size:24;index;not null;default:'open'"` // open | cancelled (terminal-on-peer)
     LastSeenAt         time.Time `gorm:"index"`  // last successful peer poll that still listed it
     PeerCreatedAt      string    `gorm:"size:64"`
     CreatedAt          time.Time
     UpdatedAt          time.Time
-    Version            int64     `gorm:"not null;default:0"` // optimistic locking + BeforeUpdate hook
 }
 ```
 
 - `(PeerRoutingNumber, ForeignOfferID)` is the natural key; `ID` is the stable local surrogate id used as the unified `:id`. Surrogate ids are minted once and reused across refreshes (upsert via `clause.OnConflict` on the natural key, never SELECT-then-INSERT).
-- `Version` + `BeforeUpdate` hook per the Concurrency requirement; reconciliation status flips go through `db.Save` with a `RowsAffected==0` optimistic-lock check.
+- **No `Version`/optimistic-lock field.** This mirror is written only by the single-threaded option refresher (upsert) and the per-peer reconcile bulk flip (`SkipHooks`) — there is no concurrent read-modify-write on its rows, so the optimistic-locking requirement does not apply. (If SP-2 folds this into a concurrently-written table, locking is added there.)
+- `SettlementDate`/`PeerCreatedAt` are stored as the peer's published RFC3339 strings (the mirror reflects the wire verbatim; no parse/format round-trip).
 
 > Decision: a **separate** `remote_otc_offer` table (not new rows in `OTCOffer`) keeps SP-1 strictly additive and read-only — local writes/cascade/accept logic on `OTCOffer` is not perturbed. SP-2 decides whether to fold this into `OTCOffer` when it converges writes.
 
