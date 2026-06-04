@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
-	"gorm.io/gorm"
 )
 
 // RemoteOTCOffer is the persistent mirror of an OTC option listing
@@ -38,16 +37,9 @@ type RemoteOTCOffer struct {
 	Status     string    `gorm:"size:24;index;not null;default:'open'"` // open | cancelled
 	LastSeenAt time.Time `gorm:"index"`                                 // last successful peer poll that listed it
 
+	// No Version/optimistic-lock field: this mirror is written only by the
+	// single-threaded option refresher (upsert) and the per-peer reconcile
+	// bulk flip — there is no concurrent read-modify-write on these rows.
 	CreatedAt time.Time
 	UpdatedAt time.Time
-	Version   int64 `gorm:"not null;default:0"`
-}
-
-// BeforeUpdate enforces optimistic locking per the Concurrency requirement.
-func (m *RemoteOTCOffer) BeforeUpdate(tx *gorm.DB) error {
-	if tx != nil {
-		tx.Statement.Where("version = ?", m.Version)
-	}
-	m.Version++
-	return nil
 }

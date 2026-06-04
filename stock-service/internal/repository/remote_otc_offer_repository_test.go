@@ -67,9 +67,16 @@ func TestRemoteOffer_ReconcileCancelsOnlyNotSeen(t *testing.T) {
 	db := newRemoteOfferDB(t)
 	r := NewRemoteOTCOfferRepository(db)
 	now := time.Now().UTC()
-	idA, _ := r.Upsert(sampleRemote(111, "A"), now)
-	_, _ = r.Upsert(sampleRemote(111, "B"), now)
-	_, _ = r.Upsert(sampleRemote(222, "A"), now)
+	idA, err := r.Upsert(sampleRemote(111, "A"), now)
+	if err != nil {
+		t.Fatalf("setup upsert A: %v", err)
+	}
+	if _, err := r.Upsert(sampleRemote(111, "B"), now); err != nil {
+		t.Fatalf("setup upsert B: %v", err)
+	}
+	if _, err := r.Upsert(sampleRemote(222, "A"), now); err != nil {
+		t.Fatalf("setup upsert 222/A: %v", err)
+	}
 
 	n, err := r.ReconcilePeerNotSeen(111, []string{"A"})
 	if err != nil {
@@ -98,8 +105,12 @@ func TestRemoteOffer_ReconcileEmptySeenCancelsAllForPeer(t *testing.T) {
 	db := newRemoteOfferDB(t)
 	r := NewRemoteOTCOfferRepository(db)
 	now := time.Now().UTC()
-	_, _ = r.Upsert(sampleRemote(111, "A"), now)
-	_, _ = r.Upsert(sampleRemote(111, "B"), now)
+	if _, err := r.Upsert(sampleRemote(111, "A"), now); err != nil {
+		t.Fatalf("setup upsert A: %v", err)
+	}
+	if _, err := r.Upsert(sampleRemote(111, "B"), now); err != nil {
+		t.Fatalf("setup upsert B: %v", err)
+	}
 	n, err := r.ReconcilePeerNotSeen(111, nil)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -107,14 +118,29 @@ func TestRemoteOffer_ReconcileEmptySeenCancelsAllForPeer(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("cancelled %d, want 2", n)
 	}
+	var a model.RemoteOTCOffer
+	db.Where("peer_routing_number = ? AND foreign_offer_id = ?", 111, "A").First(&a)
+	if a.Status != "cancelled" {
+		t.Fatalf("offer A = %q, want cancelled", a.Status)
+	}
+	var b model.RemoteOTCOffer
+	db.Where("peer_routing_number = ? AND foreign_offer_id = ?", 111, "B").First(&b)
+	if b.Status != "cancelled" {
+		t.Fatalf("offer B = %q, want cancelled", b.Status)
+	}
 }
 
 func TestRemoteOffer_ReappearReopens(t *testing.T) {
 	db := newRemoteOfferDB(t)
 	r := NewRemoteOTCOfferRepository(db)
 	now := time.Now().UTC()
-	id, _ := r.Upsert(sampleRemote(111, "A"), now)
-	_, _ = r.ReconcilePeerNotSeen(111, nil)
+	id, err := r.Upsert(sampleRemote(111, "A"), now)
+	if err != nil {
+		t.Fatalf("setup upsert: %v", err)
+	}
+	if _, err := r.ReconcilePeerNotSeen(111, nil); err != nil {
+		t.Fatalf("setup reconcile: %v", err)
+	}
 	if _, err := r.Upsert(sampleRemote(111, "A"), now.Add(time.Hour)); err != nil {
 		t.Fatalf("reopen upsert: %v", err)
 	}

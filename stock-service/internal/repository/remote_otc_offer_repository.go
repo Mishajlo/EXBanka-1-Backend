@@ -35,6 +35,9 @@ func (r *RemoteOTCOfferRepository) Upsert(o *model.RemoteOTCOffer, seenAt time.T
 	if err != nil {
 		return 0, err
 	}
+	// Defensive only: current GORM populates o.ID on the DO-UPDATE path
+	// (Postgres RETURNING / SQLite last_insert_rowid), so this rarely fires.
+	// Kept as a guard against driver behavior changes.
 	if o.ID == 0 {
 		var row model.RemoteOTCOffer
 		if e := r.db.Select("id").
@@ -66,6 +69,7 @@ func (r *RemoteOTCOfferRepository) ReconcilePeerNotSeen(peerRouting int64, seenF
 	q := r.db.Session(&gorm.Session{SkipHooks: true}).
 		Model(&model.RemoteOTCOffer{}).
 		Where("peer_routing_number = ? AND status = ?", peerRouting, "open")
+	// peer offer counts are O(tens) in this domain; NOT IN (...) is acceptable.
 	if len(seenForeignIDs) > 0 {
 		q = q.Where("foreign_offer_id NOT IN ?", seenForeignIDs)
 	}
