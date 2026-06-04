@@ -28,6 +28,14 @@ func otcOfferMeOwner(identity *middleware.ResolvedIdentity, kind, sellerID strin
 // the given owner_type/owner_id — the same rule the Resource Ownership
 // Verification middleware enforces server-side. Used to decorate
 // negotiation and contract read responses.
+//
+// SP-1 scope: read routes resolve identity via OwnerIsBankIfEmployee, so the
+// acting identity is always either a client (owns owner_type=="client" rows
+// whose owner_id matches) or an employee acting AS the bank (owns
+// owner_type=="bank" rows). Employee-on-behalf-of-a-client is a write-route
+// concern with no on-behalf parameter on these read routes, so it is not
+// handled here; if a future read accepts an on-behalf client id, extend
+// ResolvedIdentity to carry it and add the matching case.
 func meOwnerForOwner(identity *middleware.ResolvedIdentity, ownerType string, ownerID *uint64) bool {
 	if identity == nil {
 		return false

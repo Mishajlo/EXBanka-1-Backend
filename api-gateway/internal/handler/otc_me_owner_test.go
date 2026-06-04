@@ -6,11 +6,9 @@ import (
 	"github.com/exbanka/api-gateway/internal/middleware"
 )
 
-func u64(v uint64) *uint64 { return &v }
-
 func TestOtcOfferMeOwner(t *testing.T) {
 	emp := &middleware.ResolvedIdentity{PrincipalType: "employee", OwnerType: "bank"}
-	cli := &middleware.ResolvedIdentity{PrincipalType: "client", OwnerType: "client", OwnerID: u64(5)}
+	cli := &middleware.ResolvedIdentity{PrincipalType: "client", OwnerType: "client", OwnerID: u64ptr(5)}
 
 	cases := []struct {
 		name     string
@@ -25,6 +23,7 @@ func TestOtcOfferMeOwner(t *testing.T) {
 		{"client owns own local", cli, "local", "client-5", true},
 		{"client not owner of other", cli, "local", "client-9", false},
 		{"client never owns remote", cli, "remote", "client-5", false},
+		{"nil identity", nil, "local", "bank", false},
 	}
 	for _, c := range cases {
 		if got := otcOfferMeOwner(c.id, c.kind, c.sellerID); got != c.want {
@@ -35,17 +34,23 @@ func TestOtcOfferMeOwner(t *testing.T) {
 
 func TestMeOwnerForOwner(t *testing.T) {
 	emp := &middleware.ResolvedIdentity{OwnerType: "bank"}
-	cli := &middleware.ResolvedIdentity{OwnerType: "client", OwnerID: u64(5)}
+	cli := &middleware.ResolvedIdentity{OwnerType: "client", OwnerID: u64ptr(5)}
 	if !meOwnerForOwner(emp, "bank", nil) {
 		t.Error("employee should own bank resource")
 	}
-	if meOwnerForOwner(emp, "client", u64(5)) {
+	if meOwnerForOwner(emp, "client", u64ptr(5)) {
 		t.Error("employee should not own client resource")
 	}
-	if !meOwnerForOwner(cli, "client", u64(5)) {
+	if !meOwnerForOwner(cli, "client", u64ptr(5)) {
 		t.Error("client should own own resource")
 	}
-	if meOwnerForOwner(cli, "client", u64(9)) {
+	if meOwnerForOwner(cli, "client", u64ptr(9)) {
 		t.Error("client should not own another client's resource")
+	}
+	if meOwnerForOwner(nil, "bank", nil) {
+		t.Error("nil identity owns nothing")
+	}
+	if meOwnerForOwner(cli, "client", nil) {
+		t.Error("client resource with nil owner id is unowned")
 	}
 }
