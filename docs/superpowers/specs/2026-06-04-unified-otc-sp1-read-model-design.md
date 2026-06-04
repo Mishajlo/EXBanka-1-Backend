@@ -76,7 +76,7 @@ Kafka/notifications: a peer-driven cancel reuses the existing `OTC_OFFER_CANCELL
 Add `me_owner bool` to every OTC offer/negotiation/contract item returned by the read endpoints. Computed gateway-side from the resolved identity (`middleware.ResolveIdentity` / `OwnerIsBankIfEmployee`, already on these routes):
 - **client** principal → `me_owner = (resource.owner_id == principal_id && !bank_owned)`.
 - **employee** (no on-behalf) → `me_owner = bank_owned`.
-- **employee on-behalf-of-client** → `me_owner = (resource.owner_id == on_behalf_of_client_id)`.
+- **employee on-behalf-of-client** → `me_owner = (resource.owner_id == on_behalf_of_client_id)`. **Not applicable in SP-1:** the read routes resolve identity via `OwnerIsBankIfEmployee` and carry no on-behalf parameter, so an employee is always either acting as the bank or as themselves. `ResolvedIdentity` has no on-behalf field today; if a future read accepts an on-behalf client id, extend `ResolvedIdentity` and add this case to `meOwnerForOwner`.
 
 For an offer, "owner" = the seller/poster (local) or the listing's seller (remote — from our side a remote listing is never bank/owner-local, so `me_owner=false` unless we posted it, which makes it local). For a negotiation, "owner" = the chain's bidder party we host. For a contract, "owner" = the holder side we host. This mirrors the existing Resource Ownership Verification rules so the FE flag matches server-side authorization exactly.
 
