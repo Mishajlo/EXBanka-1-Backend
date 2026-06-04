@@ -351,6 +351,13 @@ func (h *PortfolioHandler) listUnifiedOTCOptions(c *gin.Context, ownerOnlySeller
 			return
 		}
 	}
+	identity, _ := c.MustGet("identity").(*middleware.ResolvedIdentity)
+	var identityOwnerType string
+	var identityOwnerID uint64
+	if identity != nil {
+		identityOwnerType = identity.OwnerType
+		identityOwnerID = derefU64(identity.OwnerID)
+	}
 	resp, err := h.otcClient.ListUnifiedOptionOffers(c.Request.Context(), &stockpb.ListUnifiedOptionOffersRequest{
 		Ticker:            c.Query("ticker"),
 		Kind:              kind,
@@ -359,12 +366,13 @@ func (h *PortfolioHandler) listUnifiedOTCOptions(c *gin.Context, ownerOnlySeller
 		Page:              int32(page),
 		PageSize:          int32(pageSize),
 		OwnerOnlySellerId: ownerOnlySellerID,
+		ActingOwnerType:   identityOwnerType,
+		ActingOwnerId:     identityOwnerID,
 	})
 	if err != nil {
 		handleGRPCError(c, err)
 		return
 	}
-	identity, _ := c.MustGet("identity").(*middleware.ResolvedIdentity)
 	offers := make([]gin.H, 0, len(resp.GetOffers()))
 	for _, o := range resp.GetOffers() {
 		row := gin.H{
@@ -374,7 +382,7 @@ func (h *PortfolioHandler) listUnifiedOTCOptions(c *gin.Context, ownerOnlySeller
 			"routing_number":   o.GetRoutingNumber(),
 			"offer_id":         o.GetOfferId(),
 			"seller_id":        o.GetSellerId(),
-			"me_owner":         otcOfferMeOwner(identity, o.GetKind(), o.GetSellerId()),
+			"me_owner":         o.GetMeOwner(),
 			"seller_name":      o.GetSellerName(),
 			"direction":        o.GetDirection(),
 			"ticker":           o.GetTicker(),

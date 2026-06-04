@@ -1253,7 +1253,6 @@ type stubOTCClient struct {
 	buyFn               func(*stockpb.BuyOTCOfferRequest) (*stockpb.OTCTransaction, error)
 	listUnifiedFn       func(*stockpb.ListUnifiedOTCOffersRequest) (*stockpb.ListUnifiedOTCOffersResponse, error)
 	listUnifiedOptionFn func(*stockpb.ListUnifiedOptionOffersRequest) (*stockpb.ListUnifiedOptionOffersResponse, error)
-	getRemoteOTCOfferFn func(*stockpb.GetRemoteOTCOfferRequest) (*stockpb.GetRemoteOTCOfferResponse, error)
 }
 
 func (s *stubOTCClient) ListOffers(_ context.Context, in *stockpb.ListOTCOffersRequest, _ ...grpc.CallOption) (*stockpb.ListOTCOffersResponse, error) {
@@ -1283,13 +1282,6 @@ func (s *stubOTCClient) ListUnifiedOptionOffers(_ context.Context, in *stockpb.L
 		return s.listUnifiedOptionFn(in)
 	}
 	return &stockpb.ListUnifiedOptionOffersResponse{}, nil
-}
-
-func (s *stubOTCClient) GetRemoteOTCOffer(_ context.Context, in *stockpb.GetRemoteOTCOfferRequest, _ ...grpc.CallOption) (*stockpb.GetRemoteOTCOfferResponse, error) {
-	if s.getRemoteOTCOfferFn != nil {
-		return s.getRemoteOTCOfferFn(in)
-	}
-	return &stockpb.GetRemoteOTCOfferResponse{}, nil
 }
 
 // ---------------------------------------------------------------------------

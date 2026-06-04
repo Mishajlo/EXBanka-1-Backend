@@ -1,14 +1,11 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	"github.com/exbanka/api-gateway/internal/middleware"
 	accountpb "github.com/exbanka/contract/accountpb"
@@ -25,10 +22,6 @@ type OTCOptionsHandler struct {
 	peerOTC  stockpb.PeerOTCServiceClient
 	security stockpb.SecurityGRPCServiceClient
 	accounts accountpb.AccountServiceClient
-	// otcGRPC resolves remote (cross-bank) OTC option offers from the
-	// persistent mirror via the OTCGRPCService. Used by GetOffer when a
-	// surrogate id is not a local offer (SP-1).
-	otcGRPC stockpb.OTCGRPCServiceClient
 }
 
 func NewOTCOptionsHandler(
@@ -36,9 +29,8 @@ func NewOTCOptionsHandler(
 	peerOTC stockpb.PeerOTCServiceClient,
 	security stockpb.SecurityGRPCServiceClient,
 	accounts accountpb.AccountServiceClient,
-	otcGRPC stockpb.OTCGRPCServiceClient,
 ) *OTCOptionsHandler {
-	return &OTCOptionsHandler{client: client, peerOTC: peerOTC, security: security, accounts: accounts, otcGRPC: otcGRPC}
+	return &OTCOptionsHandler{client: client, peerOTC: peerOTC, security: security, accounts: accounts}
 }
 
 type createOTCOfferRequest struct {
@@ -261,58 +253,14 @@ func (h *OTCOptionsHandler) GetOffer(c *gin.Context) {
 		OfferId:         id,
 		ActorUserId:     int64(ownerToLegacyUserID(identity.OwnerID)),
 		ActorSystemType: ownerToLegacySystemType(identity.OwnerType),
+		ActingOwnerType: identity.OwnerType,
+		ActingOwnerId:   derefU64(identity.OwnerID),
 	})
-	if err == nil {
-		// Backward-compatible: keep the existing {offer,revisions} body, add kind+me_owner.
-		raw, mErr := json.Marshal(resp)
-		body := map[string]any{}
-		if mErr == nil {
-			_ = json.Unmarshal(raw, &body)
-		}
-		body["kind"] = "local"
-		body["me_owner"] = otcOfferMeOwner(identity, "local", partyRefSellerID(resp.GetOffer().GetInitiator()))
-		c.JSON(http.StatusOK, body)
-		return
-	}
-	if status.Code(err) != codes.NotFound {
+	if err != nil {
 		handleGRPCError(c, err)
 		return
 	}
-	// Not a local offer — resolve from the remote mirror.
-	if h.otcGRPC == nil {
-		apiError(c, http.StatusNotFound, ErrNotFound, "OTC offer not found")
-		return
-	}
-	r, rErr := h.otcGRPC.GetRemoteOTCOffer(c.Request.Context(), &stockpb.GetRemoteOTCOfferRequest{LocalId: id})
-	if rErr != nil {
-		if status.Code(rErr) == codes.NotFound {
-			apiError(c, http.StatusNotFound, ErrNotFound, "OTC offer not found")
-			return
-		}
-		handleGRPCError(c, rErr)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"id": r.GetLocalId(), "kind": "remote", "me_owner": false,
-		"offer_id": r.GetForeignOfferId(), "bank_code": r.GetBankCode(), "routing_number": r.GetRoutingNumber(),
-		"seller_id": r.GetSellerId(), "direction": r.GetDirection(), "ticker": r.GetTicker(),
-		"amount": r.GetAmount(), "strike_price": r.GetStrikePrice(), "strike_currency": r.GetStrikeCurrency(),
-		"premium": r.GetPremium(), "premium_currency": r.GetPremiumCurrency(),
-		"settlement_date": r.GetSettlementDate(), "status": r.GetStatus(), "created_at": r.GetCreatedAt(),
-	})
-}
-
-// partyRefSellerID derives the discovery-style seller id ("client-<N>" or
-// "bank") from a local offer's initiator PartyRef, matching how the option
-// cache composes seller ids, so otcOfferMeOwner agrees with the discovery feed.
-func partyRefSellerID(p *stockpb.PartyRef) string {
-	if p == nil {
-		return ""
-	}
-	if p.GetSystemType() == "client" {
-		return "client-" + strconv.FormatInt(p.GetUserId(), 10)
-	}
-	return "bank"
+	c.JSON(http.StatusOK, resp)
 }
 
 type counterOTCOfferRequest struct {
