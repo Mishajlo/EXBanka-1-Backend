@@ -100,6 +100,7 @@ func main() {
 		&model.TaxCollection{},
 		&model.SagaLog{},
 		&model.InvestmentFund{},
+		&model.FundValueSnapshot{},
 		&model.ClientFundPosition{},
 		&model.FundPositionSettlement{},
 		&model.FundContribution{},
@@ -780,6 +781,11 @@ func main() {
 		},
 	).WithPositionReads(listingRepo).WithLiquidation(orderSvc).WithOutbox(ob, db).
 		WithDividendRepo(fundDividendPaymentRepo)
+
+	// SP3: fund value-snapshot history + statistics metrics.
+	fundSnapshotRepo := repository.NewFundValueSnapshotRepository(db)
+	fundService = fundService.WithSnapshots(fundSnapshotRepo, cfg.FundMetricsMinMonthlyReturns)
+	service.NewFundSnapshotCron(fundService, fundSnapshotRepo, cfg.FundSnapshotCronUTC, cronRegistry).StartDailyCron(ctx)
 
 	// E4: dividend service
 	dividendSvc := service.NewDividendService(

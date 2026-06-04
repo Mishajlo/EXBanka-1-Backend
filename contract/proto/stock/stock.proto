@@ -1073,6 +1073,13 @@ message FundResponse {
   string value_rsd = 12;
   string liquid_rsd = 13;
   string profit_rsd = 14;
+  // SP3 statistics (Celina 4): empty / metrics_available=false until enough
+  // snapshot history exists.
+  string annualized_return_pct = 15;
+  string volatility_pct        = 16;
+  string reward_to_variability = 17;
+  string max_drawdown_pct      = 18;
+  bool   metrics_available     = 19;
 }
 
 message ListFundsRequest {
@@ -1080,6 +1087,9 @@ message ListFundsRequest {
   int32 page_size = 2;
   string search = 3;
   bool   active_only = 4;
+  // SP3 sorting: name|value|profit|annualized_return|volatility|reward_to_variability|max_drawdown
+  string sort_by = 5;
+  string sort_order = 6; // asc|desc
 }
 message ListFundsResponse {
   repeated FundResponse funds = 1;
@@ -1102,7 +1112,23 @@ message FundDetailResponse {
   string total_dividends_paid_rsd = 8;
   string profit_rsd               = 9;
   string profit_pct               = 10;
+  // SP3 statistics + history (Celina 4).
+  string annualized_return_pct      = 11;
+  string volatility_pct             = 12;
+  string reward_to_variability      = 13;
+  string max_drawdown_pct           = 14;
+  bool   metrics_available          = 15;
+  repeated FundValueSnapshotItem history          = 16; // this fund's NAV series
+  repeated FundValueSnapshotItem average_history  = 17; // system average (indexed to 100)
 }
+
+// FundValueSnapshotItem is one point of a fund's daily NAV history (or the
+// system-average comparison series).
+message FundValueSnapshotItem {
+  string date            = 1; // RFC3339
+  string total_value_rsd = 2;
+}
+
 message FundHoldingItem {
   string security_type = 1;
   uint64 security_id = 2;

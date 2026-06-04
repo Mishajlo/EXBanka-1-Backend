@@ -85,6 +85,11 @@ type FundService struct {
 	// work.
 	outbox   *outbox.Outbox
 	outboxDB *gorm.DB
+
+	// SP3 statistics (optional; wired via WithSnapshots). When nil, fund
+	// metrics/history are unavailable and discovery metric-sorts no-op.
+	snapshots         *repository.FundValueSnapshotRepository
+	metricsMinMonthly int
 }
 
 // WithOutbox wires the transactional outbox + the GORM handle the saga

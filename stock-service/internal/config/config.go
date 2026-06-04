@@ -53,6 +53,10 @@ type Config struct {
 	// WatchlistNotificationCronHours is how often (in hours) the daily watchlist
 	// notification cron runs. Default 24 h.
 	WatchlistNotificationCronHours int
+	// SP3 fund statistics: daily NAV-snapshot cron time and the minimum number
+	// of monthly returns required before metrics are shown.
+	FundSnapshotCronUTC          string // "HH:MM" UTC; default 23:50
+	FundMetricsMinMonthlyReturns int    // default 2
 }
 
 func Load() *Config {
@@ -96,6 +100,8 @@ func Load() *Config {
 		TransactionGRPCAddr:            getEnv("TRANSACTION_GRPC_ADDR", "localhost:50057"),
 		OwnBankCode:                    getEnv("OWN_BANK_CODE", "111"),
 		WatchlistNotificationCronHours: getEnvInt("WATCHLIST_NOTIFICATION_CRON_HOURS", 24),
+		FundSnapshotCronUTC:            getEnv("FUND_SNAPSHOT_CRON_UTC", "23:50"),
+		FundMetricsMinMonthlyReturns:   getEnvInt("FUND_METRICS_MIN_MONTHLY_RETURNS", 2),
 	}
 }
 
