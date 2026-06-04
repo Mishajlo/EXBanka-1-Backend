@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -357,6 +358,20 @@ func TestOTCOptionsHandler_GetOffer_RemoteMissStillNotFound(t *testing.T) {
 	})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("code = %v, want NotFound", status.Code(err))
+	}
+}
+
+// SP-1 review: a non-NotFound error from the remote mirror must surface as
+// Internal, not as a false 404. Before the fix, the error was dropped and
+// the handler fell through to return the original local NotFound.
+func TestOTCOptionsHandler_GetOffer_RemoteInternalErrorSurfacedAsInternal(t *testing.T) {
+	fx := newOTCOptionsHandlerFixture(t)
+	h := fx.h.WithRemoteOffers(&fakeRemoteOffers{err: errors.New("db down")}, "111")
+	_, err := h.GetOffer(context.Background(), &stockpb.GetOTCOfferRequest{
+		OfferId: 9999, ActorUserId: 7, ActorSystemType: "client",
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("code = %v, want Internal (mirror DB error must not look like 404)", status.Code(err))
 	}
 }
 

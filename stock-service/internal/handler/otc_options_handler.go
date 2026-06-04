@@ -231,8 +231,15 @@ func (h *OTCOptionsHandler) GetOffer(ctx context.Context, in *stockpb.GetOTCOffe
 	if err != nil {
 		// Local offer doesn't exist — try the cross-bank mirror before 404.
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			if remote, rerr := h.resolveRemoteOffer(in.OfferId); rerr == nil {
+			remote, rerr := h.resolveRemoteOffer(in.OfferId)
+			if rerr == nil {
 				return remote, nil
+			}
+			// Genuine mirror miss: fall through to the original NotFound.
+			// Any other error (e.g. DB failure) must be surfaced as Internal,
+			// not silently swallowed as a 404.
+			if !errors.Is(rerr, gorm.ErrRecordNotFound) {
+				return nil, status.Errorf(codes.Internal, "remote offer lookup failed: %v", rerr)
 			}
 		}
 		return nil, mapOTCErr(err)
