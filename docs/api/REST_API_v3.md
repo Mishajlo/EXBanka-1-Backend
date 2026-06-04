@@ -5763,6 +5763,10 @@ List investment funds (Discovery page).
 | `page_size` | int | 20 | Items per page |
 | `search` | string | — | Case-insensitive substring on `name` |
 | `active_only` | bool | false | When `true`, hide inactive funds |
+| `sort_by` | string | — | `name` \| `value` \| `profit` \| `annualized_return` \| `volatility` \| `reward_to_variability` \| `max_drawdown` (SP3) |
+| `sort_order` | string | desc | `asc` \| `desc` |
+
+Each fund also carries the SP3 statistics (`annualized_return_pct`, `volatility_pct`, `reward_to_variability`, `max_drawdown_pct`, `metrics_available`). When a fund lacks enough snapshot history the numeric metrics are `"0"` and `metrics_available` is `false`. `GET /api/v3/investment-funds/{id}` additionally returns `history` (this fund's daily NAV series: `[{date, total_value_rsd}]`) and `average_history` (the system-average series, each fund indexed to 100 at its first snapshot) for the detail charts.
 
 **Response 200:**
 ```json

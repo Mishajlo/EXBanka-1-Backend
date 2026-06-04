@@ -72,6 +72,8 @@ func (h *InvestmentFundHandler) CreateFund(c *gin.Context) {
 // @Param        page_size query int false "page size (default 20)"
 // @Param        search query string false "case-insensitive name substring"
 // @Param        active_only query bool false "filter to active funds"
+// @Param        sort_by query string false "name|value|profit|annualized_return|volatility|reward_to_variability|max_drawdown"
+// @Param        sort_order query string false "asc|desc"
 // @Success      200 {object} map[string]interface{}
 // @Router       /api/v1/investment-funds [get]
 func (h *InvestmentFundHandler) ListFunds(c *gin.Context) {
@@ -79,8 +81,28 @@ func (h *InvestmentFundHandler) ListFunds(c *gin.Context) {
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	search := c.Query("search")
 	activeOnly := c.Query("active_only") == "true"
+
+	// SP3 sorting (optional). Validate against the allowed metric/base keys.
+	sortBy := c.Query("sort_by")
+	if sortBy != "" {
+		if _, err := oneOf("sort_by", sortBy, "name", "value", "profit", "annualized_return", "volatility", "reward_to_variability", "max_drawdown"); err != nil {
+			apiError(c, http.StatusBadRequest, ErrValidation, err.Error())
+			return
+		}
+		sortBy, _ = oneOf("sort_by", sortBy, "name", "value", "profit", "annualized_return", "volatility", "reward_to_variability", "max_drawdown")
+	}
+	sortOrder := c.Query("sort_order")
+	if sortOrder != "" {
+		if _, err := oneOf("sort_order", sortOrder, "asc", "desc"); err != nil {
+			apiError(c, http.StatusBadRequest, ErrValidation, err.Error())
+			return
+		}
+		sortOrder, _ = oneOf("sort_order", sortOrder, "asc", "desc")
+	}
+
 	resp, err := h.client.ListFunds(c.Request.Context(), &stockpb.ListFundsRequest{
 		Page: int32(page), PageSize: int32(pageSize), Search: search, ActiveOnly: activeOnly,
+		SortBy: sortBy, SortOrder: sortOrder,
 	})
 	if err != nil {
 		handleGRPCError(c, err)
@@ -128,6 +150,14 @@ func (h *InvestmentFundHandler) GetFund(c *gin.Context) {
 		"total_dividends_paid_rsd": resp.GetTotalDividendsPaidRsd(),
 		"profit_rsd":               resp.GetProfitRsd(),
 		"profit_pct":               resp.GetProfitPct(),
+		// SP3 statistics + history.
+		"annualized_return_pct": resp.GetAnnualizedReturnPct(),
+		"volatility_pct":        resp.GetVolatilityPct(),
+		"reward_to_variability": resp.GetRewardToVariability(),
+		"max_drawdown_pct":      resp.GetMaxDrawdownPct(),
+		"metrics_available":     resp.GetMetricsAvailable(),
+		"history":               emptyIfNil(resp.GetHistory()),
+		"average_history":       emptyIfNil(resp.GetAverageHistory()),
 	})
 }
 

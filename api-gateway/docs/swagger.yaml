@@ -1125,6 +1125,14 @@ paths:
         in: query
         name: active_only
         type: boolean
+      - description: name|value|profit|annualized_return|volatility|reward_to_variability|max_drawdown
+        in: query
+        name: sort_by
+        type: string
+      - description: asc|desc
+        in: query
+        name: sort_order
+        type: string
       produces:
       - application/json
       responses:

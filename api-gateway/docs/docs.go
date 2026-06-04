@@ -78,6 +78,18 @@ const docTemplate = `{
                         "description": "filter to active funds",
                         "name": "active_only",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "name|value|profit|annualized_return|volatility|reward_to_variability|max_drawdown",
+                        "name": "sort_by",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "asc|desc",
+                        "name": "sort_order",
+                        "in": "query"
                     }
                 ],
                 "responses": {
