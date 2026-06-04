@@ -394,6 +394,17 @@ func main() {
 	capitalGainRepo := repository.NewCapitalGainRepository(db)
 	taxCollectionRepo := repository.NewTaxCollectionRepository(db)
 
+	// Tax cutover (2026-06-04): under the resolution-month model the buyer's
+	// option premium is booked at exercise/expiry, not accept. Remove any
+	// accept-time buyer-premium rows still tied to ACTIVE contracts so they are
+	// not double-counted when those contracts resolve. Idempotent; no-op once
+	// clean. Spec docs/superpowers/specs/2026-06-04-options-premium-tax-design.md §6.
+	if n, err := service.CleanupLegacyBuyerPremiumRows(db); err != nil {
+		log.Printf("WARN: legacy buyer-premium cleanup failed: %v", err)
+	} else if n > 0 {
+		log.Printf("tax cutover: removed %d legacy buyer-premium capital-gain rows", n)
+	}
+
 	// --- Investment funds (Celina 4) ---
 	fundRepo := repository.NewFundRepository(db)
 	fundContribRepo := repository.NewFundContributionRepository(db)
