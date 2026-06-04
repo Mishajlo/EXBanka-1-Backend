@@ -1646,7 +1646,9 @@ Response shape: `{entries: [...], total, page, page_size}`. Changelog entries ca
 
 Closed-end invariants enforced in `model.InvestmentFund.BeforeSave`. `FundService.Invest` rejects closed funds outside `fundraising` status; `FundService.Redeem` rejects closed funds outside `open` status. `FundLifecycleCron` walks closed funds every 15 min and transitions `fundraising → active → matured → liquidated` per the calendar, firing `FUND_FUNDRAISING_STARTED/CLOSED/MATURED/LIQUIDATED` in-app notifications to the fund manager. Auto-liquidation money movement (sell remaining holdings + pro-rata distribution) is deferred to a follow-up.
 
-**WatchlistItem** (Celina 3 — `watchlist_items` table in stock-service `stock_db`) — per-owner tracked-listing list
+**Watchlist** (SP6 — `watchlists` table in stock-service `stock_db`) — a named collection of tracked listings owned by a client or the bank. `{id, owner_type, owner_id, name, created_at, updated_at}`, unique `(owner_type, owner_id, name)`. A user may keep several (e.g. "tech stocks"). The legacy single-list endpoints operate on a lazily-created default **"My Watchlist"**. New routes (`/api/v3/me/watchlists*`) provide named-list CRUD + per-list item add/remove; a list is owner-scoped and the same listing may appear in multiple lists. On startup, `MigrateWatchlistsToNamedLists` (idempotent) drops the legacy `(owner, listing)` unique index and assigns any pre-existing items to their owner's default list.
+
+**WatchlistItem** (Celina 3 / SP6 — `watchlist_items` table in stock-service `stock_db`) — one tracked listing inside a `Watchlist`. Gains `watchlist_id` (FK; unique `(watchlist_id, listing_id)`); retains denormalised `owner_type`/`owner_id` so the daily price-move notification cron scans per-owner unchanged.
 
 | Field | Type | Notes |
 |---|---|---|

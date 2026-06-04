@@ -121,6 +121,7 @@ func main() {
 		&model.OptionContract{},
 		&model.OTCOfferReadReceipt{},
 		&model.IdempotencyRecord{},
+		&model.Watchlist{},
 		&model.WatchlistItem{},
 		&model.OTCTraderRating{},
 		&model.PriceAlert{},
@@ -1009,6 +1010,11 @@ func main() {
 			pb.RegisterOTCStockMarketGRPCServiceServer(s, otcStockMarketHandler)
 			pb.RegisterPeerOTCServiceServer(s, peerOtcHandler)
 			watchlistRepo := repository.NewWatchlistRepository(db)
+			// SP6: one-time migration of legacy single-list items into per-owner
+			// default named lists (idempotent).
+			if err := service.MigrateWatchlistsToNamedLists(db, watchlistRepo); err != nil {
+				log.Printf("WARN: watchlist named-list migration failed: %v", err)
+			}
 			watchlistSvc := service.NewWatchlistService(watchlistRepo, listingRepo, stockRepo, optionRepo, futuresRepo, forexRepo)
 			pb.RegisterWatchlistServiceServer(s, handler.NewWatchlistHandler(watchlistSvc))
 			priceAlertRepo := repository.NewPriceAlertRepository(db)

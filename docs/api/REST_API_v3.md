@@ -7491,6 +7491,19 @@ Remove a listing from the caller's watchlist.
 
 **Response 204:** No content on success.
 
+### Named watchlists (SP6)
+
+The legacy `/me/watchlist` routes above operate on the caller's default **"My Watchlist"** (created lazily). Callers can also keep **multiple named lists** (e.g. "tech", "forex pairs"). All routes are `AnyAuthMiddleware`; a list is owned by the caller and can only be touched by its owner. The same listing may live in more than one list.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v3/me/watchlists` | List the caller's named watchlists with `{id, name, item_count, created_at}` (always includes the default). |
+| `POST` | `/api/v3/me/watchlists` | Create a named list. Body `{ "name": "tech" }` (1–64 chars). Idempotent on name. Returns `201 {watchlist}`. |
+| `DELETE` | `/api/v3/me/watchlists/:watchlist_id` | Delete a named list and its items. `204` / `404`. |
+| `GET` | `/api/v3/me/watchlists/:watchlist_id/items?listing_type=` | List a named list's items (same enriched shape as `/me/watchlist`). |
+| `POST` | `/api/v3/me/watchlists/:watchlist_id/items` | Add a listing to a named list. Body `{ "listing_id": 1 }`. `201`. |
+| `DELETE` | `/api/v3/me/watchlists/:watchlist_id/items/:listing_id` | Remove a listing from a named list. `204` / `404`. |
+
 **Response 404:** The listing is not on the caller's watchlist.
 
 **Use cases:**

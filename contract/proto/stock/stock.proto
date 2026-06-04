@@ -2457,18 +2457,52 @@ service WatchlistService {
   rpc AddItem(AddWatchlistItemRequest) returns (WatchlistItemResponse);
   rpc RemoveItem(RemoveWatchlistItemRequest) returns (RemoveWatchlistItemResponse);
   rpc ListMy(ListMyWatchlistRequest) returns (ListMyWatchlistResponse);
+  // SP6 named lists:
+  rpc CreateWatchlist(CreateWatchlistRequest) returns (WatchlistResponse);
+  rpc ListWatchlists(ListWatchlistsRequest) returns (ListWatchlistsResponse);
+  rpc DeleteWatchlist(DeleteWatchlistRequest) returns (DeleteWatchlistResponse);
 }
 
 message AddWatchlistItemRequest {
-  string owner_type = 1; // "client" | "bank"
-  uint64 owner_id   = 2; // omitted/0 when owner_type=="bank"
-  uint64 listing_id = 3;
+  string owner_type   = 1; // "client" | "bank"
+  uint64 owner_id     = 2; // omitted/0 when owner_type=="bank"
+  uint64 listing_id   = 3;
+  uint64 watchlist_id = 4; // 0 → owner's default list (SP6)
 }
 
 message RemoveWatchlistItemRequest {
+  string owner_type   = 1;
+  uint64 owner_id     = 2;
+  uint64 listing_id   = 3;
+  uint64 watchlist_id = 4; // 0 → owner's default list (SP6)
+}
+
+// SP6 named-list messages.
+message CreateWatchlistRequest {
   string owner_type = 1;
   uint64 owner_id   = 2;
-  uint64 listing_id = 3;
+  string name       = 3;
+}
+message WatchlistResponse {
+  uint64 id         = 1;
+  string name       = 2;
+  int64  item_count = 3;
+  string created_at = 4;
+}
+message ListWatchlistsRequest {
+  string owner_type = 1;
+  uint64 owner_id   = 2;
+}
+message ListWatchlistsResponse {
+  repeated WatchlistResponse watchlists = 1;
+}
+message DeleteWatchlistRequest {
+  string owner_type   = 1;
+  uint64 owner_id     = 2;
+  uint64 watchlist_id = 3;
+}
+message DeleteWatchlistResponse {
+  bool removed = 1;
 }
 
 message RemoveWatchlistItemResponse {
@@ -2479,6 +2513,7 @@ message ListMyWatchlistRequest {
   string owner_type    = 1;
   uint64 owner_id      = 2;
   string listing_type  = 3; // optional: "stock" | "option" | "futures" | "forex"
+  uint64 watchlist_id  = 4; // 0 → owner's default list (SP6)
 }
 
 message WatchlistItemResponse {
