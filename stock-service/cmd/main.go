@@ -971,7 +971,8 @@ func main() {
 		WithListings(listingRepo).
 		WithPeerContracts(peerOptionRepo, ownRouting).
 		WithRatings(ratingSvc).
-		WithNegotiations(otcNegotiationSvc)
+		WithNegotiations(otcNegotiationSvc).
+		WithRemoteOffers(remoteOfferRepo, cfg.OwnBankCode)
 
 	// Phase 3: OTC stocks marketplace (sell + buy direction). The
 	// service uses narrow OTCStockListingResolver + OTCStockAccountClient
@@ -1009,7 +1010,7 @@ func main() {
 			unifiedPortfolioSvc := service.NewUnifiedPortfolioService(holdingRepo, fundPositionRepo, fundRepo, fundHoldingRepo, listingRepo, fundAccountAdapter).
 				WithDividendService(dividendSvc)
 			pb.RegisterPortfolioGRPCServiceServer(s, handler.NewPortfolioHandler(portfolioSvc, taxSvc).WithUnifiedPortfolioService(unifiedPortfolioSvc))
-			pb.RegisterOTCGRPCServiceServer(s, handler.NewOTCHandlerWithCache(otcSvc, otcOfferCache).WithOptionCache(optionOfferCache).WithRemoteOffers(remoteOfferRepo))
+			pb.RegisterOTCGRPCServiceServer(s, handler.NewOTCHandlerWithCache(otcSvc, otcOfferCache).WithOptionCache(optionOfferCache))
 			pb.RegisterTaxGRPCServiceServer(s, handler.NewTaxHandler(taxSvc))
 			pb.RegisterInvestmentFundServiceServer(s, fundHandler)
 			pb.RegisterOTCOptionsServiceServer(s, otcOptionsHandler)

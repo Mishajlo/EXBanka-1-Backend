@@ -2,23 +2,16 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"gorm.io/gorm"
 
 	pb "github.com/exbanka/contract/stockpb"
 	"github.com/exbanka/stock-service/internal/model"
 	"github.com/exbanka/stock-service/internal/otccache"
 	"github.com/exbanka/stock-service/internal/service"
 )
-
-// RemoteOfferGetter fetches a remote-offer mirror row by surrogate id.
-type RemoteOfferGetter interface {
-	GetByID(id uint64) (*model.RemoteOTCOffer, error)
-}
 
 // otcSvcFacade is the narrow interface of OTCService used by OTCHandler.
 type otcSvcFacade interface {
@@ -28,10 +21,9 @@ type otcSvcFacade interface {
 
 type OTCHandler struct {
 	pb.UnimplementedOTCGRPCServiceServer
-	otcSvc       otcSvcFacade
-	cache        *otccache.Cache
-	optionCache  *otccache.OptionCache // optional; Phase 6 cross-bank option discovery
-	remoteOffers RemoteOfferGetter     // optional; SP-1 remote-offer detail resolution
+	otcSvc      otcSvcFacade
+	cache       *otccache.Cache
+	optionCache *otccache.OptionCache // optional; Phase 6 cross-bank option discovery
 }
 
 // NewOTCHandler keeps the prior signature for backwards compatibility
@@ -54,15 +46,6 @@ func NewOTCHandlerWithCache(otcSvc *service.OTCService, cache *otccache.Cache) *
 func (h *OTCHandler) WithOptionCache(c *otccache.OptionCache) *OTCHandler {
 	cp := *h
 	cp.optionCache = c
-	return &cp
-}
-
-// WithRemoteOffers wires the persistent remote-offer mirror used by
-// GetRemoteOTCOffer (SP-1). Returns a copy so cmd/main.go can chain
-// wire-up calls.
-func (h *OTCHandler) WithRemoteOffers(g RemoteOfferGetter) *OTCHandler {
-	cp := *h
-	cp.remoteOffers = g
 	return &cp
 }
 
@@ -300,6 +283,8 @@ func (h *OTCHandler) ListUnifiedOptionOffers(ctx context.Context, req *pb.ListUn
 	if end > len(filtered) {
 		end = len(filtered)
 	}
+	actingOwnerType := req.GetActingOwnerType()
+	actingOwnerID := req.GetActingOwnerId()
 	out := make([]*pb.UnifiedOptionOffer, 0, end-start)
 	for _, o := range filtered[start:end] {
 		out = append(out, &pb.UnifiedOptionOffer{
@@ -322,6 +307,7 @@ func (h *OTCHandler) ListUnifiedOptionOffers(ctx context.Context, req *pb.ListUn
 			BestAsk:           o.BestAsk,
 			ActiveChainsCount: o.ActiveChainsCount,
 			LocalId:           o.LocalID,
+			MeOwner:           otcMeOwner(actingOwnerType, actingOwnerID, o.Kind, o.SellerID),
 		})
 	}
 	var lastRefreshUnix int64
@@ -339,28 +325,3 @@ func (h *OTCHandler) ListUnifiedOptionOffers(ctx context.Context, req *pb.ListUn
 	}, nil
 }
 
-// GetRemoteOTCOffer resolves a single remote (cross-bank) OTC option
-// offer by its stable local surrogate id from the persistent mirror.
-// Returns NotFound when no mirror row exists (or the mirror is unwired).
-// Cancelled rows are still returned so the caller can render a terminal
-// state rather than a 404. (SP-1)
-func (h *OTCHandler) GetRemoteOTCOffer(ctx context.Context, req *pb.GetRemoteOTCOfferRequest) (*pb.GetRemoteOTCOfferResponse, error) {
-	_ = ctx
-	if h.remoteOffers == nil {
-		return nil, status.Error(codes.NotFound, "remote offer not found")
-	}
-	o, err := h.remoteOffers.GetByID(req.GetLocalId())
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, status.Error(codes.NotFound, "remote offer not found")
-		}
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	return &pb.GetRemoteOTCOfferResponse{
-		LocalId: o.ID, BankCode: o.BankCode, RoutingNumber: o.PeerRoutingNumber,
-		ForeignOfferId: o.ForeignOfferID, SellerId: o.SellerID, Direction: o.Direction,
-		Ticker: o.Ticker, Amount: o.Amount, StrikePrice: o.StrikePrice.String(),
-		StrikeCurrency: o.StrikeCurrency, Premium: o.Premium.String(), PremiumCurrency: o.PremiumCurrency,
-		SettlementDate: o.SettlementDate, Status: o.Status, CreatedAt: o.PeerCreatedAt,
-	}, nil
-}

@@ -764,10 +764,6 @@ service OTCGRPCService {
   // every ~5 s from peer banks' GET /public-option-offers. Same partial-
   // failure tolerance as ListUnifiedOffers (peers_total / peers_reached).
   rpc ListUnifiedOptionOffers(ListUnifiedOptionOffersRequest) returns (ListUnifiedOptionOffersResponse);
-  // GetRemoteOTCOffer resolves a single remote (cross-bank) OTC option offer
-  // by its stable local surrogate id, from the persistent mirror. Returns
-  // NotFound if no such mirror row exists. Includes cancelled rows. (SP-1)
-  rpc GetRemoteOTCOffer(GetRemoteOTCOfferRequest) returns (GetRemoteOTCOfferResponse);
 }
 
 message OTCOffer {
@@ -875,6 +871,10 @@ message UnifiedOptionOffer {
   // equals the numeric offer_id for local). The frontend addresses any
   // offer — local or remote — by this id on the unified routes. (SP-1)
   uint64 local_id = 19;
+  // me_owner is true when the acting caller (acting_owner_type/id on the
+  // request) owns this listing. Always false for remote rows. Computed in
+  // the stock-service from the caller identity. (SP-1)
+  bool me_owner = 20;
 }
 
 message ListUnifiedOptionOffersRequest {
@@ -892,6 +892,11 @@ message ListUnifiedOptionOffersRequest {
   // shape. Implies kind=local since cross-bank listings can never be
   // ours.
   string owner_only_seller_id = 7;
+  // Caller identity used to stamp me_owner on each row (SP-1).
+  // acting_owner_type is "client" | "bank"; acting_owner_id is 0 when
+  // acting as the bank.
+  string acting_owner_type = 8;
+  uint64 acting_owner_id   = 9;
 }
 
 message ListUnifiedOptionOffersResponse {
@@ -901,27 +906,6 @@ message ListUnifiedOptionOffersResponse {
   int32 peers_reached     = 4;
   bool  partial           = 5;
   int64 last_refresh_unix = 6;
-}
-
-message GetRemoteOTCOfferRequest {
-  uint64 local_id = 1;
-}
-message GetRemoteOTCOfferResponse {
-  uint64 local_id         = 1;
-  string bank_code        = 2;
-  int64  routing_number   = 3;
-  string foreign_offer_id = 4;
-  string seller_id        = 5;
-  string direction        = 6;
-  string ticker           = 7;
-  int64  amount           = 8;
-  string strike_price     = 9;
-  string strike_currency  = 10;
-  string premium          = 11;
-  string premium_currency = 12;
-  string settlement_date  = 13;
-  string status           = 14; // open | cancelled
-  string created_at       = 15; // peer-published created-at
 }
 
 message BuyOTCOfferRequest {
@@ -1697,6 +1681,15 @@ message OTCOfferResponse {
   string  updated_at = 15;
   int64   version = 16;
   bool    unread = 17;
+  // Provenance + ownership for the unified offer read (SP-1). kind is
+  // "local" (this bank holds the listing) or "remote" (resolved from a
+  // peer-bank mirror). routing_number / bank_code identify the hosting
+  // bank. me_owner is true only when the acting caller owns the listing
+  // (always false for remote). Computed in stock-service.
+  string kind = 18;
+  int64  routing_number = 19;
+  string bank_code = 20;
+  bool   me_owner = 21;
 }
 
 message OTCOfferRevisionItem {
@@ -1733,6 +1726,11 @@ message GetOTCOfferRequest {
   uint64 offer_id = 1;
   int64  actor_user_id = 2;
   string actor_system_type = 3;
+  // Caller identity used to stamp me_owner on the resolved offer (SP-1).
+  // acting_owner_type is "client" | "bank"; acting_owner_id is 0 when
+  // acting as the bank.
+  string acting_owner_type = 4;
+  uint64 acting_owner_id   = 5;
 }
 
 message CounterOTCOfferRequest {

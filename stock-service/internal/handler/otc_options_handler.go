@@ -37,6 +37,12 @@ type OTCOptionsHandler struct {
 	// on Accept/Exercise (E2 Plan E). Without it, on_behalf_of_fund_id
 	// requests are rejected with a clear error.
 	fundRepo *repository.FundRepository
+	// remoteOffers is optional; the persistent cross-bank mirror used by
+	// GetOffer to resolve an offer id that is not a local OTCOffer to a
+	// peer-bank listing (SP-1). ownBankCode is this bank's 3-digit code,
+	// stamped as provenance on local offers.
+	remoteOffers RemoteOfferGetter
+	ownBankCode  string
 }
 
 func NewOTCOptionsHandler(svc *service.OTCOfferService, contracts *repository.OptionContractRepository) *OTCOptionsHandler {
@@ -75,6 +81,25 @@ func (h *OTCOptionsHandler) WithFundRepo(repo *repository.FundRepository) *OTCOp
 func (h *OTCOptionsHandler) WithListings(listings *repository.ListingRepository) *OTCOptionsHandler {
 	cp := *h
 	cp.listings = listings
+	return &cp
+}
+
+// RemoteOfferGetter fetches a remote-offer mirror row by surrogate id.
+// GetOffer falls back to this mirror when an offer id is not a local
+// OTCOffer (SP-1).
+type RemoteOfferGetter interface {
+	GetByID(id uint64) (*model.RemoteOTCOffer, error)
+}
+
+// WithRemoteOffers wires the persistent cross-bank remote-offer mirror plus
+// this bank's 3-digit code so GetOffer can resolve a non-local offer id to a
+// peer-bank listing and stamp provenance on local offers (SP-1). ownRouting
+// (the int form of OWN_BANK_CODE) is taken from WithPeerContracts; pass the
+// bank code string here so local offers can also carry bank_code.
+func (h *OTCOptionsHandler) WithRemoteOffers(g RemoteOfferGetter, ownBankCode string) *OTCOptionsHandler {
+	cp := *h
+	cp.remoteOffers = g
+	cp.ownBankCode = ownBankCode
 	return &cp
 }
 
@@ -194,13 +219,34 @@ func (h *OTCOptionsHandler) computeUnread(o *model.OTCOffer, callerID int64, cal
 	return o.UpdatedAt.After(rec.LastSeenUpdatedAt)
 }
 
+// GetOffer resolves an OTC offer by id, converging local + remote in the
+// service layer (SP-1). A local OTCOffer is returned with kind="local" plus
+// this bank's routing/bank-code provenance and me_owner. When the id is not a
+// local offer, it falls back to the persistent cross-bank mirror and returns a
+// kind="remote" projection (me_owner is always false; remote listings are
+// hosted by a peer). NotFound only when neither a local nor a remote row
+// exists.
 func (h *OTCOptionsHandler) GetOffer(ctx context.Context, in *stockpb.GetOTCOfferRequest) (*stockpb.OTCOfferDetailResponse, error) {
 	o, revs, err := h.svc.GetOffer(in.OfferId, in.ActorUserId, in.ActorSystemType)
 	if err != nil {
+		// Local offer doesn't exist — try the cross-bank mirror before 404.
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if remote, rerr := h.resolveRemoteOffer(in.OfferId); rerr == nil {
+				return remote, nil
+			}
+		}
 		return nil, mapOTCErr(err)
 	}
+	offer := h.withOfferMarketRef(o, toOTCOfferProto(o, false))
+	offer.Kind = "local"
+	offer.RoutingNumber = h.ownRouting
+	offer.BankCode = h.ownBankCode
+	offer.MeOwner = otcMeOwner(
+		in.GetActingOwnerType(), in.GetActingOwnerId(),
+		"local", sellerIDForOwner(o.InitiatorOwnerType, o.InitiatorOwnerID),
+	)
 	out := &stockpb.OTCOfferDetailResponse{
-		Offer:     h.withOfferMarketRef(o, toOTCOfferProto(o, false)),
+		Offer:     offer,
 		Revisions: make([]*stockpb.OTCOfferRevisionItem, 0, len(revs)),
 	}
 	for _, r := range revs {
@@ -216,6 +262,42 @@ func (h *OTCOptionsHandler) GetOffer(ctx context.Context, in *stockpb.GetOTCOffe
 		})
 	}
 	return out, nil
+}
+
+// resolveRemoteOffer builds an OTCOfferDetailResponse from the persistent
+// cross-bank mirror for a non-local offer id. Returns gorm.ErrRecordNotFound
+// when the mirror is unwired or has no such row, so the caller can surface a
+// plain 404. Remote offers carry no local revision chain.
+func (h *OTCOptionsHandler) resolveRemoteOffer(id uint64) (*stockpb.OTCOfferDetailResponse, error) {
+	if h.remoteOffers == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	m, err := h.remoteOffers.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	return &stockpb.OTCOfferDetailResponse{
+		Offer: &stockpb.OTCOfferResponse{
+			Id:             m.ID,
+			Kind:           "remote",
+			RoutingNumber:  m.PeerRoutingNumber,
+			BankCode:       m.BankCode,
+			Direction:      m.Direction,
+			StockTicker:    m.Ticker,
+			Quantity:       strconv.FormatInt(m.Amount, 10),
+			StrikePrice:    m.StrikePrice.String(),
+			Premium:        m.Premium.String(),
+			SettlementDate: m.SettlementDate,
+			Status:         m.Status,
+			CreatedAt:      m.PeerCreatedAt,
+			MeOwner:        false,
+			Initiator: &stockpb.PartyRef{
+				DisplayName: m.SellerID,
+				BankCode:    m.BankCode,
+			},
+		},
+		Revisions: nil,
+	}, nil
 }
 
 func (h *OTCOptionsHandler) CounterOffer(ctx context.Context, in *stockpb.CounterOTCOfferRequest) (*stockpb.OTCOfferResponse, error) {
