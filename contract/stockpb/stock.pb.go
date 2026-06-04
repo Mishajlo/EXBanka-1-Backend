@@ -9177,8 +9177,26 @@ type OTCNegotiationResponse struct {
 	// terminal status, or accepted but formation saga failed). Non-zero
 	// only on status="accepted" rows where the contract formed successfully.
 	MintedContractId uint64 `protobuf:"varint,17,opt,name=minted_contract_id,json=mintedContractId,proto3" json:"minted_contract_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// SP-1 unified-list provenance. ListMyNegotiations merges the caller's
+	// LOCAL (intra-bank) and REMOTE (cross-bank peer) negotiation chains
+	// into one list; each item carries where it lives and whether the
+	// caller is the parent listing's poster/seller.
+	//
+	//	kind            — "local" | "remote"
+	//	routing_number  — owning bank's routing (own for local; the
+	//	                  counterparty/peer bank's for remote)
+	//	bank_code       — owning bank's 3-digit code (own for local;
+	//	                  the peer bank's for remote)
+	//	me_owner        — true ONLY when the caller is the parent offer's
+	//	                  poster/seller (someone is bidding on MY listing);
+	//	                  a chain the caller opened AS the bidder is false.
+	//	                  For remote: true iff WE host the seller side.
+	Kind          string `protobuf:"bytes,18,opt,name=kind,proto3" json:"kind,omitempty"`
+	RoutingNumber int64  `protobuf:"varint,19,opt,name=routing_number,json=routingNumber,proto3" json:"routing_number,omitempty"`
+	BankCode      string `protobuf:"bytes,20,opt,name=bank_code,json=bankCode,proto3" json:"bank_code,omitempty"`
+	MeOwner       bool   `protobuf:"varint,21,opt,name=me_owner,json=meOwner,proto3" json:"me_owner,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *OTCNegotiationResponse) Reset() {
@@ -9328,6 +9346,34 @@ func (x *OTCNegotiationResponse) GetMintedContractId() uint64 {
 		return x.MintedContractId
 	}
 	return 0
+}
+
+func (x *OTCNegotiationResponse) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *OTCNegotiationResponse) GetRoutingNumber() int64 {
+	if x != nil {
+		return x.RoutingNumber
+	}
+	return 0
+}
+
+func (x *OTCNegotiationResponse) GetBankCode() string {
+	if x != nil {
+		return x.BankCode
+	}
+	return ""
+}
+
+func (x *OTCNegotiationResponse) GetMeOwner() bool {
+	if x != nil {
+		return x.MeOwner
+	}
+	return false
 }
 
 // OTCNegotiationRevisionResponse is one entry in the revision chain.
@@ -20362,7 +20408,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	"employeeId\x12\x1b\n" +
 	"\tfull_name\x18\x02 \x01(\tR\bfullName\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12.\n" +
-	"\x13realized_profit_rsd\x18\x04 \x01(\tR\x11realizedProfitRsd\"\x86\x05\n" +
+	"\x13realized_profit_rsd\x18\x04 \x01(\tR\x11realizedProfitRsd\"\xf9\x05\n" +
 	"\x16OTCNegotiationResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12&\n" +
 	"\x0fparent_offer_id\x18\x02 \x01(\x04R\rparentOfferId\x12*\n" +
@@ -20383,7 +20429,11 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\x0f \x01(\tR\tupdatedAt\x12\x18\n" +
 	"\aversion\x18\x10 \x01(\x03R\aversion\x12,\n" +
-	"\x12minted_contract_id\x18\x11 \x01(\x04R\x10mintedContractId\"\xa7\x03\n" +
+	"\x12minted_contract_id\x18\x11 \x01(\x04R\x10mintedContractId\x12\x12\n" +
+	"\x04kind\x18\x12 \x01(\tR\x04kind\x12%\n" +
+	"\x0erouting_number\x18\x13 \x01(\x03R\rroutingNumber\x12\x1b\n" +
+	"\tbank_code\x18\x14 \x01(\tR\bbankCode\x12\x19\n" +
+	"\bme_owner\x18\x15 \x01(\bR\ameOwner\"\xa7\x03\n" +
 	"\x1eOTCNegotiationRevisionResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12%\n" +
 	"\x0enegotiation_id\x18\x02 \x01(\x04R\rnegotiationId\x12'\n" +

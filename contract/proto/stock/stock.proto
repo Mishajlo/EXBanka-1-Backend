@@ -1294,6 +1294,23 @@ message OTCNegotiationResponse {
   // terminal status, or accepted but formation saga failed). Non-zero
   // only on status="accepted" rows where the contract formed successfully.
   uint64 minted_contract_id          = 17;
+  // SP-1 unified-list provenance. ListMyNegotiations merges the caller's
+  // LOCAL (intra-bank) and REMOTE (cross-bank peer) negotiation chains
+  // into one list; each item carries where it lives and whether the
+  // caller is the parent listing's poster/seller.
+  //   kind            — "local" | "remote"
+  //   routing_number  — owning bank's routing (own for local; the
+  //                     counterparty/peer bank's for remote)
+  //   bank_code       — owning bank's 3-digit code (own for local;
+  //                     the peer bank's for remote)
+  //   me_owner        — true ONLY when the caller is the parent offer's
+  //                     poster/seller (someone is bidding on MY listing);
+  //                     a chain the caller opened AS the bidder is false.
+  //                     For remote: true iff WE host the seller side.
+  string kind                        = 18;
+  int64  routing_number              = 19;
+  string bank_code                   = 20;
+  bool   me_owner                    = 21;
 }
 
 // OTCNegotiationRevisionResponse is one entry in the revision chain.

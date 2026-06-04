@@ -346,8 +346,8 @@ func (h *OTCOptionsHandler) CancelMyListing(c *gin.Context) {
 }
 
 // ListMyNegotiations godoc
-// @Summary      List the caller's OTC option negotiation chains
-// @Description  Returns chains where the caller is the bidder. Filter with `?statuses=open,countered,accepted,rejected,cancelled,expired`.
+// @Summary      List the caller's OTC option negotiation chains (local + remote, merged)
+// @Description  Returns a unified list of the caller's LOCAL (intra-bank bidder) and REMOTE (cross-bank peer) negotiation chains. Each item carries `kind` (local|remote), `routing_number`/`bank_code` provenance, and `me_owner` (true only when the caller is the parent listing's poster/seller). Filter with `?statuses=open,countered,accepted,rejected,cancelled,expired` (applied to both sets).
 // @Tags         OTCOptions
 // @Security     BearerAuth
 // @Produce      json

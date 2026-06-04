@@ -10,12 +10,15 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"strconv"
 	"time"
 
 	"github.com/shopspring/decimal"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	contractsitx "github.com/exbanka/contract/sitx"
 	stockpb "github.com/exbanka/contract/stockpb"
 	"github.com/exbanka/stock-service/internal/model"
 	"github.com/exbanka/stock-service/internal/service"
@@ -360,6 +363,25 @@ func (h *OTCOptionsHandler) CancelListing(ctx context.Context, in *stockpb.Cance
 	}, nil
 }
 
+// ListMyNegotiations merges the caller's LOCAL (intra-bank) and REMOTE
+// (cross-bank peer) negotiation chains into one list, stamping provenance
+// (kind / routing_number / bank_code) and me_owner on every item (SP-1
+// Task 7). The gateway is a uniform passthrough — it forwards the merged
+// list and the new fields flow through automatically.
+//
+// me_owner = "I posted/originated the parent listing", NOT "I'm a party".
+// A bidder is never an owner. For LOCAL chains, ListMyNegotiations returns
+// only the caller's BIDDER chains (the poster sees their chains via the
+// per-listing path), so me_owner is always false there. For REMOTE chains,
+// me_owner is true only when WE host the seller/poster side (the row's
+// seller routing == our own routing).
+//
+// Paging: page/page_size apply to the LOCAL set only (the repository
+// paginates it). Remote rows are appended in full after the local page —
+// they are never silently truncated. total reflects the local total only,
+// matching the local pagination semantics; the merged slice length may
+// exceed it by the remote count. This is a deliberate "don't drop remote"
+// choice; unified cross-source paging is out of scope for SP-1.
 func (h *OTCOptionsHandler) ListMyNegotiations(ctx context.Context, in *stockpb.ListMyNegotiationsRequest) (*stockpb.ListNegotiationsResponse, error) {
 	if h.negotiations == nil {
 		return nil, status.Error(codes.Unimplemented, "OTCNegotiationService not wired")
@@ -376,10 +398,106 @@ func (h *OTCOptionsHandler) ListMyNegotiations(ctx context.Context, in *stockpb.
 	if err != nil {
 		return nil, err
 	}
+
+	out := make([]*stockpb.OTCNegotiationResponse, 0, len(rows))
+	for i := range rows {
+		item := negToProto(&rows[i])
+		// LOCAL provenance. These are bidder chains (the service returns
+		// only chains where the caller is the bidder), so me_owner is
+		// false by the strict rule — a bidder is not an owner.
+		item.Kind = "local"
+		item.RoutingNumber = h.ownRouting
+		item.BankCode = h.ownBankCode
+		item.MeOwner = false
+		out = append(out, item)
+	}
+
+	// REMOTE merge — cross-bank peer negotiations where the caller is a
+	// party. Only meaningful for client principals (cross-bank party ids
+	// are "client-<N>"); employees acting as the bank have no cross-bank
+	// negotiation identity here.
+	if h.peerNegs != nil && ot == model.OwnerClient && oid != nil {
+		principal := "client-" + strconv.FormatUint(*oid, 10)
+		peerRows, perr := h.peerNegs.ListByClient(h.ownRouting, principal, "")
+		if perr != nil {
+			return nil, status.Errorf(codes.Internal, "list peer negotiations: %v", perr)
+		}
+		statusFilter := statusSet(in.GetStatuses())
+		for i := range peerRows {
+			item := peerNegToProto(&peerRows[i], h.ownRouting)
+			if item == nil {
+				continue
+			}
+			if statusFilter != nil {
+				if _, ok := statusFilter[item.GetStatus()]; !ok {
+					continue
+				}
+			}
+			out = append(out, item)
+		}
+	}
+
 	return &stockpb.ListNegotiationsResponse{
-		Negotiations: negsToProto(rows),
+		Negotiations: out,
 		Total:        total,
 	}, nil
+}
+
+// statusSet builds a lookup set from the request's status filter, or nil
+// when no filter was supplied (all statuses pass).
+func statusSet(statuses []string) map[string]struct{} {
+	if len(statuses) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(statuses))
+	for _, s := range statuses {
+		set[s] = struct{}{}
+	}
+	return set
+}
+
+// peerNegToProto maps a cross-bank peer-negotiation mirror row onto the
+// unified OTCNegotiationResponse wire shape (SP-1 Task 7).
+//
+//   - Id is the local surrogate primary key of the mirror row (so callers
+//     can correlate within THIS bank's namespace).
+//   - kind = "remote"; routing_number + bank_code identify the
+//     COUNTERPARTY/peer bank — the side WE do NOT host. When we host the
+//     buyer, the counterparty is the seller's bank; when we host the
+//     seller, the counterparty is the buyer's bank.
+//   - terms are read from the parsed sitx.OtcOffer carried in OfferJSON.
+//   - me_owner = WE host the seller/poster side = SellerRoutingNumber
+//     == our own routing — i.e. someone is bidding on a listing we host.
+func peerNegToProto(row *model.PeerOtcNegotiation, ownRouting int64) *stockpb.OTCNegotiationResponse {
+	if row == nil {
+		return nil
+	}
+	var offer contractsitx.OtcOffer
+	_ = json.Unmarshal([]byte(row.OfferJSON), &offer)
+
+	meOwner := row.SellerRoutingNumber == ownRouting
+	// The counterparty is the side we do NOT host. If we host the seller,
+	// the peer bank is the buyer's; otherwise the peer is the seller's.
+	peerRouting := row.SellerRoutingNumber
+	if meOwner {
+		peerRouting = row.BuyerRoutingNumber
+	}
+	peerBankCode := strconv.FormatInt(peerRouting, 10)
+
+	return &stockpb.OTCNegotiationResponse{
+		Id:             row.ID,
+		Quantity:       strconv.FormatInt(offer.Amount, 10),
+		StrikePrice:    offer.PricePerStock.String(),
+		Premium:        offer.Premium.String(),
+		SettlementDate: offer.SettlementDate,
+		Status:         row.Status,
+		CreatedAt:      row.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:      row.UpdatedAt.UTC().Format(time.RFC3339),
+		Kind:           "remote",
+		RoutingNumber:  peerRouting,
+		BankCode:       peerBankCode,
+		MeOwner:        meOwner,
+	}
 }
 
 func (h *OTCOptionsHandler) ListNegotiationRevisions(ctx context.Context, in *stockpb.ListNegotiationRevisionsRequest) (*stockpb.ListNegotiationRevisionsResponse, error) {

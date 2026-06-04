@@ -972,7 +972,8 @@ func main() {
 		WithPeerContracts(peerOptionRepo, ownRouting).
 		WithRatings(ratingSvc).
 		WithNegotiations(otcNegotiationSvc).
-		WithRemoteOffers(remoteOfferRepo, cfg.OwnBankCode)
+		WithRemoteOffers(remoteOfferRepo, cfg.OwnBankCode).
+		WithPeerNegotiations(peerOtcRepo) // SP-1 Task 7: unified local+remote negotiation list
 
 	// Phase 3: OTC stocks marketplace (sell + buy direction). The
 	// service uses narrow OTCStockListingResolver + OTCStockAccountClient

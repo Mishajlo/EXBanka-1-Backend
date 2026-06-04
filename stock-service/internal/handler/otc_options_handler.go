@@ -43,6 +43,28 @@ type OTCOptionsHandler struct {
 	// stamped as provenance on local offers.
 	remoteOffers RemoteOfferGetter
 	ownBankCode  string
+	// peerNegs is optional; the cross-bank peer-negotiation mirror used by
+	// ListMyNegotiations to merge the caller's REMOTE chains into the same
+	// list as the LOCAL ones (SP-1 Task 7). When unset, ListMyNegotiations
+	// returns local chains only.
+	peerNegs PeerNegotiationLister
+}
+
+// PeerNegotiationLister fetches the caller's cross-bank negotiation mirror
+// rows. ListMyNegotiations merges these REMOTE chains with the LOCAL ones.
+// Satisfied by *repository.PeerOtcNegotiationRepository.
+type PeerNegotiationLister interface {
+	ListByClient(ownRouting int64, clientPrincipal, role string) ([]model.PeerOtcNegotiation, error)
+}
+
+// WithPeerNegotiations wires the cross-bank peer-negotiation mirror so
+// ListMyNegotiations returns a unified local+remote list (SP-1 Task 7).
+// ownRouting and ownBankCode come from WithPeerContracts / WithRemoteOffers;
+// this method only adds the peer-negotiation source.
+func (h *OTCOptionsHandler) WithPeerNegotiations(p PeerNegotiationLister) *OTCOptionsHandler {
+	cp := *h
+	cp.peerNegs = p
+	return &cp
 }
 
 func NewOTCOptionsHandler(svc *service.OTCOfferService, contracts *repository.OptionContractRepository) *OTCOptionsHandler {

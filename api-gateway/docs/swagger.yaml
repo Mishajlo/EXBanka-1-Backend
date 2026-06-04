@@ -9167,7 +9167,11 @@ paths:
       - OTCOptions
   /api/v3/me/otc/options/negotiations:
     get:
-      description: Returns chains where the caller is the bidder. Filter with `?statuses=open,countered,accepted,rejected,cancelled,expired`.
+      description: Returns a unified list of the caller's LOCAL (intra-bank bidder)
+        and REMOTE (cross-bank peer) negotiation chains. Each item carries `kind`
+        (local|remote), `routing_number`/`bank_code` provenance, and `me_owner` (true
+        only when the caller is the parent listing's poster/seller). Filter with `?statuses=open,countered,accepted,rejected,cancelled,expired`
+        (applied to both sets).
       parameters:
       - description: comma-separated; omit for all
         in: query
@@ -9191,7 +9195,7 @@ paths:
             type: object
       security:
       - BearerAuth: []
-      summary: List the caller's OTC option negotiation chains
+      summary: List the caller's OTC option negotiation chains (local + remote, merged)
       tags:
       - OTCOptions
   /api/v3/me/otc/options/negotiations/{nid}/revisions:

@@ -8349,17 +8349,40 @@ Entries are ordered by `created_at ASC`; ties break by `(negotiation_id, revisio
 
 #### GET /api/v3/me/otc/options/negotiations
 
-List chains where the caller is the bidder.
+Returns a **unified list** of the caller's negotiation chains — both LOCAL
+(intra-bank chains where the caller is the bidder) and REMOTE (cross-bank
+peer chains where the caller is a party) — merged into one `negotiations`
+array. Each item carries provenance (`kind` / `routing_number` /
+`bank_code`) plus `me_owner`. (SP-1 Task 7)
 
 **Query Parameters:**
 
 | Parameter | Type | Description |
 |---|---|---|
-| `statuses` | string | Comma-separated filter: `open,countered,accepted,rejected,cancelled,expired` |
+| `statuses` | string | Comma-separated filter: `open,countered,accepted,rejected,cancelled,expired` (applied to both local and remote items) |
 | `page` | int | Default 1 |
 | `page_size` | int | Default 20, max 200 |
 
-**`OTCNegotiationResponse` shape:** includes a `minted_contract_id` field (uint64, 0 when absent) populated on `status=accepted` rows that successfully minted a contract.
+**`OTCNegotiationResponse` shape:** in addition to the existing fields and
+`minted_contract_id` (uint64, 0 when absent; populated on `status=accepted`
+rows that successfully minted a contract), every item now carries:
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` | string | `local` (intra-bank chain) or `remote` (cross-bank peer chain) |
+| `routing_number` | int64 | Owning bank's routing. For `local`: our own routing. For `remote`: the COUNTERPARTY/peer bank's routing (the side we do not host). |
+| `bank_code` | string | Owning/peer bank's code, matching `routing_number`. |
+| `me_owner` | bool | `true` ONLY when the caller is the parent listing's poster/seller (someone is bidding on MY listing). A chain the caller opened **as the bidder** is `false`. For `remote`: `true` iff WE host the seller/poster side (`seller_routing == own_routing`). |
+
+For `remote` items, `id` is the **local surrogate primary key** of this
+bank's peer-negotiation mirror row (so callers correlate within this
+bank's id namespace), and the terms (`quantity`, `strike_price`, `premium`,
+`settlement_date`, `status`) are projected from the mirrored cross-bank
+offer.
+
+**Paging note:** `page`/`page_size` paginate the LOCAL set; REMOTE chains
+are appended in full after the local page (never silently truncated).
+`total` reflects the local total only.
 
 ---
 
