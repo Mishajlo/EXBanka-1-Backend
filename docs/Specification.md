@@ -1615,8 +1615,9 @@ Six global changelog read endpoints. All require `admin.audit.view` (EmployeeAdm
 | GET | `/api/v3/admin/audit/loans-changelog` | `admin.audit.view` | AdminAuditHandler.ListLoansChangelog | Global changelog from credit-service |
 | GET | `/api/v3/admin/audit/employees-changelog` | `admin.audit.view` | AdminAuditHandler.ListEmployeesChangelog | Global changelog from user-service |
 | GET | `/api/v3/admin/audit/cron-actions` | `admin.audit.view` | AdminAuditHandler.ListCronActions | Admin cron-action audit log from notification-service |
+| GET | `/api/v3/admin/audit/business-actions` | `admin.audit.view` | AdminAuditHandler.ListBusinessActions | Business-action audit log from notification-service (SP2 — 2026-06-04) |
 
-Response shape: `{entries: [...], total, page, page_size}`. Changelog entries carry `{id, entity_type, entity_id, action, field_name, old_value, new_value, actor_id, timestamp, reason}`. Cron-action entries carry `{id, action, service, cron_name, employee_id, reason, timestamp}`.
+Response shape: `{entries: [...], total, page, page_size}`. Changelog entries carry `{id, entity_type, entity_id, action, field_name, old_value, new_value, actor_id, timestamp, reason}`. Cron-action entries carry `{id, action, service, cron_name, employee_id, reason, timestamp}`. Business-action entries carry `{id, action, actor_id, target_type, target_id, detail, timestamp}` and filter by `action` (`limit.set`|`limit.used_reset`|`order.approve`|`order.decline`|`permissions.set`|`tax.collect`), `target_type` (`employee`|`order`|`role`|`tax`), `actor_id`, and date range. The gateway publishes a `BusinessAuditActionMessage` to `admin.business-action` (actor from JWT) after each audited action succeeds (best-effort); notification-service records it into `business_audit_logs`.
 
 ---
 
@@ -2134,6 +2135,18 @@ Reason(string,size:512),
 Timestamp(time.Time,not null,indexed)
 TableName: admin_audit_logs
 ```
+
+**BusinessAuditLog** (SP2 — 2026-06-04) — Audit trail for high-value business actions (limit changes, usedLimit resets, order approve/reject, permission changes, manual tax collection), stored in `notification-service`'s `notification_db`. Fed by the `admin.business-action` Kafka topic published by the api-gateway (actor known from JWT).
+```
+ID(uint64,PK,autoIncrement),
+Action(string,size:32,not null,indexed),      -- limit.set|limit.used_reset|order.approve|order.decline|permissions.set|tax.collect
+ActorID(int64,not null,indexed),              -- employee who performed the action
+TargetType(string,size:32,not null,indexed),  -- employee|order|role|tax
+TargetID(string,size:64,not null,indexed),
+Detail(string,size:512),                      -- human-readable new value / outcome
+Timestamp(time.Time,not null,indexed)
+TableName: business_audit_logs
+```
 Written by the notification-service `admin_audit_consumer` consuming `admin.cron-action` Kafka events published by the api-gateway after each Trigger/Pause/Resume action.
 
 ---
@@ -2206,6 +2219,7 @@ Written by the notification-service `admin_audit_consumer` consuming `admin.cron
 | `credit.saga-dead-letter` | credit-service | (monitoring/alerting) | Failed loan saga events that exceeded all retries (disbursement, installment failures). |
 | `stock.saga-dead-letter` | stock-service | (monitoring/alerting) | Failed stock/OTC saga events that exceeded all retries (OTC exercises, recurring-order failures). |
 | `admin.cron-action` | api-gateway | notification-service | `AdminCronActionMessage` — published after each Trigger/Pause/Resume admin cron action; consumed by notification-service to persist audit log rows (C6/C10/C11 — 2026-05-28) |
+| `admin.business-action` | api-gateway | notification-service | `BusinessAuditActionMessage` — published (best-effort, actor from JWT) after a limit change, usedLimit reset, order approve/reject, permission change, or manual tax collection; consumed by notification-service to persist `business_audit_logs` rows (SP2 — 2026-06-04) |
 
 ### General Notification Types
 

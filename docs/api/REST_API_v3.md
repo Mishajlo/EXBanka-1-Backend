@@ -9110,6 +9110,46 @@ Response shape:
 }
 ```
 
+**GET /api/v3/admin/audit/business-actions**
+
+Returns the business-action audit log — who changed an employee/actuary limit, reset a usedLimit, approved/rejected an order, changed role/employee permissions, or triggered manual tax collection — persisted by notification-service. The actor is the JWT principal who performed the action.
+
+- Authentication: Bearer token (employee only)
+- Permission: `admin.audit.view`
+
+Query parameters (all optional):
+
+| Param | Type | Notes |
+|---|---|---|
+| `page` | int | default 1 |
+| `page_size` | int | default 50, max 200 |
+| `since` | string | `YYYY-MM-DD` inclusive lower bound |
+| `until` | string | `YYYY-MM-DD` inclusive upper bound |
+| `actor_id` | int | filter by actor employee id |
+| `action` | string | `limit.set` \| `limit.used_reset` \| `order.approve` \| `order.decline` \| `permissions.set` \| `tax.collect` |
+| `target_type` | string | `employee` \| `order` \| `role` \| `tax` |
+
+Response shape:
+
+```json
+{
+  "entries": [
+    {
+      "id": 1,
+      "action": "limit.set",
+      "actor_id": 5,
+      "target_type": "employee",
+      "target_id": "9",
+      "detail": "max_single=5000 max_daily=20000 ...",
+      "timestamp": "2026-06-04T10:00:00Z"
+    }
+  ],
+  "total": 7,
+  "page": 1,
+  "page_size": 50
+}
+```
+
 **GET /api/v3/admin/audit/saga-logs**
 
 Returns transaction-service saga execution logs (transfer/payment forward + compensation steps), so an admin can review saga history and stuck/compensating flows.
