@@ -5702,11 +5702,13 @@ participant id as `display_name` plus the side's routing number as `bank_code`.
 
 **Paging note:** `page`/`page_size` paginate the LOCAL set; REMOTE contracts
 are appended in full after the local page (never silently truncated). `total`
-reflects the local total only; `peer_total` reflects the remote total. The
-legacy `peer_contracts[]` array is still returned (back-compat) carrying the
-same remote rows in their original `PeerOptionContractResponse` shape — new
-clients should prefer the unified `contracts[]` and switch on each item's
-`kind`.
+reflects the local total only.
+
+**Breaking change (SP-1 double-listing fix):** `peer_contracts[]` and
+`peer_total` are **no longer returned**. Remote contracts now appear exclusively
+in the unified `contracts[]` with `kind="remote"`. This matches the pattern
+used by `GET /api/v3/me/otc/negotiations` which has always returned one merged
+list.
 
 **Note:** the remote merge is gated to **client** principals (cross-bank
 participant ids are `client-<N>`); an employee acting as the bank skips the
@@ -5732,7 +5734,7 @@ a `kind="remote"` projection with `me_owner` = (`direction == "CREDIT"`).
 
 Status of a **cross-bank** OTC trade's underlying SI-TX transaction, resolved via `PeerTxService.GetTxStatus`. The `:txid` accepts either id a client may hold:
 - the bare idem returned in a dispatch's `poll_url`; or
-- a cross-bank contract's **`crossbank_tx_id`** (form `"<peerCode>:<idem>"`), which `GET /api/v3/me/otc/contracts` already returns on every `peer_contracts[]` entry.
+- a cross-bank contract's **`crossbank_tx_id`** (form `"<peerCode>:<idem>"`), which `GET /api/v3/me/otc/contracts` returns for every `kind=remote` entry in the unified `contracts[]`.
 
 The composite form is split into `(caller_peer_bank_code, transaction_id)` so the status resolves on **both** banks — the dispatching (sender) bank via its outbound row, the receiving bank via its inbound idempotence record. So a client can read their cross-bank contracts and poll each one's status directly, no extra plumbing. The id is only known to the trade's parties, so holding it authorizes reading its status.
 

@@ -190,9 +190,10 @@ func TestListMyContracts_RemoteCreditWeHoldBuyer(t *testing.T) {
 	if got.GetStockTicker() != "ACME" {
 		t.Errorf("stock_ticker = %q want ACME", got.GetStockTicker())
 	}
-	// PeerContracts kept populated for backward compatibility.
-	if resp.GetPeerTotal() != 1 || len(resp.GetPeerContracts()) != 1 {
-		t.Errorf("peer_contracts not populated for back-compat: total=%d len=%d", resp.GetPeerTotal(), len(resp.GetPeerContracts()))
+	// PeerContracts/PeerTotal are no longer populated (SP-1 double-listing fix).
+	// Remote contracts appear only in the unified Contracts[] with kind=remote.
+	if resp.GetPeerTotal() != 0 || len(resp.GetPeerContracts()) != 0 {
+		t.Errorf("peer_contracts must be empty (remote rows already in contracts[]): total=%d len=%d", resp.GetPeerTotal(), len(resp.GetPeerContracts()))
 	}
 }
 

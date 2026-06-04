@@ -394,8 +394,9 @@ func (h *OTCOptionsHandler) RejectOffer(ctx context.Context, in *stockpb.RejectO
 // Paging: the LOCAL list is paged via the repository (page/page_size). The
 // REMOTE list is fetched with the same page/page_size and APPENDED in full
 // after the local page — it is not interleaved or globally re-paged. Total
-// counts the local matches; PeerTotal counts the remote matches (kept for
-// backward compatibility — clients can rely on the per-item `kind` instead).
+// counts the local matches. Clients should rely on the per-item `kind` field
+// to distinguish local vs remote; PeerContracts/PeerTotal are no longer
+// populated (the unified Contracts[] is the single source of truth).
 func (h *OTCOptionsHandler) ListMyContracts(ctx context.Context, in *stockpb.ListMyContractsRequest) (*stockpb.ListContractsResponse, error) {
 	if h.contracts == nil {
 		return &stockpb.ListContractsResponse{}, nil
@@ -423,19 +424,17 @@ func (h *OTCOptionsHandler) ListMyContracts(ctx context.Context, in *stockpb.Lis
 	// surface elsewhere). page/page_size pass through unchanged so the
 	// peer list paginates the same way as the intra-bank list. Remote rows
 	// are mapped onto OptionContractResponse (kind="remote") and APPENDED to
-	// the same Contracts list so clients see one merged feed; PeerContracts
-	// is also populated for backward compatibility.
+	// the same Contracts list so clients see one merged feed.
+	// PeerContracts/PeerTotal are intentionally NOT populated — the unified
+	// Contracts[] is the single source of truth (SP-1 double-listing fix).
 	if h.peerContracts != nil && ownerType == model.OwnerClient && ownerID != nil {
 		participantID := "client-" + strconv.FormatUint(*ownerID, 10)
-		peerRows, peerTotal, perr := h.peerContracts.ListByLocalParticipant(participantID, h.ownRouting, in.Role, int(in.Page), int(in.PageSize))
+		peerRows, _, perr := h.peerContracts.ListByLocalParticipant(participantID, h.ownRouting, in.Role, int(in.Page), int(in.PageSize))
 		if perr != nil {
 			return nil, status.Errorf(codes.Internal, "list peer contracts: %v", perr)
 		}
-		out.PeerContracts = make([]*stockpb.PeerOptionContractResponse, 0, len(peerRows))
-		out.PeerTotal = peerTotal
 		for i := range peerRows {
 			out.Contracts = append(out.Contracts, peerContractToUnifiedProto(&peerRows[i]))
-			out.PeerContracts = append(out.PeerContracts, peerContractToProto(&peerRows[i]))
 		}
 	}
 

@@ -367,7 +367,7 @@ func (h *OTCOptionsHandler) RejectOffer(c *gin.Context) {
 
 // ListMyContracts godoc
 // @Summary      List the caller's OTC contracts (unified local + remote)
-// @Description  Returns the caller's formed option contracts, LOCAL and REMOTE merged into one contracts[] array. Each item carries kind/routing_number/bank_code and me_owner (true when the caller is the buyer/holder). peer_contracts[] is still returned for backward compatibility. (SP-1 Task 8)
+// @Description  Returns the caller's formed option contracts, LOCAL and REMOTE merged into one contracts[] array. Each item carries kind/routing_number/bank_code and me_owner (true when the caller is the buyer/holder). peer_contracts[] has been removed — remote contracts appear in contracts[] with kind=remote. (SP-1 Task 8)
 // @Tags         OTCOptions
 // @Security     BearerAuth
 // @Produce      json
@@ -391,10 +391,8 @@ func (h *OTCOptionsHandler) ListMyContracts(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"contracts":      resp.Contracts,
-		"total":          resp.Total,
-		"peer_contracts": resp.PeerContracts,
-		"peer_total":     resp.PeerTotal,
+		"contracts": resp.Contracts,
+		"total":     resp.Total,
 	})
 }
 
