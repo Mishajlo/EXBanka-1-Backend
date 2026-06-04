@@ -304,6 +304,7 @@ func (h *OTCHandler) ListUnifiedOptionOffers(ctx context.Context, req *pb.ListUn
 			BestBid:           o.BestBid,
 			BestAsk:           o.BestAsk,
 			ActiveChainsCount: o.ActiveChainsCount,
+			LocalId:           o.LocalID,
 		})
 	}
 	var lastRefreshUnix int64

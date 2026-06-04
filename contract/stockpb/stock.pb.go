@@ -6106,8 +6106,12 @@ type UnifiedOptionOffer struct {
 	BestBid           string `protobuf:"bytes,16,opt,name=best_bid,json=bestBid,proto3" json:"best_bid,omitempty"`
 	BestAsk           string `protobuf:"bytes,17,opt,name=best_ask,json=bestAsk,proto3" json:"best_ask,omitempty"`
 	ActiveChainsCount int32  `protobuf:"varint,18,opt,name=active_chains_count,json=activeChainsCount,proto3" json:"active_chains_count,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Stable local surrogate id for this offer (RemoteOTCOffer.ID for remote;
+	// equals the numeric offer_id for local). The frontend addresses any
+	// offer — local or remote — by this id on the unified routes. (SP-1)
+	LocalId       uint64 `protobuf:"varint,19,opt,name=local_id,json=localId,proto3" json:"local_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UnifiedOptionOffer) Reset() {
@@ -6262,6 +6266,13 @@ func (x *UnifiedOptionOffer) GetBestAsk() string {
 func (x *UnifiedOptionOffer) GetActiveChainsCount() int32 {
 	if x != nil {
 		return x.ActiveChainsCount
+	}
+	return 0
+}
+
+func (x *UnifiedOptionOffer) GetLocalId() uint64 {
+	if x != nil {
+		return x.LocalId
 	}
 	return 0
 }
@@ -19974,7 +19985,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	"peersTotal\x12#\n" +
 	"\rpeers_reached\x18\x04 \x01(\x05R\fpeersReached\x12\x18\n" +
 	"\apartial\x18\x05 \x01(\bR\apartial\x12*\n" +
-	"\x11last_refresh_unix\x18\x06 \x01(\x03R\x0flastRefreshUnix\"\xd2\x04\n" +
+	"\x11last_refresh_unix\x18\x06 \x01(\x03R\x0flastRefreshUnix\"\xed\x04\n" +
 	"\x12UnifiedOptionOffer\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x1b\n" +
 	"\tbank_code\x18\x02 \x01(\tR\bbankCode\x12%\n" +
@@ -19996,7 +20007,8 @@ const file_stock_stock_proto_rawDesc = "" +
 	"created_at\x18\x0f \x01(\tR\tcreatedAt\x12\x19\n" +
 	"\bbest_bid\x18\x10 \x01(\tR\abestBid\x12\x19\n" +
 	"\bbest_ask\x18\x11 \x01(\tR\abestAsk\x12.\n" +
-	"\x13active_chains_count\x18\x12 \x01(\x05R\x11activeChainsCount\"\xe9\x01\n" +
+	"\x13active_chains_count\x18\x12 \x01(\x05R\x11activeChainsCount\x12\x19\n" +
+	"\blocal_id\x18\x13 \x01(\x04R\alocalId\"\xe9\x01\n" +
 	"\x1eListUnifiedOptionOffersRequest\x12\x16\n" +
 	"\x06ticker\x18\x01 \x01(\tR\x06ticker\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x1b\n" +

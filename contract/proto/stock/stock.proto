@@ -867,6 +867,10 @@ message UnifiedOptionOffer {
   string best_bid             = 16;
   string best_ask             = 17;
   int32  active_chains_count  = 18;
+  // Stable local surrogate id for this offer (RemoteOTCOffer.ID for remote;
+  // equals the numeric offer_id for local). The frontend addresses any
+  // offer — local or remote — by this id on the unified routes. (SP-1)
+  uint64 local_id = 19;
 }
 
 message ListUnifiedOptionOffersRequest {
