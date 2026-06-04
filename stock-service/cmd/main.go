@@ -133,6 +133,10 @@ func main() {
 		// Cross-bank option contracts written at COMMIT_TX time
 		// when transaction-service finalises an OTC accept TX.
 		&model.PeerOptionContract{},
+		// SP-1: persistent mirror of OTC option offers discovered on peer banks.
+		// Gives each remote listing a stable local surrogate id; reconciliation
+		// flips Status open->cancelled when a peer stops listing it.
+		&model.RemoteOTCOffer{},
 		// Outbox: durable queue for Kafka events published from inside
 		// sagas. The drainer goroutine (started below) reads pending rows
 		// and publishes them, so a crash between business commit and
