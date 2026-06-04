@@ -923,7 +923,9 @@ func main() {
 		return out, nil
 	}
 	optionRefresher.WithAggregateBids(cacheAgg)
-	// Now that aggregation is wired, kick off the refresher (gated by cronreg).
+	remoteOfferRepo := repository.NewRemoteOTCOfferRepository(db)
+	optionRefresher = optionRefresher.WithMirror(remoteOfferRepo)
+	// Now that aggregation and mirror are wired, kick off the refresher (gated by cronreg).
 	optionCacheEntry := cronRegistry.Register("option-offer-cache-refresher", "Refreshes unified option offer cache from local + peer banks", 5*time.Second)
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)

@@ -36,6 +36,10 @@ type OptionOffer struct {
 	BankCode      string
 	RoutingNumber int64
 	OfferID       string // local: strconv(uint64); remote: foreign id
+	// LocalID is the stable local surrogate id. For local offers it equals
+	// the numeric OfferID; for remote offers it is the RemoteOTCOffer.ID
+	// minted by the mirror, so the FE addresses any offer by a plain id.
+	LocalID uint64
 
 	SellerID   string // SI-TX-prefixed ("client-<N>" | "bank")
 	SellerName string // local-only display
@@ -74,6 +78,13 @@ type OfferAggregate struct {
 // empty). Implemented in cmd/main.go as a thin adapter over
 // *repository.OTCNegotiationRepository.AggregateActiveBidsByOffer.
 type AggregateActiveBidsFn func(offerIDs []uint64) (map[uint64]OfferAggregate, error)
+
+// RemoteOfferMirror gives remote offers stable surrogate ids and reconciles
+// peer-side cancels. *repository.RemoteOTCOfferRepository satisfies it.
+type RemoteOfferMirror interface {
+	Upsert(o *model.RemoteOTCOffer, seenAt time.Time) (uint64, error)
+	ReconcilePeerNotSeen(peerRouting int64, seenForeignIDs []string) (int64, error)
+}
 
 type OptionSnapshot struct {
 	Offers       []OptionOffer
@@ -147,6 +158,7 @@ type OptionRefresher struct {
 	// enriches each row with best_bid/best_ask/active_chains_count.
 	// nil ⇒ rows stay empty in those fields (legacy mode).
 	aggregateBids AggregateActiveBidsFn
+	mirror        RemoteOfferMirror
 }
 
 func NewOptionRefresher(
@@ -174,6 +186,14 @@ func NewOptionRefresher(
 // the refresher so callers can chain.
 func (r *OptionRefresher) WithAggregateBids(fn AggregateActiveBidsFn) *OptionRefresher {
 	r.aggregateBids = fn
+	return r
+}
+
+// WithMirror wires the persistent remote-offer mirror. When set, each
+// successful peer fetch upserts its remote offers (stamping LocalID) and
+// reconciles that peer's vanished offers to cancelled. nil => legacy mode.
+func (r *OptionRefresher) WithMirror(m RemoteOfferMirror) *OptionRefresher {
+	r.mirror = m
 	return r
 }
 
@@ -276,6 +296,7 @@ func (r *OptionRefresher) fetchLocal() ([]OptionOffer, error) {
 			BankCode:        r.ownBankCode,
 			RoutingNumber:   r.ownRouting,
 			OfferID:         strconv.FormatUint(o.ID, 10),
+			LocalID:         o.ID,
 			SellerID:        composeSellerID(o),
 			SellerName:      "", // OTCOffer carries no display name — UI can resolve via /user/{rid}/{id}
 			Direction:       o.Direction,
@@ -336,11 +357,25 @@ func (r *OptionRefresher) fetchPeer(ctx context.Context, peer *transactionpb.Pee
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, err
 	}
-	out := make([]OptionOffer, 0, len(resp.Offers))
-	for _, o := range resp.Offers {
-		out = append(out, OptionOffer{
+	return r.buildAndMirrorRemoteOffers(peer.GetBankCode(), peerRoutingOf(peer), resp.Offers), nil
+}
+
+// buildAndMirrorRemoteOffers converts a peer's public option offers into
+// unified cache rows, upserting each into the persistent mirror (stamping
+// the stable LocalID) and reconciling that peer's vanished offers to
+// cancelled. Called ONLY after a successful (2xx) peer fetch, so the
+// reconcile never runs on a transport/HTTP error (false-cancel guard).
+// The mirror row is keyed by the POLLED peer's routing so reconcile scope
+// always matches what we upserted.
+func (r *OptionRefresher) buildAndMirrorRemoteOffers(peerBankCode string, peerRouting int64, offers []sitx.PublicOptionOffer) []OptionOffer {
+	now := time.Now().UTC()
+	seen := make([]string, 0, len(offers))
+	out := make([]OptionOffer, 0, len(offers))
+	for i := range offers {
+		o := offers[i]
+		row := OptionOffer{
 			Kind:              "remote",
-			BankCode:          peer.GetBankCode(),
+			BankCode:          peerBankCode,
 			RoutingNumber:     o.OfferID.RoutingNumber,
 			OfferID:           o.OfferID.ID,
 			SellerID:          o.SellerID.ID,
@@ -353,12 +388,53 @@ func (r *OptionRefresher) fetchPeer(ctx context.Context, peer *transactionpb.Pee
 			PremiumCurrency:   o.PremiumCurrency,
 			SettlementDate:    o.SettlementDate,
 			CreatedAt:         o.CreatedAt,
-			BestBid:           o.BestBid,           // empty when peer doesn't publish
-			BestAsk:           o.BestAsk,           // empty when peer doesn't publish
-			ActiveChainsCount: o.ActiveChainsCount, // 0 when peer doesn't publish
-		})
+			BestBid:           o.BestBid,
+			BestAsk:           o.BestAsk,
+			ActiveChainsCount: o.ActiveChainsCount,
+		}
+		if r.mirror != nil {
+			id, err := r.mirror.Upsert(&model.RemoteOTCOffer{
+				PeerRoutingNumber: peerRouting,
+				ForeignOfferID:    o.OfferID.ID,
+				BankCode:          peerBankCode,
+				SellerID:          o.SellerID.ID,
+				Direction:         o.Direction,
+				Ticker:            o.Ticker,
+				Amount:            o.Amount,
+				StrikePrice:       o.StrikePrice,
+				StrikeCurrency:    o.StrikeCurrency,
+				Premium:           o.Premium,
+				PremiumCurrency:   o.PremiumCurrency,
+				SettlementDate:    o.SettlementDate,
+				PeerCreatedAt:     o.CreatedAt,
+			}, now)
+			if err != nil {
+				log.Printf("otccache(options): mirror upsert peer=%s foreign=%s failed: %v", peerBankCode, o.OfferID.ID, err)
+			} else {
+				row.LocalID = id
+				seen = append(seen, o.OfferID.ID)
+			}
+		}
+		out = append(out, row)
 	}
-	return out, nil
+	if r.mirror != nil {
+		if n, err := r.mirror.ReconcilePeerNotSeen(peerRouting, seen); err != nil {
+			log.Printf("otccache(options): reconcile peer=%s failed: %v", peerBankCode, err)
+		} else if n > 0 {
+			log.Printf("otccache(options): reconciled %d cancelled offers from peer=%s", n, peerBankCode)
+		}
+	}
+	return out
+}
+
+// peerRoutingOf returns the polled peer's routing number (SI-TX bank codes
+// are the routing number as a string).
+func peerRoutingOf(peer *transactionpb.PeerBank) int64 {
+	if rn := peer.GetRoutingNumber(); rn != 0 {
+		return rn
+	}
+	n, _ := strconv.ParseInt(peer.GetBankCode(), 10, 64)
+	return n
 }
 
 func (r *OptionRefresher) resolveCurrency(stockID uint64) string {
