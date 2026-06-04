@@ -580,7 +580,15 @@ git commit -m "feat(tax): book buyer lost-premium loss at OTC contract expiry"
 
 ---
 
-## Task 6: Cross-bank (SI-TX) buyer taxation — best-effort, no wire change
+## Task 3 — SUPERSEDED
+
+`CapitalGainRepository.Create` already does `ON CONFLICT (idempotency_key) DO NOTHING` when a key is set (capital_gain_repository.go:30-38), so no separate `CreateIdempotent` is needed. The expiry cron (Task 5) calls `Create` with a deterministic key for free idempotency. No interface/mock changes.
+
+## Task 6: Cross-bank (SI-TX) buyer taxation — DEFERRED (documented gap)
+
+After code inspection this is **deferred**, not implemented: the frozen SI-TX `OptionDescription` wire carries no premium and the peer handler has no price resolver, so `(market−strike)×qty − premium` is uncomputable on the buyer's bank. Recorded in `docs/Bugs.txt` §"Cohort-dependent TODOs" item 5 and the spec §5. Cross-bank sellers remain taxed (unchanged); cross-bank buyers are taxed via eventual stock sale as before (no regression). No code/saga change.
+
+### (original best-effort plan, retained for the future unblock path)
 
 > **Higher risk. Implement and verify intra-bank (Tasks 1-5) first.** Tax writes here must NEVER return an error that fails the SI-TX commit — log + skip on any missing data. Confirm exact helper signatures (`ExerciseBuyerCreditForPeerOption`, the accept-time premium leg) before editing; if the premium is not recoverable locally, take the documented fallback (record only `(market-strike)*qty`, log the omitted premium).
 

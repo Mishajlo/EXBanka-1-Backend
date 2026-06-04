@@ -82,21 +82,20 @@ All saga edits **preserve the saga shape** (same steps, same `StepKind` names) �
 
 **C4 — Bank exemption (`tax_collection_repository.go ListOwnersWithGains`).** Add `baseQuery = baseQuery.Where("cg.owner_type = ?", "client")` so only client owners are ever returned for collection. `CollectTax`/`collectTaxInner` iterate only returned owners, so bank rows are never collected. (Double-checks: `SumUncollectedByOwnerMonth` is only invoked per returned owner; the cron's per-owner debit/credit never touches a bank owner.)
 
-## 5. Implementation plan — cross-bank / SI-TX (higher risk, conservative, **no wire change**)
+## 5. Cross-bank / SI-TX buyer taxation — DEFERRED (documented gap)
 
-The SI-TX `OptionDescription` wire is frozen and carries no premium, so the buyer's bank must learn the premium **locally at accept** and reuse it at exercise. Tax writes here are **best-effort and never block settlement** (consistent with the existing "seller CG create failed → log, money already moved" pattern at `peer_otc_grpc_handler.go:1406`).
+**Decision (2026-06-04, after code inspection):** cross-bank *buyer* option taxation is **deferred** as a documented gap. The requirement's examples are all intra-bank OTC, which §4 fully implements. Cross-bank *sellers* are already taxed (the existing strike-gain write in `recordOptionExercise` DEBIT path, `peer_otc_grpc_handler.go:1385-1408`, is unchanged by this work).
 
-**X1 — Persist premium on the peer contract.** Add `PremiumPaid decimal` + `PremiumCurrency string` columns to `model.PeerOptionContract` (auto-migrated). Populate them when the buyer's-bank row is formed at accept, sourced from the accept-time **premium money leg** already processed on that bank (located during implementation; if the premium is not cleanly recoverable there, fall back to the documented-gap path in X4).
+**Why deferred (two hard blockers, not a time constraint):**
 
-**X2 — Buyer exercise gain (`recordOptionExercise`, `DirectionCredit`).** After `ExerciseBuyerCreditForPeerOption`, record the buyer's option gain `(market − strike)×qty − premium` (market via local listing lookup by ticker; premium from X1). Best-effort: log + skip on missing market/premium; never return an error for a tax-row failure.
+1. **No premium available on the buyer's bank.** The SI-TX `OptionDescription` wire (`contract/sitx/otc_types.go`) is frozen (`feedback_interbank_protocol_frozen`) and carries only `PricePerUnit` (strike), `Amount` (qty), `SettlementDate`, `Stock` — **no premium**. The peer contract (`RecordOptionContract`, `:950`) is formed solely from that description, and the accept-time premium money leg is processed by transaction-service, never delivered to this handler. So `(market−strike)×qty − premium` is uncomputable: the `premium` term is unknown.
+2. **No market-price resolver on the peer handler.** `PeerOTCGRPCHandler` has `holdings`, `capitalGainRepo`, `holdingReserver`, etc., but **no listing/price source**, so the `market` term is also unavailable without new wiring.
 
-**X3 — Basis step-up cross-bank.** `ExerciseBuyerCreditForPeerOption` currently credits the buyer at `StrikePrice` (`:1435`). Step the credited basis up to **market** for the same no-double-tax reason. (Verify the helper signature; pass market price in.)
+Building both (a local premium-persistence path that the frozen wire can't feed, plus a price resolver injected into the peer handler) would be fragile new infrastructure that still could not satisfy the requirement's formula. Per the codebase convention of leaving cross-bank edges explicitly open (`docs/Bugs.txt` §"Cohort-dependent / cross-team TODOs"), this is recorded there instead.
 
-**X4 — Cross-bank expiry (`expirePeerContract`).** On the buyer's bank (`Direction=="CREDIT"`), record the buyer's `−premium` loss (premium from X1). Best-effort. Seller's bank (`DEBIT`): nothing.
+**Consequence:** a cross-bank buyer who exercises is currently taxed via their *eventual stock sale* (existing stock-CG mechanism on the shares credited at strike basis), not at exercise. This is strictly the pre-existing behaviour — this change does not regress it. Same-bank buyers (the requirement's scenario) get the full resolution-month treatment.
 
-**X5 — Cross-bank accept buyer premium.** The buyer-premium row at accept is written by the local `otc_accept_saga.go` for same-bank, already neutralised by C1. The peer-side accept (`RecordOptionContract` form) writes **no** buyer premium row today, so no additional removal is needed there — but confirm during implementation.
-
-> **Fallback (documented gap, if X1 proves infeasible without a wire change):** record only the `(market−strike)×qty` portion of the buyer's cross-bank exercise gain and omit the premium offset, logging the omission — matching how this codebase already leaves cross-bank edges deliberately open (`docs/Bugs.txt` §"Cohort-dependent TODOs"). Intra-bank (the common path and the requirement's examples) is unaffected.
+**Unblock path (future, needs cohort agreement):** add a `premium` field to the SI-TX `OptionDescription` (a wire change requiring the four-bank cohort to agree, per the frozen-protocol rule) **or** a side channel that delivers the premium to the buyer's bank, then inject a price resolver into the peer handler and mirror §4 C2/C3 in `recordOptionExercise` (CREDIT) and `expirePeerContract`.
 
 ## 6. Cutover / migration
 
@@ -128,5 +127,5 @@ Existing **ACTIVE** contracts accepted under the old model already have a buyer 
 
 - **Saga fragility (primary concern):** mitigated by never adding/removing steps — only filling/emptying existing step bodies — and by fault-injection rollback tests. Pre-saga snapshots (market price) fail the exercise *cleanly before any money moves* only where safe; tax-row failures degrade to log+skip and never block settlement.
 - **Double taxation:** mitigated by the market-price basis step-up (§3.1), with an equivalence proof.
-- **Cross-bank premium availability:** mitigated by local persistence (X1) with a documented best-effort fallback (X4) that keeps settlement safe and leaves only a tax-row gap, never a money gap.
+- **Cross-bank buyer taxation:** deferred as a documented gap (§5) because the frozen SI-TX wire carries no premium and the peer handler has no price source. No money gap; cross-bank sellers still taxed; cross-bank buyers taxed via eventual stock sale as before.
 - **Cutover double-count:** mitigated by the one-time idempotent cleanup (§6).
