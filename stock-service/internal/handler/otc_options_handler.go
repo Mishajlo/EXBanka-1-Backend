@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
+	contractsitx "github.com/exbanka/contract/sitx"
 	stockpb "github.com/exbanka/contract/stockpb"
 	"github.com/exbanka/stock-service/internal/model"
 	"github.com/exbanka/stock-service/internal/repository"
@@ -195,8 +197,31 @@ func (h *OTCOptionsHandler) ListMyOffers(ctx context.Context, in *stockpb.ListMy
 	return out, nil
 }
 
-// ListNegotiationHistory returns terminal OTC offers (accepted, rejected,
-// expired, failed) for the caller. Celina-3 "Istorija pregovora".
+// ListNegotiationHistory returns the caller's terminal OTC negotiations,
+// LOCAL (intra-bank, accepted/rejected/expired/failed) and REMOTE (cross-bank
+// peer chains in a terminal status) merged into one list (Celina-3 "Istorija
+// pregovora" + SP-1 Task 8b). Items are OTCOfferResponse, which already carries
+// kind/routing_number/bank_code/me_owner — NO proto change is needed; the
+// handler just stamps and merges.
+//
+// LOCAL items: kind="local", own routing/bank-code provenance, me_owner = the
+// caller posted/originated the offer (initiator side) — the SAME rule as
+// GetOffer. A history row where the caller was the bidder/counterparty is
+// me_owner=false.
+//
+// REMOTE items: only for client principals (cross-bank party ids are
+// "client-<N>"); a bank/employee caller has no cross-bank identity and skips
+// the remote merge. Each remote chain is mapped onto OTCOfferResponse with
+// kind="remote", COUNTERPARTY/peer provenance, and me_owner = WE host the
+// seller/poster side (SellerRoutingNumber == ownRouting). Only chains in a
+// terminal peer status are surfaced (history is past data) and the request's
+// status filter is mapped onto the peer status vocabulary.
+//
+// Paging: page/page_size apply to the LOCAL set only (the repository paginates
+// it). Remote terminal rows are appended in full after the local page — they
+// are never silently truncated, consistent with Task 7's ListMyNegotiations.
+// total reflects the local total only; the merged slice length may exceed it by
+// the remote count. Unified cross-source paging is out of scope for SP-1.
 func (h *OTCOptionsHandler) ListNegotiationHistory(ctx context.Context, in *stockpb.ListNegotiationHistoryRequest) (*stockpb.ListMyOTCOffersResponse, error) {
 	f := repository.HistoryFilter{
 		Statuses: in.Statuses,
@@ -219,13 +244,131 @@ func (h *OTCOptionsHandler) ListNegotiationHistory(ctx context.Context, in *stoc
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+	ownerType, ownerID := model.OwnerFromLegacy(uint64(in.ActorUserId), in.ActorSystemType)
 	out := &stockpb.ListMyOTCOffersResponse{Total: total, Offers: make([]*stockpb.OTCOfferResponse, 0, len(rows))}
 	for i := range rows {
 		// History entries are immutable from the caller's perspective so
 		// "unread" is always false — they're explicitly viewing past data.
-		out.Offers = append(out.Offers, h.withOfferMarketRef(&rows[i], toOTCOfferProto(&rows[i], false)))
+		item := h.withOfferMarketRef(&rows[i], toOTCOfferProto(&rows[i], false))
+		item.Kind = "local"
+		item.RoutingNumber = h.ownRouting
+		item.BankCode = h.ownBankCode
+		// me_owner ⇔ the caller posted/originated this offer (initiator side) —
+		// same rule as GetOffer. A bidder/counterparty history row is false.
+		item.MeOwner = otcMeOwner(
+			string(ownerType), model.OwnerIDOrZero(ownerID),
+			"local", sellerIDForOwner(rows[i].InitiatorOwnerType, rows[i].InitiatorOwnerID),
+		)
+		out.Offers = append(out.Offers, item)
+	}
+
+	// REMOTE merge — cross-bank peer negotiation chains in a terminal status
+	// where the caller is a party. Only meaningful for client principals; a
+	// bank/employee caller has no cross-bank negotiation identity.
+	if h.peerNegs != nil && ownerType == model.OwnerClient && ownerID != nil {
+		principal := "client-" + strconv.FormatUint(*ownerID, 10)
+		peerRows, perr := h.peerNegs.ListByClient(h.ownRouting, principal, "")
+		if perr != nil {
+			return nil, status.Errorf(codes.Internal, "list peer negotiations: %v", perr)
+		}
+		want := historyPeerStatusSet(in.GetStatuses())
+		for i := range peerRows {
+			if _, ok := want[peerRows[i].Status]; !ok {
+				continue // not a terminal/requested peer status
+			}
+			item := peerNegToOfferProto(&peerRows[i], h.ownRouting)
+			if item == nil {
+				continue
+			}
+			out.Offers = append(out.Offers, item)
+		}
 	}
 	return out, nil
+}
+
+// peerTerminalStatuses is the set of terminal peer-negotiation statuses that
+// belong in the history view. Active states (ongoing/countered) are excluded.
+var peerTerminalStatuses = map[string]struct{}{
+	"accepted":  {},
+	"rejected":  {},
+	"declined":  {},
+	"cancelled": {},
+	"expired":   {},
+}
+
+// historyMappedStatuses maps each uppercase history-request status onto the
+// peer-negotiation status vocabulary (the two sides use different words).
+var historyMappedStatuses = map[string][]string{
+	"ACCEPTED": {"accepted"},
+	"REJECTED": {"rejected", "declined", "cancelled"},
+	"EXPIRED":  {"expired"},
+	"FAILED":   {}, // peer rows have no "failed" state — matches nothing
+}
+
+// historyPeerStatusSet builds the set of peer statuses to include in the
+// remote history merge. With no request filter it is every terminal peer
+// status; with a filter it is the union of the mapped peer statuses (still
+// constrained to terminal ones).
+func historyPeerStatusSet(requested []string) map[string]struct{} {
+	if len(requested) == 0 {
+		return peerTerminalStatuses
+	}
+	out := make(map[string]struct{})
+	for _, s := range requested {
+		for _, mapped := range historyMappedStatuses[s] {
+			if _, ok := peerTerminalStatuses[mapped]; ok {
+				out[mapped] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
+// peerNegToOfferProto maps a cross-bank peer-negotiation mirror row onto the
+// OTCOfferResponse wire shape used by the history view (SP-1 Task 8b). It is
+// the offer-shaped sibling of peerNegToProto (which maps onto the negotiation
+// shape). Provenance + me_owner follow the same rule:
+//
+//   - Id is the local surrogate primary key of the mirror row.
+//   - kind = "remote"; routing_number + bank_code identify the COUNTERPARTY
+//     peer bank — the side WE do NOT host.
+//   - terms come from the parsed sitx.OtcOffer carried in OfferJSON.
+//   - me_owner = WE host the seller/poster side (SellerRoutingNumber ==
+//     our own routing).
+func peerNegToOfferProto(row *model.PeerOtcNegotiation, ownRouting int64) *stockpb.OTCOfferResponse {
+	neg := peerNegToProto(row, ownRouting)
+	if neg == nil {
+		return nil
+	}
+	return &stockpb.OTCOfferResponse{
+		Id:             neg.GetId(),
+		StockTicker:    peerOfferTicker(row),
+		Quantity:       neg.GetQuantity(),
+		StrikePrice:    neg.GetStrikePrice(),
+		Premium:        neg.GetPremium(),
+		SettlementDate: neg.GetSettlementDate(),
+		Status:         neg.GetStatus(),
+		CreatedAt:      neg.GetCreatedAt(),
+		UpdatedAt:      neg.GetUpdatedAt(),
+		Kind:           neg.GetKind(),
+		RoutingNumber:  neg.GetRoutingNumber(),
+		BankCode:       neg.GetBankCode(),
+		MeOwner:        neg.GetMeOwner(),
+		Initiator: &stockpb.PartyRef{
+			DisplayName: row.SellerID,
+			BankCode:    neg.GetBankCode(),
+		},
+	}
+}
+
+// peerOfferTicker pulls the ticker out of a peer negotiation's serialised
+// OtcOffer; "" on decode failure (terms are best-effort, like peerNegToProto).
+func peerOfferTicker(row *model.PeerOtcNegotiation) string {
+	var offer contractsitx.OtcOffer
+	if err := json.Unmarshal([]byte(row.OfferJSON), &offer); err != nil {
+		return ""
+	}
+	return offer.Ticker
 }
 
 // computeUnread returns true if the offer has been touched since the
