@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 
 	"github.com/exbanka/contract/cronreg"
@@ -41,7 +43,20 @@ type OTCExpiryCron struct {
 	outbox   *outbox.Outbox
 	outboxDB *gorm.DB
 
+	// capitalGains, when wired, books the buyer's lost-premium capital loss
+	// row at contract expiry (resolution-month model). nil disables (legacy
+	// tests). Spec §4 C3.
+	capitalGains CapitalGainRepo
+
 	entry *cronreg.Entry
+}
+
+// WithCapitalGains wires the capital-gain repo so contract expiry books the
+// buyer's lost-premium loss row (TotalGain = -premium) in the expiry month.
+// The seller keeps the premium (already taxed at accept). Spec §4 C3.
+func (cr *OTCExpiryCron) WithCapitalGains(repo CapitalGainRepo) *OTCExpiryCron {
+	cr.capitalGains = repo
+	return cr
 }
 
 // WithOutbox wires the transactional outbox + the GORM handle the cron
@@ -174,6 +189,34 @@ func (cr *OTCExpiryCron) expireContract(ctx context.Context, c *model.OptionCont
 		}
 	}
 	now := time.Now().UTC()
+	// Resolution-month model: the buyer's premium is realised as a loss at
+	// expiry, reducing their capital gain for the expiry month. The seller
+	// keeps the premium (already taxed at accept). Booked BEFORE the status
+	// flip so a crash between insert and flip re-runs safely; Create is
+	// idempotent on the contract-scoped key (ON CONFLICT DO NOTHING), so a
+	// re-run never double-books. Spec §3.1, §4 C3.
+	if cr.capitalGains != nil && c.PremiumPaid.IsPositive() {
+		lossKey := fmt.Sprintf("expire-contract-%d-buyer-premium-loss", c.ID)
+		loss := &model.CapitalGain{
+			OwnerType:        c.BuyerOwnerType,
+			OwnerID:          c.BuyerOwnerID,
+			OTC:              true,
+			SecurityType:     "option",
+			Ticker:           c.Ticker,
+			Quantity:         c.Quantity.IntPart(),
+			BuyPricePerUnit:  decimal.Zero,
+			SellPricePerUnit: decimal.Zero,
+			TotalGain:        c.PremiumPaid.Neg(),
+			Currency:         c.PremiumCurrency,
+			AccountID:        c.BuyerAccountID,
+			TaxYear:          now.Year(),
+			TaxMonth:         int(now.Month()),
+			IdempotencyKey:   &lossKey,
+		}
+		if err := cr.capitalGains.Create(loss); err != nil {
+			return err // do not flip status if the loss row failed; retry next pass
+		}
+	}
 	c.Status = model.OptionContractStatusExpired
 	c.ExpiredAt = &now
 	if err := cr.contracts.Save(c); err != nil {

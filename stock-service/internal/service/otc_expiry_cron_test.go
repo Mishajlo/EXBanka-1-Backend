@@ -30,6 +30,7 @@ func newOTCExpiryDB(t *testing.T) *gorm.DB {
 		&model.OTCOfferRevision{},
 		&model.OptionContract{},
 		&model.PeerOptionContract{},
+		&model.CapitalGain{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -102,6 +103,54 @@ func TestOTCExpiryCron_ExpireContract_NoHoldingRes(t *testing.T) {
 	}
 	if got.ExpiredAt == nil {
 		t.Error("expected expired_at to be set")
+	}
+}
+
+// TestOTCExpiryCron_BooksBuyerPremiumLoss verifies the resolution-month model:
+// when an OTC contract expires unexercised, the buyer's lost premium is booked
+// as a capital loss (-premium) in the expiry month, idempotently (a re-run does
+// not double-book). The seller keeps the premium (already taxed at accept).
+// Spec §3.1, §4 C3.
+func TestOTCExpiryCron_BooksBuyerPremiumLoss(t *testing.T) {
+	db := newOTCExpiryDB(t)
+	contractRepo := repository.NewOptionContractRepository(db)
+	cgRepo := repository.NewCapitalGainRepository(db)
+	cr := NewOTCExpiryCron(contractRepo, repository.NewOTCOfferRepository(db), nil, nil, 10, "02:00", nilRegistry()).
+		WithCapitalGains(cgRepo)
+
+	uid := uint64(7)
+	c := &model.OptionContract{
+		StockID: 42, Ticker: "AAPL", Quantity: decimal.NewFromInt(10),
+		StrikePrice: decimal.NewFromInt(150), PremiumPaid: decimal.NewFromInt(1150),
+		PremiumCurrency: "USD", StrikeCurrency: "USD",
+		SettlementDate: time.Now().Add(-24 * time.Hour),
+		Status:         model.OptionContractStatusActive,
+		BuyerOwnerType: model.OwnerClient, BuyerOwnerID: &uid,
+		SellerOwnerType: model.OwnerBank, SellerOwnerID: nil,
+		BuyerAccountID: 11, SellerAccountID: 12, PremiumPaidAt: time.Now(),
+	}
+	if err := contractRepo.Create(c); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := cr.expireContract(context.Background(), c); err != nil {
+		t.Fatalf("expire: %v", err)
+	}
+	// Re-running must not duplicate the loss row (idempotent by contract key).
+	c.Status = model.OptionContractStatusActive
+	if err := cr.expireContract(context.Background(), c); err != nil {
+		t.Fatalf("expire (re-run): %v", err)
+	}
+
+	var rows []model.CapitalGain
+	db.Where("owner_type = ? AND security_type = ?", model.OwnerClient, "option").Find(&rows)
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 buyer loss row (idempotent), got %d", len(rows))
+	}
+	if !rows[0].TotalGain.Equal(decimal.NewFromInt(-1150)) {
+		t.Fatalf("buyer loss = %s, want -1150", rows[0].TotalGain)
+	}
+	if rows[0].SecurityType != "option" || !rows[0].OTC {
+		t.Fatalf("loss row must be option/OTC, got type=%s otc=%v", rows[0].SecurityType, rows[0].OTC)
 	}
 }
 

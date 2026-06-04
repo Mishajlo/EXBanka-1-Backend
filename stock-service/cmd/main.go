@@ -850,7 +850,8 @@ func main() {
 	// — via WithPeerContracts — cross-bank peer_option_contracts.
 	otcExpiry := service.NewOTCExpiryCron(optionContractRepo, otcOfferRepo, holdingReservationSvc, producer, cfg.OTCExpiryBatchSize, cfg.OTCExpiryCronUTC, cronRegistry).
 		WithOutbox(ob, db).
-		WithPeerContracts(peerOptionRepo)
+		WithPeerContracts(peerOptionRepo).
+		WithCapitalGains(capitalGainRepo)
 	otcExpiry.Start(ctx)
 
 	// Fix R8 (2026-05-16) — daily safety-net scan: any holding_reservation
