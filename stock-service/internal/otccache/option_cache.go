@@ -376,7 +376,7 @@ func (r *OptionRefresher) buildAndMirrorRemoteOffers(peerBankCode string, peerRo
 		row := OptionOffer{
 			Kind:              "remote",
 			BankCode:          peerBankCode,
-			RoutingNumber:     o.OfferID.RoutingNumber,
+			RoutingNumber:     peerRouting, // authoritative (registrar-verified); peer's wire value is advisory
 			OfferID:           o.OfferID.ID,
 			SellerID:          o.SellerID.ID,
 			Direction:         o.Direction,
