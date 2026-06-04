@@ -8810,7 +8810,8 @@ paths:
       description: Returns the caller's formed option contracts, LOCAL and REMOTE
         merged into one contracts[] array. Each item carries kind/routing_number/bank_code
         and me_owner (true when the caller is the buyer/holder). peer_contracts[]
-        is still returned for backward compatibility. (SP-1 Task 8)
+        has been removed — remote contracts appear in contracts[] with kind=remote.
+        (SP-1 Task 8)
       parameters:
       - description: buyer|seller|either
         in: query

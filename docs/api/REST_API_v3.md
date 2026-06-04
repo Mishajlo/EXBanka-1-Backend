@@ -5734,9 +5734,11 @@ a `kind="remote"` projection with `me_owner` = (`direction == "CREDIT"`).
 
 Status of a **cross-bank** OTC trade's underlying SI-TX transaction, resolved via `PeerTxService.GetTxStatus`. The `:txid` accepts either id a client may hold:
 - the bare idem returned in a dispatch's `poll_url`; or
-- a cross-bank contract's **`crossbank_tx_id`** (form `"<peerCode>:<idem>"`), which `GET /api/v3/me/otc/contracts` returns for every `kind=remote` entry in the unified `contracts[]`.
+- a composite id of the form `"<peerCode>:<idem>"` (e.g. obtained from the `crossbank_tx_id` column stored internally on `peer_option_contracts`).
 
-The composite form is split into `(caller_peer_bank_code, transaction_id)` so the status resolves on **both** banks — the dispatching (sender) bank via its outbound row, the receiving bank via its inbound idempotence record. So a client can read their cross-bank contracts and poll each one's status directly, no extra plumbing. The id is only known to the trade's parties, so holding it authorizes reading its status.
+Note: the unified `OptionContractResponse` items in `contracts[]` (including `kind=remote` entries) do **not** expose a `crossbank_tx_id` field — that field existed only on the now-removed `peer_contracts[]` / `PeerOptionContractResponse`. The composite tx id can be obtained from the dispatch flow's `poll_url` or from a bank-internal lookup; it is not surfaced in the `GET /api/v3/me/otc/contracts` response.
+
+The composite form is split into `(caller_peer_bank_code, transaction_id)` so the status resolves on **both** banks — the dispatching (sender) bank via its outbound row, the receiving bank via its inbound idempotence record. The id is only known to the trade's parties, so holding it authorizes reading its status.
 
 **Authentication:** Any JWT (AnyAuthMiddleware)
 

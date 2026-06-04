@@ -326,6 +326,57 @@ func TestGetContract_RemoteResolve_Credit(t *testing.T) {
 	}
 }
 
+// Fix 1 (privacy): a remote contract whose local buyer is client 9, requested
+// by client 5 → NotFound (existence must not leak to non-parties).
+// Requested by client 9 (the actual local buyer) → returned successfully.
+func TestGetContract_Remote_ParticipantCheck(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	h, fx := newUnifiedContractFixture(t, ownRouting, "111")
+	// CREDIT row → this bank holds the BUYER side (client-9).
+	seedPeerContract(t, fx, &model.PeerOptionContract{
+		ID:                 800,
+		CrossbankTxID:      "tx-800",
+		PostingIndex:       0,
+		NegotiationID:      "neg-800",
+		BuyerRoutingNumber: ownRouting, BuyerID: "client-9",
+		SellerRoutingNumber: peerSellerRouting, SellerID: "client-3",
+		Ticker:         "ACME",
+		Quantity:       5,
+		StrikePrice:    decimal.NewFromInt(200),
+		Currency:       "USD",
+		SettlementDate: "2030-01-01",
+		Direction:      "CREDIT",
+		Status:         "active",
+		CreatedAt:      time.Now(),
+	})
+
+	// Non-participant (client 5) → NotFound (existence must not leak).
+	_, err := h.GetContract(context.Background(), &stockpb.GetContractRequest{
+		ContractId: 800, ActorUserId: 5, ActorSystemType: "client",
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("non-participant: expected NotFound, got %v", err)
+	}
+
+	// Actual local buyer (client 9) → success.
+	resp, err := h.GetContract(context.Background(), &stockpb.GetContractRequest{
+		ContractId: 800, ActorUserId: 9, ActorSystemType: "client",
+	})
+	if err != nil {
+		t.Fatalf("participant: unexpected err: %v", err)
+	}
+	if resp.GetId() != 800 {
+		t.Errorf("id = %d, want 800", resp.GetId())
+	}
+	if resp.GetKind() != "remote" {
+		t.Errorf("kind = %q, want remote", resp.GetKind())
+	}
+	if !resp.GetMeOwner() {
+		t.Errorf("me_owner = false; CREDIT row holds the BUYER, must be true")
+	}
+}
+
 // Neither a local nor a remote contract exists → NotFound.
 func TestGetContract_RemoteMiss_NotFound(t *testing.T) {
 	const ownRouting int64 = 111

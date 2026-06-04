@@ -485,28 +485,6 @@ func peerContractToUnifiedProto(p *model.PeerOptionContract) *stockpb.OptionCont
 	}
 }
 
-// peerContractToProto translates a PeerOptionContract row into the
-// wire-shape PeerOptionContractResponse for ListMyContracts callers.
-func peerContractToProto(p *model.PeerOptionContract) *stockpb.PeerOptionContractResponse {
-	return &stockpb.PeerOptionContractResponse{
-		Id:                       p.ID,
-		CrossbankTxId:            p.CrossbankTxID,
-		PostingIndex:             p.PostingIndex,
-		NegotiationRoutingNumber: p.NegotiationRoutingNumber,
-		NegotiationId:            p.NegotiationID,
-		BuyerId:                  &stockpb.PeerForeignBankId{RoutingNumber: p.BuyerRoutingNumber, Id: p.BuyerID},
-		SellerId:                 &stockpb.PeerForeignBankId{RoutingNumber: p.SellerRoutingNumber, Id: p.SellerID},
-		Ticker:                   p.Ticker,
-		Quantity:                 p.Quantity,
-		StrikePrice:              p.StrikePrice.String(),
-		Currency:                 p.Currency,
-		SettlementDate:           p.SettlementDate,
-		Direction:                p.Direction,
-		Status:                   p.Status,
-		CreatedAtUnix:            p.CreatedAt.Unix(),
-	}
-}
-
 // GetContract resolves an option contract by id, converging local + remote in
 // the service layer (SP-1 Task 8). A local OptionContract is returned with
 // kind="local", own routing/bank-code provenance, and me_owner = (caller is the
@@ -523,7 +501,7 @@ func (h *OTCOptionsHandler) GetContract(ctx context.Context, in *stockpb.GetCont
 	if err != nil {
 		// Local contract doesn't exist — try the cross-bank mirror before 404.
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			remote, rerr := h.resolveRemoteContract(in.ContractId)
+			remote, rerr := h.resolveRemoteContract(in.ContractId, in.ActorUserId, in.ActorSystemType)
 			if rerr == nil {
 				return remote, nil
 			}
@@ -553,11 +531,17 @@ func (h *OTCOptionsHandler) GetContract(ctx context.Context, in *stockpb.GetCont
 }
 
 // resolveRemoteContract builds an OptionContractResponse from the cross-bank
-// peer_option_contracts mirror for a non-local contract id. Returns
-// gorm.ErrRecordNotFound when the mirror is unwired or has no such row, so the
-// caller can surface a plain 404; any other error propagates so the caller can
-// surface Internal.
-func (h *OTCOptionsHandler) resolveRemoteContract(id uint64) (*stockpb.OptionContractResponse, error) {
+// peer_option_contracts mirror for a non-local contract id. It enforces a
+// participant gate before returning: the caller must be the LOCAL party of the
+// contract — i.e. the side whose routing number equals ownRouting. For a CREDIT
+// row this bank hosts the buyer, so the caller's SI-TX participant id must equal
+// BuyerID; for a DEBIT row this bank hosts the seller, so it must equal SellerID.
+// A non-participant gets NotFound (existence must not leak — mirror the local path
+// which returns PermissionDenied, but the remote path hides even existence).
+// Returns gorm.ErrRecordNotFound when the mirror is unwired or has no such row,
+// so the caller can surface a plain 404; any other error propagates so the caller
+// can surface Internal.
+func (h *OTCOptionsHandler) resolveRemoteContract(id uint64, actorUserID int64, actorSystemType string) (*stockpb.OptionContractResponse, error) {
 	if h.peerContracts == nil {
 		return nil, gorm.ErrRecordNotFound
 	}
@@ -565,6 +549,37 @@ func (h *OTCOptionsHandler) resolveRemoteContract(id uint64) (*stockpb.OptionCon
 	if err != nil {
 		return nil, err
 	}
+
+	// Determine which side this bank hosts: CREDIT → we hold the buyer;
+	// DEBIT → we hold the seller. The local participant's SI-TX id is
+	// "client-<actorUserID>" for client callers (cross-bank participant ids
+	// always use the "client-N" prefix). Employee callers have no cross-bank
+	// participant id and are therefore never the local participant of a remote
+	// contract — they receive NotFound.
+	//
+	// Mirror the local path's identity source: actorUserID + actorSystemType
+	// (same fields used by GetContract's local ownership check above).
+	var localPartyID string
+	if actorSystemType == "client" {
+		localPartyID = "client-" + strconv.FormatInt(actorUserID, 10)
+	}
+	// "" means the caller has no SI-TX identity → never a participant.
+
+	var localContractPartyID string
+	if p.Direction == "CREDIT" {
+		// This bank hosts the BUYER side.
+		localContractPartyID = p.BuyerID
+	} else {
+		// This bank hosts the SELLER side.
+		localContractPartyID = p.SellerID
+	}
+
+	if localPartyID == "" || localPartyID != localContractPartyID {
+		// Return NotFound — do not leak existence to non-parties (same
+		// policy as enforceOwnership in the gateway layer).
+		return nil, gorm.ErrRecordNotFound
+	}
+
 	return peerContractToUnifiedProto(p), nil
 }
 
