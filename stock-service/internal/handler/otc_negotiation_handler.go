@@ -11,6 +11,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"strconv"
 	"time"
 
@@ -473,7 +474,10 @@ func peerNegToProto(row *model.PeerOtcNegotiation, ownRouting int64) *stockpb.OT
 		return nil
 	}
 	var offer contractsitx.OtcOffer
-	_ = json.Unmarshal([]byte(row.OfferJSON), &offer)
+	if err := json.Unmarshal([]byte(row.OfferJSON), &offer); err != nil {
+		log.Printf("WARN peerNegToProto: row %d OfferJSON decode failed: %v", row.ID, err)
+		// best-effort: id + status still valid; terms left zero
+	}
 
 	meOwner := row.SellerRoutingNumber == ownRouting
 	// The counterparty is the side we do NOT host. If we host the seller,
@@ -482,7 +486,15 @@ func peerNegToProto(row *model.PeerOtcNegotiation, ownRouting int64) *stockpb.OT
 	if meOwner {
 		peerRouting = row.BuyerRoutingNumber
 	}
-	peerBankCode := strconv.FormatInt(peerRouting, 10)
+	// Use the stored authoritative bank code for the counterparty. The row's
+	// PeerBankCode is ALWAYS the counterparty's human-readable code (set at
+	// row creation time), so it is more reliable than re-deriving it from
+	// the routing number. Fall back to the formatted routing number if the
+	// field is somehow empty (legacy rows).
+	peerBankCode := row.PeerBankCode
+	if peerBankCode == "" {
+		peerBankCode = strconv.FormatInt(peerRouting, 10)
+	}
 
 	return &stockpb.OTCNegotiationResponse{
 		Id:             row.ID,

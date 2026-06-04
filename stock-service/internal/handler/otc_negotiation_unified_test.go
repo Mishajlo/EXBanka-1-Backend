@@ -178,6 +178,11 @@ func TestListMyNegotiations_RemoteWeHostBuyer(t *testing.T) {
 	if got.GetRoutingNumber() != peerSellerRouting {
 		t.Errorf("routing_number = %d want %d (counterparty seller bank)", got.GetRoutingNumber(), peerSellerRouting)
 	}
+	// bank_code comes from the stored PeerBankCode field (authoritative),
+	// not re-derived from routing. peerRow always seeds PeerBankCode="222".
+	if got.GetBankCode() != "222" {
+		t.Errorf("bank_code = %q want 222 (stored PeerBankCode)", got.GetBankCode())
+	}
 	// Terms mapped from OfferJSON.
 	if got.GetQuantity() != "5" {
 		t.Errorf("quantity = %q want 5", got.GetQuantity())
@@ -219,6 +224,13 @@ func TestListMyNegotiations_RemoteWeHostSeller(t *testing.T) {
 	}
 	if got.GetRoutingNumber() != peerBuyerRouting {
 		t.Errorf("routing_number = %d want %d (counterparty buyer bank)", got.GetRoutingNumber(), peerBuyerRouting)
+	}
+	// bank_code comes from the stored PeerBankCode field, NOT from the
+	// counterparty's routing number. peerRow seeds PeerBankCode="222"
+	// regardless of which side is buyer/seller, so the value here is "222"
+	// even though peerBuyerRouting is 333.
+	if got.GetBankCode() != "222" {
+		t.Errorf("bank_code = %q want 222 (stored PeerBankCode, not counterparty routing %d)", got.GetBankCode(), peerBuyerRouting)
 	}
 }
 
