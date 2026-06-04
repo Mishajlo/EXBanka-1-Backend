@@ -48,7 +48,22 @@ type OTCExpiryCron struct {
 	// tests). Spec §4 C3.
 	capitalGains CapitalGainRepo
 
+	// warnDays > 0 enables the expiring-soon warning pass (SP5 E): contracts
+	// whose settlement_date is exactly warnDays out get an
+	// OTC_CONTRACT_EXPIRING_SOON in-app notification to both client parties.
+	warnDays int
+
 	entry *cronreg.Entry
+}
+
+// WithExpiryWarning enables the expiring-soon warning pass N days before
+// settlement (SP5 E). 0 disables. Returns the cron for chaining.
+func (cr *OTCExpiryCron) WithExpiryWarning(nDays int) *OTCExpiryCron {
+	if nDays < 0 {
+		nDays = 0
+	}
+	cr.warnDays = nDays
+	return cr
 }
 
 // WithCapitalGains wires the capital-gain repo so contract expiry books the
@@ -134,6 +149,19 @@ func (cr *OTCExpiryCron) RunOnce(ctx context.Context) error {
 			}
 		}
 	}
+	// SP5 E: warn parties whose contract settles exactly warnDays from now.
+	// Matching a single calendar day means each contract is warned once.
+	if cr.warnDays > 0 {
+		warnDay := time.Now().UTC().AddDate(0, 0, cr.warnDays)
+		rows, err := cr.contracts.ListExpiringOn(warnDay, cr.batchSize)
+		if err != nil {
+			log.Printf("WARN: OTC expiring-soon list: %v", err)
+		} else {
+			for i := range rows {
+				cr.warnContractExpiring(ctx, &rows[i])
+			}
+		}
+	}
 	for {
 		rows, err := cr.offers.ListExpiringOffers(today, cr.batchSize)
 		if err != nil {
@@ -180,6 +208,19 @@ func (cr *OTCExpiryCron) expirePeerContract(ctx context.Context, c *model.PeerOp
 		}
 	}
 	return cr.peerContracts.SetStatus(c.ID, "expired")
+}
+
+// warnContractExpiring sends an OTC_CONTRACT_EXPIRING_SOON in-app notification
+// to both client parties of a contract approaching settlement (SP5 E). Bank
+// parties / nil notifier are no-ops.
+func (cr *OTCExpiryCron) warnContractExpiring(ctx context.Context, c *model.OptionContract) {
+	data := map[string]string{
+		"ticker":          c.Ticker,
+		"settlement_date": c.SettlementDate.UTC().Format("2006-01-02"),
+		"days_remaining":  fmt.Sprintf("%d", cr.warnDays),
+	}
+	notifyOTCPartyVia(ctx, cr.notifier, kafkamsg.OTCParty{OwnerType: string(c.BuyerOwnerType), OwnerID: c.BuyerOwnerID}, "OTC_CONTRACT_EXPIRING_SOON", "otc_contract", c.ID, data)
+	notifyOTCPartyVia(ctx, cr.notifier, kafkamsg.OTCParty{OwnerType: string(c.SellerOwnerType), OwnerID: c.SellerOwnerID}, "OTC_CONTRACT_EXPIRING_SOON", "otc_contract", c.ID, data)
 }
 
 func (cr *OTCExpiryCron) expireContract(ctx context.Context, c *model.OptionContract) error {

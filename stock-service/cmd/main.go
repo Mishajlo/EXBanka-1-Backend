@@ -868,7 +868,8 @@ func main() {
 	otcExpiry := service.NewOTCExpiryCron(optionContractRepo, otcOfferRepo, holdingReservationSvc, producer, cfg.OTCExpiryBatchSize, cfg.OTCExpiryCronUTC, cronRegistry).
 		WithOutbox(ob, db).
 		WithPeerContracts(peerOptionRepo).
-		WithCapitalGains(capitalGainRepo)
+		WithCapitalGains(capitalGainRepo).
+		WithExpiryWarning(cfg.OTCExpiryWarningDays) // SP5 E
 	otcExpiry.Start(ctx)
 
 	// Fix R8 (2026-05-16) — daily safety-net scan: any holding_reservation

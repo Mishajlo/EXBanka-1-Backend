@@ -2256,6 +2256,12 @@ Published to `notification.general` by various services. notification-service co
 
 **account-service in-app notifications (Plan B4):** account-service now emits `GeneralNotificationMessage` intents on `notification.general` in the **`Data` form** for: `ACCOUNT_OPENED` (on create), `ACCOUNT_STATUS_CHANGED` (on status update), `ACCOUNT_NAME_UPDATED` (on rename), `ACCOUNT_LIMITS_UPDATED` (on limit change), `MAINTENANCE_FEE_CHARGED` (per monthly cron charge). Recipient is the account owner (`account.OwnerID`); bank-owned accounts (`is_bank_account == true` or owner id `1_000_000_000`) are skipped. **Plan B4 also closed three pre-existing publish-site gaps** in the same change: the `account.name-updated`, `account.limits-updated`, and `account.maintenance-charged` domain Kafka events are now published (the producer methods existed but were never called by the handlers / cron). Best-effort, after the action commits.
 
+**SP5 notification coverage expansion (2026-06-04):**
+- **D1 — client limit change:** `client-service.ClientLimitService.SetClientLimits` now emits a `LIMIT_CHANGED` in-app notification (and a best-effort `LIMIT_CHANGED` email via the client's address) to the affected client with the new daily/monthly/transfer limits. (client-service's producer gained `PublishGeneralNotification`; `notification.general` added to its `EnsureTopics`.) New `LIMIT_CHANGED` push + email templates.
+- **E — OTC contract expiring soon:** the OTC expiry cron gained an expiring-soon pass (`OptionContractRepository.ListExpiringOn`) that warns both client parties `OTC_CONTRACT_EXPIRING_SOON` when a contract settles exactly `OTC_EXPIRY_WARNING_DAYS` (default 3) out. New `OTC_CONTRACT_EXPIRING_SOON` push template. Intra-bank contracts only.
+- **D2 (card block) and D3 (loan created/approved)** were already covered by existing card-service / credit-service notifications — no change.
+- **H — order auto-cancel-on-settlement-expiry: DEFERRED.** Stock orders have no `settlement_date` and there is no order-expiry mechanism to notify on; building one is a feature beyond notification scope. OTC offer/contract expiry already notify (`OTC_OFFER_EXPIRED`/`OTC_CONTRACT_EXPIRED`).
+
 ### Email Types (SendEmailMessage.EmailType)
 
 When publishing to `notification.send-email`, use one of these EmailType values:

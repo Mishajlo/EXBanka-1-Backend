@@ -154,6 +154,52 @@ func TestOTCExpiryCron_BooksBuyerPremiumLoss(t *testing.T) {
 	}
 }
 
+// TestOTCExpiryCron_WarnsExpiringSoon verifies SP5 E: a contract settling
+// exactly warnDays out triggers an OTC_CONTRACT_EXPIRING_SOON notification to
+// both client parties, without expiring the (still-future) contract.
+func TestOTCExpiryCron_WarnsExpiringSoon(t *testing.T) {
+	db := newOTCExpiryDB(t)
+	contractRepo := repository.NewOptionContractRepository(db)
+	cr := NewOTCExpiryCron(contractRepo, repository.NewOTCOfferRepository(db), nil, nil, 100, "02:00", nilRegistry()).
+		WithExpiryWarning(3)
+	notifier := &recordingOTCNotifier{}
+	cr.notifier = notifier
+
+	buyer := uint64(7)
+	seller := uint64(8)
+	c := &model.OptionContract{
+		StockID: 42, Ticker: "AAPL", Quantity: decimal.NewFromInt(10),
+		StrikePrice: decimal.NewFromInt(150), PremiumPaid: decimal.NewFromInt(50),
+		PremiumCurrency: "USD", StrikeCurrency: "USD",
+		SettlementDate: time.Now().UTC().AddDate(0, 0, 3).Truncate(24 * time.Hour),
+		Status:         model.OptionContractStatusActive,
+		BuyerOwnerType: model.OwnerClient, BuyerOwnerID: &buyer,
+		SellerOwnerType: model.OwnerClient, SellerOwnerID: &seller,
+		PremiumPaidAt: time.Now(),
+	}
+	if err := contractRepo.Create(c); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := cr.RunOnce(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// Contract must NOT be expired (it settles in the future).
+	got, _ := contractRepo.GetByID(c.ID)
+	if got.Status != model.OptionContractStatusActive {
+		t.Fatalf("contract should remain active, got %s", got.Status)
+	}
+	var warns int
+	for _, n := range notifier.notifs {
+		if n.Type == "OTC_CONTRACT_EXPIRING_SOON" {
+			warns++
+		}
+	}
+	if warns != 2 {
+		t.Fatalf("expected 2 expiring-soon warnings (buyer+seller), got %d", warns)
+	}
+}
+
 // expireOffer emits OTC_OFFER_EXPIRED to the initiator (and counterparty when
 // it is a client party).
 func TestOTCExpiryCron_ExpireOffer_EmitsNotifications(t *testing.T) {
