@@ -1807,6 +1807,18 @@ message OptionContractResponse {
   string  created_at = 18;
   string  updated_at = 19;
   int64   version = 20;
+  // Provenance + ownership for the unified contract read (SP-1 Task 8).
+  // kind is "local" (intra-bank contract) or "remote" (cross-bank
+  // peer_option_contracts mirror). routing_number / bank_code identify the
+  // OWNING/HOSTING bank: own for local; the COUNTERPARTY peer bank for remote
+  // (the side this bank does NOT host). me_owner is true ONLY when the acting
+  // caller is the contract's BUYER/HOLDER — a formed option is the buyer's
+  // owned asset, so the seller/writer is never the owner (DIFFERENT from
+  // offers/negotiations where the poster/seller is the owner).
+  string kind = 21;
+  int64  routing_number = 22;
+  string bank_code = 23;
+  bool   me_owner = 24;
 }
 
 message ListMyContractsRequest {

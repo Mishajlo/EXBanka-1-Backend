@@ -383,6 +383,19 @@ func (h *OTCOptionsHandler) RejectOffer(ctx context.Context, in *stockpb.RejectO
 	return h.withOfferMarketRef(o, toOTCOfferProto(o, false)), nil
 }
 
+// ListMyContracts returns a unified local+remote contract list (SP-1 Task 8).
+// LOCAL contracts are stamped kind="local", own routing/bank-code provenance,
+// and me_owner = (caller is the BUYER/HOLDER) — a formed option is the buyer's
+// owned asset, so the seller/writer is never the owner (DIFFERENT from
+// offers/negotiations). The caller's REMOTE (cross-bank) contracts are appended
+// as kind="remote" projections with COUNTERPARTY provenance and me_owner =
+// (Direction == "CREDIT", i.e. we host the buyer side).
+//
+// Paging: the LOCAL list is paged via the repository (page/page_size). The
+// REMOTE list is fetched with the same page/page_size and APPENDED in full
+// after the local page — it is not interleaved or globally re-paged. Total
+// counts the local matches; PeerTotal counts the remote matches (kept for
+// backward compatibility — clients can rely on the per-item `kind` instead).
 func (h *OTCOptionsHandler) ListMyContracts(ctx context.Context, in *stockpb.ListMyContractsRequest) (*stockpb.ListContractsResponse, error) {
 	if h.contracts == nil {
 		return &stockpb.ListContractsResponse{}, nil
@@ -394,14 +407,24 @@ func (h *OTCOptionsHandler) ListMyContracts(ctx context.Context, in *stockpb.Lis
 	}
 	out := &stockpb.ListContractsResponse{Total: total, Contracts: make([]*stockpb.OptionContractResponse, 0, len(rows))}
 	for i := range rows {
-		out.Contracts = append(out.Contracts, h.withMarketRef(&rows[i], toContractProto(&rows[i])))
+		item := h.withMarketRef(&rows[i], toContractProto(&rows[i]))
+		item.Kind = "local"
+		item.RoutingNumber = h.ownRouting
+		item.BankCode = h.ownBankCode
+		// me_owner ⇔ the caller is the contract's BUYER/HOLDER (owner of the
+		// formed option asset). The seller/writer is never the owner.
+		item.MeOwner = rows[i].BuyerOwnerType == ownerType && ownerIDEqual(rows[i].BuyerOwnerID, ownerID)
+		out.Contracts = append(out.Contracts, item)
 	}
 
 	// Cross-bank contracts. Only fetched when the peer-contract repo is
 	// wired (post-Celina-5) AND the caller is a client (cross-bank
 	// participant ids are "client-<n>"; bank-side cross-bank contracts
 	// surface elsewhere). page/page_size pass through unchanged so the
-	// peer list paginates the same way as the intra-bank list.
+	// peer list paginates the same way as the intra-bank list. Remote rows
+	// are mapped onto OptionContractResponse (kind="remote") and APPENDED to
+	// the same Contracts list so clients see one merged feed; PeerContracts
+	// is also populated for backward compatibility.
 	if h.peerContracts != nil && ownerType == model.OwnerClient && ownerID != nil {
 		participantID := "client-" + strconv.FormatUint(*ownerID, 10)
 		peerRows, peerTotal, perr := h.peerContracts.ListByLocalParticipant(participantID, h.ownRouting, in.Role, int(in.Page), int(in.PageSize))
@@ -411,11 +434,56 @@ func (h *OTCOptionsHandler) ListMyContracts(ctx context.Context, in *stockpb.Lis
 		out.PeerContracts = make([]*stockpb.PeerOptionContractResponse, 0, len(peerRows))
 		out.PeerTotal = peerTotal
 		for i := range peerRows {
+			out.Contracts = append(out.Contracts, peerContractToUnifiedProto(&peerRows[i]))
 			out.PeerContracts = append(out.PeerContracts, peerContractToProto(&peerRows[i]))
 		}
 	}
 
 	return out, nil
+}
+
+// peerContractToUnifiedProto maps a cross-bank PeerOptionContract row onto the
+// unified OptionContractResponse wire shape (SP-1 Task 8).
+//
+//   - Id is the local surrogate primary key of the mirror row (so callers can
+//     correlate within THIS bank's namespace).
+//   - kind = "remote"; routing_number + bank_code identify the COUNTERPARTY
+//     peer bank — the side WE do NOT host. When Direction=="CREDIT" we host the
+//     buyer, so the counterparty is the SELLER's bank (SellerRoutingNumber);
+//     otherwise (DEBIT) we host the seller, so the counterparty is the BUYER's
+//     bank (BuyerRoutingNumber).
+//   - bank_code is the counterparty's routing number formatted as a string —
+//     PeerOptionContract carries NO separate bank-code field, so the routing
+//     number is the only available code here.
+//   - me_owner = Direction=="CREDIT": a CREDIT row means this bank holds the
+//     BUYER side, and the buyer/holder owns the formed option asset.
+func peerContractToUnifiedProto(p *model.PeerOptionContract) *stockpb.OptionContractResponse {
+	meOwner := p.Direction == "CREDIT"
+	// Counterparty is the side we do NOT host: seller when we host the buyer,
+	// buyer when we host the seller.
+	counterpartyRouting := p.BuyerRoutingNumber
+	if meOwner {
+		counterpartyRouting = p.SellerRoutingNumber
+	}
+	return &stockpb.OptionContractResponse{
+		Id:             p.ID,
+		StockTicker:    p.Ticker,
+		Quantity:       strconv.FormatInt(p.Quantity, 10),
+		StrikePrice:    p.StrikePrice.String(),
+		StrikeCurrency: p.Currency,
+		SettlementDate: p.SettlementDate,
+		Status:         p.Status,
+		CreatedAt:      p.CreatedAt.UTC().Format(time.RFC3339),
+		// Cross-bank parties carry no local user_id/system_type. Surface the
+		// SI-TX participant id as the display name and the routing-derived code
+		// as bank_code (the wire shape has no separate routing field on PartyRef).
+		Buyer:         &stockpb.PartyRef{DisplayName: p.BuyerID, BankCode: strconv.FormatInt(p.BuyerRoutingNumber, 10)},
+		Seller:        &stockpb.PartyRef{DisplayName: p.SellerID, BankCode: strconv.FormatInt(p.SellerRoutingNumber, 10)},
+		Kind:          "remote",
+		RoutingNumber: counterpartyRouting,
+		BankCode:      strconv.FormatInt(counterpartyRouting, 10),
+		MeOwner:       meOwner,
+	}
 }
 
 // peerContractToProto translates a PeerOptionContract row into the
@@ -440,12 +508,33 @@ func peerContractToProto(p *model.PeerOptionContract) *stockpb.PeerOptionContrac
 	}
 }
 
+// GetContract resolves an option contract by id, converging local + remote in
+// the service layer (SP-1 Task 8). A local OptionContract is returned with
+// kind="local", own routing/bank-code provenance, and me_owner = (caller is the
+// BUYER/HOLDER) — a formed option is the buyer's owned asset. When the id is not
+// a local contract, it falls back to the cross-bank peer_option_contracts mirror
+// and returns a kind="remote" projection (me_owner = Direction=="CREDIT"). A
+// non-NotFound error from the remote lookup surfaces as Internal — it is NEVER
+// masked as a 404. NotFound only when neither a local nor a remote row exists.
 func (h *OTCOptionsHandler) GetContract(ctx context.Context, in *stockpb.GetContractRequest) (*stockpb.OptionContractResponse, error) {
 	if h.contracts == nil {
 		return nil, status.Error(codes.Unimplemented, "contracts repo not wired")
 	}
 	c, err := h.contracts.GetByID(in.ContractId)
 	if err != nil {
+		// Local contract doesn't exist — try the cross-bank mirror before 404.
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			remote, rerr := h.resolveRemoteContract(in.ContractId)
+			if rerr == nil {
+				return remote, nil
+			}
+			// A genuine mirror miss falls through to the original NotFound. Any
+			// other error (e.g. DB failure) MUST surface as Internal, not be
+			// silently swallowed as a 404 (same bug we fixed for GetOffer).
+			if !errors.Is(rerr, gorm.ErrRecordNotFound) {
+				return nil, status.Errorf(codes.Internal, "remote contract lookup failed: %v", rerr)
+			}
+		}
 		return nil, mapOTCErr(err)
 	}
 	actorOwnerType, actorOwnerID := model.OwnerFromLegacy(uint64(in.ActorUserId), in.ActorSystemType)
@@ -454,7 +543,30 @@ func (h *OTCOptionsHandler) GetContract(ctx context.Context, in *stockpb.GetCont
 	if !isBuyer && !isSeller {
 		return nil, status.Error(codes.PermissionDenied, "not a participant")
 	}
-	return h.withMarketRef(c, toContractProto(c)), nil
+	resp := h.withMarketRef(c, toContractProto(c))
+	resp.Kind = "local"
+	resp.RoutingNumber = h.ownRouting
+	resp.BankCode = h.ownBankCode
+	// me_owner ⇔ the caller is the contract's BUYER/HOLDER (owner of the formed
+	// option asset). The seller/writer is never the owner.
+	resp.MeOwner = isBuyer
+	return resp, nil
+}
+
+// resolveRemoteContract builds an OptionContractResponse from the cross-bank
+// peer_option_contracts mirror for a non-local contract id. Returns
+// gorm.ErrRecordNotFound when the mirror is unwired or has no such row, so the
+// caller can surface a plain 404; any other error propagates so the caller can
+// surface Internal.
+func (h *OTCOptionsHandler) resolveRemoteContract(id uint64) (*stockpb.OptionContractResponse, error) {
+	if h.peerContracts == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	p, err := h.peerContracts.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	return peerContractToUnifiedProto(p), nil
 }
 
 func (h *OTCOptionsHandler) ExerciseContract(ctx context.Context, in *stockpb.ExerciseContractRequest) (*stockpb.ExerciseResponse, error) {

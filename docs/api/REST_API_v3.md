@@ -5670,7 +5670,63 @@ Exercise an options contract.
 | *(new)* | `GET /api/v3/otc/options` (unified local + remote discovery) |
 | *(new — peer)* | `GET /api/v3/cross-bank-protocol/public-option-offers` (cross-bank discovery endpoint) |
 
-The exercise route, contract list, contract detail, ratings, and negotiation-history routes from the old §30 are unchanged — they're still at their existing paths under `/me/otc/contracts/...`, `/me/otc/history`, and `/otc/traders/...`.
+The exercise route, ratings, and negotiation-history routes from the old §30 are unchanged — they're still at their existing paths under `/me/otc/contracts/...`, `/me/otc/history`, and `/otc/traders/...`. The contract **list** (`GET /api/v3/me/otc/contracts`) and **detail** (`GET /api/v3/otc/contracts/:id`) routes keep their paths but now serve LOCAL and REMOTE contracts uniformly — see the next subsection.
+
+#### GET /api/v3/me/otc/contracts (unified local + remote) — SP-1 Task 8
+
+Returns the caller's formed option contracts — both LOCAL (intra-bank
+`OptionContract` rows) and REMOTE (cross-bank `peer_option_contracts` mirror
+rows where the caller is a party) — merged into one `contracts` array. Each
+item carries provenance (`kind` / `routing_number` / `bank_code`) plus
+`me_owner`.
+
+**Authentication:** Any JWT + `ResolveIdentity` (AnyAuth — clients and employees accepted)
+
+**Query Parameters:** `role` (`buyer`|`seller`|`either`, default `either`), `page` (default 1), `page_size` (default 20).
+
+**`OptionContractResponse` shape:** in addition to the existing fields, every item now carries:
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` | string | `local` (intra-bank contract) or `remote` (cross-bank peer contract) |
+| `routing_number` | int64 | Owning/hosting bank's routing. For `local`: our own routing. For `remote`: the COUNTERPARTY/peer bank's routing (the side we do NOT host). |
+| `bank_code` | string | Owning/peer bank's code, matching `routing_number`. For `remote` this is the counterparty routing formatted as a string (the peer-contract mirror stores no separate bank-code field). |
+| `me_owner` | bool | `true` ONLY when the caller is the contract's **buyer/holder** — a formed option is the buyer's owned asset, so the seller/writer is `false`. (DIFFERENT from offers/negotiations, where the poster/seller is the owner.) For `remote`: `true` iff the row's `direction == "CREDIT"` (this bank holds the buyer side). |
+
+For `remote` items, `id` is the **local surrogate primary key** of this bank's
+peer-contract mirror row (so callers correlate within this bank's id
+namespace), and the terms (`stock_ticker`, `quantity`, `strike_price`,
+`strike_currency`, `settlement_date`, `status`) are projected from the mirrored
+cross-bank option. The `buyer` / `seller` `PartyRef`s carry the SI-TX
+participant id as `display_name` plus the side's routing number as `bank_code`.
+
+**Paging note:** `page`/`page_size` paginate the LOCAL set; REMOTE contracts
+are appended in full after the local page (never silently truncated). `total`
+reflects the local total only; `peer_total` reflects the remote total. The
+legacy `peer_contracts[]` array is still returned (back-compat) carrying the
+same remote rows in their original `PeerOptionContractResponse` shape — new
+clients should prefer the unified `contracts[]` and switch on each item's
+`kind`.
+
+**Note:** the remote merge is gated to **client** principals (cross-bank
+participant ids are `client-<N>`); an employee acting as the bank skips the
+remote merge and gets local contracts only.
+
+#### GET /api/v3/otc/contracts/:id (unified local + remote) — SP-1 Task 8
+
+Resolves a single option contract by id. A LOCAL `OptionContract` is returned
+with `kind="local"`, own routing/bank-code provenance, and `me_owner` = (caller
+is the buyer/holder). When the id is not a local contract, it falls back to the
+cross-bank `peer_option_contracts` mirror (resolved by surrogate id) and returns
+a `kind="remote"` projection with `me_owner` = (`direction == "CREDIT"`).
+
+**Authentication:** Any JWT + `ResolveIdentity` (AnyAuth).
+
+**Response 403:** Caller is neither the buyer nor the seller of a LOCAL contract.
+
+**Response 404:** Neither a local nor a remote contract with that id exists. (A non-NotFound error from the remote mirror lookup surfaces as 500, never masked as 404.)
+
+---
 
 ### GET /api/v3/me/otc/transactions/:txid/status
 

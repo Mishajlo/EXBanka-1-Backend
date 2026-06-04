@@ -13259,8 +13259,20 @@ type OptionContractResponse struct {
 	CreatedAt            string                 `protobuf:"bytes,18,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt            string                 `protobuf:"bytes,19,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	Version              int64                  `protobuf:"varint,20,opt,name=version,proto3" json:"version,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Provenance + ownership for the unified contract read (SP-1 Task 8).
+	// kind is "local" (intra-bank contract) or "remote" (cross-bank
+	// peer_option_contracts mirror). routing_number / bank_code identify the
+	// OWNING/HOSTING bank: own for local; the COUNTERPARTY peer bank for remote
+	// (the side this bank does NOT host). me_owner is true ONLY when the acting
+	// caller is the contract's BUYER/HOLDER — a formed option is the buyer's
+	// owned asset, so the seller/writer is never the owner (DIFFERENT from
+	// offers/negotiations where the poster/seller is the owner).
+	Kind          string `protobuf:"bytes,21,opt,name=kind,proto3" json:"kind,omitempty"`
+	RoutingNumber int64  `protobuf:"varint,22,opt,name=routing_number,json=routingNumber,proto3" json:"routing_number,omitempty"`
+	BankCode      string `protobuf:"bytes,23,opt,name=bank_code,json=bankCode,proto3" json:"bank_code,omitempty"`
+	MeOwner       bool   `protobuf:"varint,24,opt,name=me_owner,json=meOwner,proto3" json:"me_owner,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *OptionContractResponse) Reset() {
@@ -13431,6 +13443,34 @@ func (x *OptionContractResponse) GetVersion() int64 {
 		return x.Version
 	}
 	return 0
+}
+
+func (x *OptionContractResponse) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *OptionContractResponse) GetRoutingNumber() int64 {
+	if x != nil {
+		return x.RoutingNumber
+	}
+	return 0
+}
+
+func (x *OptionContractResponse) GetBankCode() string {
+	if x != nil {
+		return x.BankCode
+	}
+	return ""
+}
+
+func (x *OptionContractResponse) GetMeOwner() bool {
+	if x != nil {
+		return x.MeOwner
+	}
+	return false
 }
 
 type ListMyContractsRequest struct {
@@ -20784,7 +20824,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x15RejectOTCOfferRequest\x12\x19\n" +
 	"\boffer_id\x18\x01 \x01(\x04R\aofferId\x12\"\n" +
 	"\ractor_user_id\x18\x02 \x01(\x03R\vactorUserId\x12*\n" +
-	"\x11actor_system_type\x18\x03 \x01(\tR\x0factorSystemType\"\xc0\x05\n" +
+	"\x11actor_system_type\x18\x03 \x01(\tR\x0factorSystemType\"\xb3\x06\n" +
 	"\x16OptionContractResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x19\n" +
 	"\boffer_id\x18\x02 \x01(\x04R\aofferId\x12\x19\n" +
@@ -20809,7 +20849,11 @@ const file_stock_stock_proto_rawDesc = "" +
 	"created_at\x18\x12 \x01(\tR\tcreatedAt\x12\x1d\n" +
 	"\n" +
 	"updated_at\x18\x13 \x01(\tR\tupdatedAt\x12\x18\n" +
-	"\aversion\x18\x14 \x01(\x03R\aversion\"\xc9\x01\n" +
+	"\aversion\x18\x14 \x01(\x03R\aversion\x12\x12\n" +
+	"\x04kind\x18\x15 \x01(\tR\x04kind\x12%\n" +
+	"\x0erouting_number\x18\x16 \x01(\x03R\rroutingNumber\x12\x1b\n" +
+	"\tbank_code\x18\x17 \x01(\tR\bbankCode\x12\x19\n" +
+	"\bme_owner\x18\x18 \x01(\bR\ameOwner\"\xc9\x01\n" +
 	"\x16ListMyContractsRequest\x12\"\n" +
 	"\ractor_user_id\x18\x01 \x01(\x03R\vactorUserId\x12*\n" +
 	"\x11actor_system_type\x18\x02 \x01(\tR\x0factorSystemType\x12\x12\n" +

@@ -93,7 +93,7 @@ Add `me_owner bool` to every OTC offer/negotiation/contract item returned by the
 **`me_owner` means "I originated/posted this," not "I'm a party to it."** A bidder, buyer, or holder is NOT an owner. Concretely:
 - **Offer:** `me_owner=true` ⇔ the caller is the listing's **poster/seller** (the offer is mine). An offer I'd bid on → `false`.
 - **Negotiation:** `me_owner=true` ⇔ the caller owns the **parent offer** (I posted the listing and this is a bid *to me*). A chain I opened as the **bidder** → `false`. (For a remote peer negotiation, `me_owner=true` only when we host the **seller/poster** side — `role=="seller"` — not the buyer side.)
-- **Contract:** `me_owner=true` ⇔ the caller is the option's **writer/seller** (who posted the offer that formed it). The **buyer/holder** → `false`.
+- **Contract:** `me_owner=true` ⇔ the caller is the **buyer/holder**. Once the offer is accepted and the contract forms, the option is the buyer's **owned asset** — the same principal who was a non-owning *bidder* on the offer becomes an *owner* of the formed contract. The **seller/writer** → `false`. (This is the one place where the buyer side is the owner — because what's owned is the option the buyer now holds, not the originating offer.)
 
 Its purpose is to let the FE pick out *"things I put up"* from a mixed local+remote feed. This is independent of the Resource Ownership Verification authorization rules (which gate *actions*); `me_owner` is a read-time provenance flag, not an authorization decision.
 
