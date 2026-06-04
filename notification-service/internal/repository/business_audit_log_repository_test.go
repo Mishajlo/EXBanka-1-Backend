@@ -48,7 +48,7 @@ func TestBusinessAuditLogRepository_ListAll_Filters(t *testing.T) {
 	}
 
 	// Filter by actor.
-	rows, total, err = r.ListAll(BusinessAuditLogFilters{ActorID: 2}, 1, 50)
+	_, total, err = r.ListAll(BusinessAuditLogFilters{ActorID: 2}, 1, 50)
 	if err != nil {
 		t.Fatalf("list by actor: %v", err)
 	}
