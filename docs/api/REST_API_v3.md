@@ -5716,13 +5716,15 @@ Create a new investment fund. Provisions a bank-owned RSD account dedicated to t
 | `name` | string | Yes | Unique fund name |
 | `description` | string | No | Short investment-strategy description |
 | `minimum_contribution_rsd` | string (decimal) | No | Smallest allowed invest amount in RSD (default `0`) |
+| `dividend_mode` | string | No | `payout` (default) credits received stock dividends to the fund's cash; `reinvest` auto-buys more of the dividend-paying stock (DRIP). Also settable via `PUT /api/v3/investment-funds/{id}`. Surfaced as `dividend_mode` on every fund response. (SP4) |
 
 **Example Request:**
 ```json
 {
   "name": "Alpha Growth Fund",
   "description": "IT-sector focus",
-  "minimum_contribution_rsd": "1000.00"
+  "minimum_contribution_rsd": "1000.00",
+  "dividend_mode": "reinvest"
 }
 ```
 

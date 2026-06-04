@@ -15507,6 +15507,10 @@ const docTemplate = `{
                 "description": {
                     "type": "string"
                 },
+                "dividend_mode": {
+                    "description": "payout|reinvest; \"\" defaults to payout (SP4)",
+                    "type": "string"
+                },
                 "minimum_contribution_rsd": {
                     "type": "string"
                 },
@@ -16571,6 +16575,10 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "description": {
+                    "type": "string"
+                },
+                "dividend_mode": {
+                    "description": "payout|reinvest (SP4)",
                     "type": "string"
                 },
                 "minimum_contribution_rsd": {

@@ -1056,6 +1056,7 @@ message CreateFundRequest {
   string name = 2;
   string description = 3;
   string minimum_contribution_rsd = 4;
+  string dividend_mode = 5; // payout|reinvest; "" defaults to payout (SP4)
 }
 
 message FundResponse {
@@ -1080,6 +1081,7 @@ message FundResponse {
   string reward_to_variability = 17;
   string max_drawdown_pct      = 18;
   bool   metrics_available     = 19;
+  string dividend_mode         = 20; // payout|reinvest (SP4)
 }
 
 message ListFundsRequest {
@@ -1149,6 +1151,7 @@ message UpdateFundRequest {
   string minimum_contribution_rsd = 5;
   bool   active = 6;
   bool   active_set = 7;
+  string dividend_mode = 8; // payout|reinvest; "" = unchanged (SP4)
 }
 
 message InvestInFundRequest {

@@ -7559,6 +7559,7 @@ type CreateFundRequest struct {
 	Name                   string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Description            string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
 	MinimumContributionRsd string                 `protobuf:"bytes,4,opt,name=minimum_contribution_rsd,json=minimumContributionRsd,proto3" json:"minimum_contribution_rsd,omitempty"`
+	DividendMode           string                 `protobuf:"bytes,5,opt,name=dividend_mode,json=dividendMode,proto3" json:"dividend_mode,omitempty"` // payout|reinvest; "" defaults to payout (SP4)
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -7621,6 +7622,13 @@ func (x *CreateFundRequest) GetMinimumContributionRsd() string {
 	return ""
 }
 
+func (x *CreateFundRequest) GetDividendMode() string {
+	if x != nil {
+		return x.DividendMode
+	}
+	return ""
+}
+
 type FundResponse struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	Id                     uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -7644,6 +7652,7 @@ type FundResponse struct {
 	RewardToVariability string `protobuf:"bytes,17,opt,name=reward_to_variability,json=rewardToVariability,proto3" json:"reward_to_variability,omitempty"`
 	MaxDrawdownPct      string `protobuf:"bytes,18,opt,name=max_drawdown_pct,json=maxDrawdownPct,proto3" json:"max_drawdown_pct,omitempty"`
 	MetricsAvailable    bool   `protobuf:"varint,19,opt,name=metrics_available,json=metricsAvailable,proto3" json:"metrics_available,omitempty"`
+	DividendMode        string `protobuf:"bytes,20,opt,name=dividend_mode,json=dividendMode,proto3" json:"dividend_mode,omitempty"` // payout|reinvest (SP4)
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -7809,6 +7818,13 @@ func (x *FundResponse) GetMetricsAvailable() bool {
 		return x.MetricsAvailable
 	}
 	return false
+}
+
+func (x *FundResponse) GetDividendMode() string {
+	if x != nil {
+		return x.DividendMode
+	}
+	return ""
 }
 
 type ListFundsRequest struct {
@@ -8333,6 +8349,7 @@ type UpdateFundRequest struct {
 	MinimumContributionRsd string                 `protobuf:"bytes,5,opt,name=minimum_contribution_rsd,json=minimumContributionRsd,proto3" json:"minimum_contribution_rsd,omitempty"`
 	Active                 bool                   `protobuf:"varint,6,opt,name=active,proto3" json:"active,omitempty"`
 	ActiveSet              bool                   `protobuf:"varint,7,opt,name=active_set,json=activeSet,proto3" json:"active_set,omitempty"`
+	DividendMode           string                 `protobuf:"bytes,8,opt,name=dividend_mode,json=dividendMode,proto3" json:"dividend_mode,omitempty"` // payout|reinvest; "" = unchanged (SP4)
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -8414,6 +8431,13 @@ func (x *UpdateFundRequest) GetActiveSet() bool {
 		return x.ActiveSet
 	}
 	return false
+}
+
+func (x *UpdateFundRequest) GetDividendMode() string {
+	if x != nil {
+		return x.DividendMode
+	}
+	return ""
 }
 
 type InvestInFundRequest struct {
@@ -19737,12 +19761,13 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\n" +
 	"OnBehalfOf\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x17\n" +
-	"\afund_id\x18\x02 \x01(\x04R\x06fundId\"\xaf\x01\n" +
+	"\afund_id\x18\x02 \x01(\x04R\x06fundId\"\xd4\x01\n" +
 	"\x11CreateFundRequest\x12*\n" +
 	"\x11actor_employee_id\x18\x01 \x01(\x03R\x0factorEmployeeId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x128\n" +
-	"\x18minimum_contribution_rsd\x18\x04 \x01(\tR\x16minimumContributionRsd\"\xd5\x05\n" +
+	"\x18minimum_contribution_rsd\x18\x04 \x01(\tR\x16minimumContributionRsd\x12#\n" +
+	"\rdividend_mode\x18\x05 \x01(\tR\fdividendMode\"\xfa\x05\n" +
 	"\fFundResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
@@ -19767,7 +19792,8 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x0evolatility_pct\x18\x10 \x01(\tR\rvolatilityPct\x122\n" +
 	"\x15reward_to_variability\x18\x11 \x01(\tR\x13rewardToVariability\x12(\n" +
 	"\x10max_drawdown_pct\x18\x12 \x01(\tR\x0emaxDrawdownPct\x12+\n" +
-	"\x11metrics_available\x18\x13 \x01(\bR\x10metricsAvailable\"\xb4\x01\n" +
+	"\x11metrics_available\x18\x13 \x01(\bR\x10metricsAvailable\x12#\n" +
+	"\rdividend_mode\x18\x14 \x01(\tR\fdividendMode\"\xb4\x01\n" +
 	"\x10ListFundsRequest\x12\x12\n" +
 	"\x04page\x18\x01 \x01(\x05R\x04page\x12\x1b\n" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x16\n" +
@@ -19816,7 +19842,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x11current_price_rsd\x18\x06 \x01(\tR\x0fcurrentPriceRsd\x12\x1f\n" +
 	"\vacquired_at\x18\a \x01(\tR\n" +
 	"acquiredAt\x12*\n" +
-	"\x11current_value_rsd\x18\b \x01(\tR\x0fcurrentValueRsd\"\xff\x01\n" +
+	"\x11current_value_rsd\x18\b \x01(\tR\x0fcurrentValueRsd\"\xa4\x02\n" +
 	"\x11UpdateFundRequest\x12*\n" +
 	"\x11actor_employee_id\x18\x01 \x01(\x03R\x0factorEmployeeId\x12\x17\n" +
 	"\afund_id\x18\x02 \x01(\x04R\x06fundId\x12\x12\n" +
@@ -19825,7 +19851,8 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x18minimum_contribution_rsd\x18\x05 \x01(\tR\x16minimumContributionRsd\x12\x16\n" +
 	"\x06active\x18\x06 \x01(\bR\x06active\x12\x1d\n" +
 	"\n" +
-	"active_set\x18\a \x01(\bR\tactiveSet\"\x93\x02\n" +
+	"active_set\x18\a \x01(\bR\tactiveSet\x12#\n" +
+	"\rdividend_mode\x18\b \x01(\tR\fdividendMode\"\x93\x02\n" +
 	"\x13InvestInFundRequest\x12\x17\n" +
 	"\afund_id\x18\x01 \x01(\x04R\x06fundId\x12\"\n" +
 	"\ractor_user_id\x18\x02 \x01(\x04R\vactorUserId\x12*\n" +

@@ -25,6 +25,7 @@ type createFundRequest struct {
 	Name                   string `json:"name"`
 	Description            string `json:"description"`
 	MinimumContributionRSD string `json:"minimum_contribution_rsd"`
+	DividendMode           string `json:"dividend_mode"` // payout|reinvest; "" defaults to payout (SP4)
 }
 
 // CreateFund godoc
@@ -49,12 +50,21 @@ func (h *InvestmentFundHandler) CreateFund(c *gin.Context) {
 		apiError(c, http.StatusBadRequest, ErrValidation, "name is required")
 		return
 	}
+	dividendMode := req.DividendMode
+	if dividendMode != "" {
+		if _, err := oneOf("dividend_mode", dividendMode, "payout", "reinvest"); err != nil {
+			apiError(c, http.StatusBadRequest, ErrValidation, err.Error())
+			return
+		}
+		dividendMode, _ = oneOf("dividend_mode", dividendMode, "payout", "reinvest")
+	}
 	actorID := c.GetInt64("principal_id")
 	resp, err := h.client.CreateFund(c.Request.Context(), &stockpb.CreateFundRequest{
 		ActorEmployeeId:        actorID,
 		Name:                   req.Name,
 		Description:            req.Description,
 		MinimumContributionRsd: req.MinimumContributionRSD,
+		DividendMode:           dividendMode,
 	})
 	if err != nil {
 		handleGRPCError(c, err)
@@ -166,6 +176,7 @@ type updateFundRequest struct {
 	Description            *string `json:"description,omitempty"`
 	MinimumContributionRSD *string `json:"minimum_contribution_rsd,omitempty"`
 	Active                 *bool   `json:"active,omitempty"`
+	DividendMode           *string `json:"dividend_mode,omitempty"` // payout|reinvest (SP4)
 }
 
 // UpdateFund godoc
@@ -204,6 +215,14 @@ func (h *InvestmentFundHandler) UpdateFund(c *gin.Context) {
 	if req.Active != nil {
 		in.ActiveSet = true
 		in.Active = *req.Active
+	}
+	if req.DividendMode != nil {
+		if _, err := oneOf("dividend_mode", *req.DividendMode, "payout", "reinvest"); err != nil {
+			apiError(c, http.StatusBadRequest, ErrValidation, err.Error())
+			return
+		}
+		mode, _ := oneOf("dividend_mode", *req.DividendMode, "payout", "reinvest")
+		in.DividendMode = mode
 	}
 	resp, err := h.client.UpdateFund(c.Request.Context(), in)
 	if err != nil {

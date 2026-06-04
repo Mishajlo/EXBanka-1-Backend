@@ -101,6 +101,7 @@ func (h *InvestmentFundHandler) CreateFund(ctx context.Context, in *stockpb.Crea
 		Name:                   in.Name,
 		Description:            in.Description,
 		MinimumContributionRSD: min,
+		DividendMode:           model.DividendMode(in.DividendMode),
 	})
 	if err != nil {
 		return nil, mapFundErr(err)
@@ -261,6 +262,10 @@ func (h *InvestmentFundHandler) UpdateFund(ctx context.Context, in *stockpb.Upda
 	if in.ActiveSet {
 		upd.Active = &in.Active
 	}
+	if in.DividendMode != "" {
+		m := model.DividendMode(in.DividendMode)
+		upd.DividendMode = &m
+	}
 	out, err := h.fundSvc.Update(ctx, upd)
 	if err != nil {
 		return nil, mapFundErr(err)
@@ -417,6 +422,7 @@ func toFundResponse(f *model.InvestmentFund) *stockpb.FundResponse {
 		MinimumContributionRsd: f.MinimumContributionRSD.String(),
 		RsdAccountId:           f.RSDAccountID,
 		Active:                 f.Active,
+		DividendMode:           string(f.DividendMode),
 		CreatedAt:              f.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:              f.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}

@@ -793,7 +793,7 @@ func main() {
 		dividendPaymentRepo, dividendPayoutRepo, fundDividendPaymentRepo,
 		holdingRepo, fundHoldingRepo, fundRepo, fundPositionRepo,
 		fundAccountAdapter,
-	)
+	).WithReinvest(orderSvc, listingRepo, fundExchangeAdapter) // SP4: dividend_mode=reinvest DRIP
 
 	fundHandler := handler.NewInvestmentFundHandler(fundService, fundRepo, fundPositionRepo).
 		WithActuaryDeps(capitalGainRepo, userClient, exchangeClient).
