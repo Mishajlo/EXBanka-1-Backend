@@ -364,14 +364,17 @@ func (h *PortfolioHandler) listUnifiedOTCOptions(c *gin.Context, ownerOnlySeller
 		handleGRPCError(c, err)
 		return
 	}
+	identity, _ := c.MustGet("identity").(*middleware.ResolvedIdentity)
 	offers := make([]gin.H, 0, len(resp.GetOffers()))
 	for _, o := range resp.GetOffers() {
 		row := gin.H{
+			"id":               o.GetLocalId(),
 			"kind":             o.GetKind(),
 			"bank_code":        o.GetBankCode(),
 			"routing_number":   o.GetRoutingNumber(),
 			"offer_id":         o.GetOfferId(),
 			"seller_id":        o.GetSellerId(),
+			"me_owner":         otcOfferMeOwner(identity, o.GetKind(), o.GetSellerId()),
 			"seller_name":      o.GetSellerName(),
 			"direction":        o.GetDirection(),
 			"ticker":           o.GetTicker(),
