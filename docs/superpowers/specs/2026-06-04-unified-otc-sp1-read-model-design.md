@@ -90,7 +90,12 @@ Add `me_owner bool` to every OTC offer/negotiation/contract item returned by the
 - **employee** (no on-behalf) → `me_owner = bank_owned`.
 - **employee on-behalf-of-client** → `me_owner = (resource.owner_id == on_behalf_of_client_id)`. **Not applicable in SP-1:** the read routes resolve identity via `OwnerIsBankIfEmployee` and carry no on-behalf parameter, so an employee is always either acting as the bank or as themselves. `ResolvedIdentity` has no on-behalf field today; if a future read accepts an on-behalf client id, extend `ResolvedIdentity` and add this case to `meOwnerForOwner`.
 
-For an offer, "owner" = the seller/poster (local) or the listing's seller (remote — from our side a remote listing is never bank/owner-local, so `me_owner=false` unless we posted it, which makes it local). For a negotiation, "owner" = the chain's bidder party we host. For a contract, "owner" = the holder side we host. This mirrors the existing Resource Ownership Verification rules so the FE flag matches server-side authorization exactly.
+**`me_owner` means "I originated/posted this," not "I'm a party to it."** A bidder, buyer, or holder is NOT an owner. Concretely:
+- **Offer:** `me_owner=true` ⇔ the caller is the listing's **poster/seller** (the offer is mine). An offer I'd bid on → `false`.
+- **Negotiation:** `me_owner=true` ⇔ the caller owns the **parent offer** (I posted the listing and this is a bid *to me*). A chain I opened as the **bidder** → `false`. (For a remote peer negotiation, `me_owner=true` only when we host the **seller/poster** side — `role=="seller"` — not the buyer side.)
+- **Contract:** `me_owner=true` ⇔ the caller is the option's **writer/seller** (who posted the offer that formed it). The **buyer/holder** → `false`.
+
+Its purpose is to let the FE pick out *"things I put up"* from a mixed local+remote feed. This is independent of the Resource Ownership Verification authorization rules (which gate *actions*); `me_owner` is a read-time provenance flag, not an authorization decision.
 
 ## 6. Endpoints touched (reads only — no path/verb changes)
 
