@@ -5,6 +5,18 @@
 **Parent:** `2026-06-04-unified-otc-local-remote-umbrella-design.md`
 **Scope rule:** SP-1 unifies **reads only**. Write/action routes are untouched and still split (local `/otc/options/...` vs remote `/me/peer-otc/...`). SP-2 unifies writes.
 
+## 0. Architecture revision (2026-06-04) — service-layer convergence
+
+This supersedes the gateway-centric approach in the original §3.4/§5/§6 (and the first cut of Tasks 5–6). The layering, top to bottom:
+
+- **Gateway: fully uniform.** It does NOT know or branch on local vs remote. It passes the caller's resolved identity (`acting_owner_type` + `acting_owner_id`, lifted from the JWT) into each read gRPC and passes the response straight back. No gateway-side merge, no `me_owner` computation, no separate remote RPC. (The gateway `otc_me_owner.go` helpers introduced in the first cut of Task 5 are removed; the logic moves to stock-service.)
+- **Service (stock-service): the FIRST layer that distinguishes local vs remote** — because it is the layer that both calls the local repo *and* reads the remote mirror / makes cross-bank HTTP. Each read RPC resolves local and/or remote, **merges**, and **stamps every returned item** with provenance (`kind` ∈ local|remote, `routing_number`, `bank_code`) and `me_owner` (computed from the identity passed in). One uniform RPC per read — no `Local*`/`Remote*` RPC pairs.
+- **Repo: per-source.** The local `OTCOffer`/negotiation/contract repos and the `remote_otc_offer` mirror repo stay separate; the service unions them.
+
+**Storage (decision B):** the `remote_otc_offer` mirror table (Tasks 1–3) stays as a *physical* detail for SP-1. Folding remote rows into the local `OTCOffer` table (one table + `kind` column) is deferred to **SP-2**, where it lands atomically with the write-path `kind='local'` guards — putting remote rows into `OTCOffer` before those guards exist would risk a remote row entering local accept/cascade/expiry (money) logic. `OTCOffer` also carries local-only FKs (`StockID`, `InitiatorAccountID`) a remote mirror cannot satisfy, so the merge needs the model rework SP-2 does anyway.
+
+**`me_owner` + provenance live in the proto + service**, not the gateway. Read RPC responses gain `kind`, `routing_number`, `bank_code`, `me_owner` (additive, backward-compatible). `GetOffer` resolves local→remote-mirror internally (no separate `GetRemoteOTCOffer` RPC — the first cut of Task 6 added one; it is removed). Identity reaches the service via the existing `ActorUserId`/`ActorSystemType` actor fields where present, or new `acting_owner_type`/`acting_owner_id` request fields where absent (e.g. discovery).
+
 ## 1. Goal
 
 After SP-1, every OTC **read** the frontend makes returns one shape that covers local and remote uniformly, with stable local ids for remote resources and a `me_owner` flag — so the FE never branches on `kind` to *read* offers, my-negotiations, history, or contracts. A reconciliation poll keeps remote rows honest: a peer-cancelled/finished offer or negotiation becomes `cancelled` on our side.
