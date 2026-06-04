@@ -189,9 +189,16 @@ func (h *WatchlistHandler) ListWatchlists(c *gin.Context) {
 		handleGRPCError(c, err)
 		return
 	}
-	// Emit all fields (incl. item_count=0) so a list-management UI never sees
-	// a count drop to null on an empty list.
-	c.JSON(http.StatusOK, gin.H{"watchlists": protoJSONSlice(resp.Watchlists)})
+	// Hand-shape so item_count is always present as a number (0 for an empty
+	// list) — the raw proto omits int64 zero values.
+	lists := make([]gin.H, 0, len(resp.Watchlists))
+	for _, w := range resp.Watchlists {
+		lists = append(lists, gin.H{
+			"id": w.GetId(), "name": w.GetName(),
+			"item_count": w.GetItemCount(), "created_at": w.GetCreatedAt(),
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"watchlists": lists})
 }
 
 // CreateWatchlist godoc

@@ -43,4 +43,4 @@ This release (`VERSION` 1.0.0 → 1.6.0) is **fully backward-compatible**: it ad
 
 ## Serialization note
 
-List endpoints that return protobuf messages directly (`GET /investment-funds`, `GET /me/watchlists`) emit **all** fields including zero/false defaults (`metrics_available`, `item_count`) as of this release — fixed so a client never sees a field omitted just because its value is `false`/`0`. (Previously these followed proto3 JSON omit-default semantics; the detail endpoints always included them.)
+`GET /investment-funds` and `GET /me/watchlists` now **hand-shape** their items so every field is always present — in particular `metrics_available` (`false`) and `item_count` (`0`) no longer drop out when they hold default values (the raw proto-JSON omits `false`/`0`). Field **names and types are unchanged** (numeric ids stay JSON numbers); only the previously-omitted default fields are now always included. The detail endpoints already behaved this way.

@@ -118,9 +118,41 @@ func (h *InvestmentFundHandler) ListFunds(c *gin.Context) {
 		handleGRPCError(c, err)
 		return
 	}
-	// Emit all fields (incl. metrics_available=false) so discovery cards can
-	// rely on every field being present.
-	c.JSON(http.StatusOK, gin.H{"funds": protoJSONSlice(resp.Funds), "total": resp.Total})
+	// Hand-shape so every field is present (esp. metrics_available=false, which
+	// the raw proto omits) while keeping numeric ids as JSON numbers.
+	out := make([]gin.H, 0, len(resp.Funds))
+	for _, f := range resp.Funds {
+		out = append(out, fundRespToJSON(f))
+	}
+	c.JSON(http.StatusOK, gin.H{"funds": out, "total": resp.Total})
+}
+
+// fundRespToJSON renders a FundResponse with all fields present (so discovery
+// cards can rely on metrics_available/dividend_mode always being there) and
+// numeric ids as numbers (matching the detail endpoint).
+func fundRespToJSON(f *stockpb.FundResponse) gin.H {
+	return gin.H{
+		"id":                       f.GetId(),
+		"name":                     f.GetName(),
+		"description":              f.GetDescription(),
+		"manager_employee_id":      f.GetManagerEmployeeId(),
+		"manager_full_name":        f.GetManagerFullName(),
+		"minimum_contribution_rsd": f.GetMinimumContributionRsd(),
+		"rsd_account_id":           f.GetRsdAccountId(),
+		"rsd_account_number":       f.GetRsdAccountNumber(),
+		"active":                   f.GetActive(),
+		"created_at":               f.GetCreatedAt(),
+		"updated_at":               f.GetUpdatedAt(),
+		"value_rsd":                f.GetValueRsd(),
+		"liquid_rsd":               f.GetLiquidRsd(),
+		"profit_rsd":               f.GetProfitRsd(),
+		"annualized_return_pct":    f.GetAnnualizedReturnPct(),
+		"volatility_pct":           f.GetVolatilityPct(),
+		"reward_to_variability":    f.GetRewardToVariability(),
+		"max_drawdown_pct":         f.GetMaxDrawdownPct(),
+		"metrics_available":        f.GetMetricsAvailable(),
+		"dividend_mode":            f.GetDividendMode(),
+	}
 }
 
 // GetFund godoc
