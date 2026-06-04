@@ -216,8 +216,11 @@ func TestAcceptSaga_RecordsOptionPremiumCapitalGains(t *testing.T) {
 		t.Fatalf("accept: %v", err)
 	}
 
-	if len(cgRepo.gains) != 2 {
-		t.Fatalf("expected 2 capital gain rows (writer + buyer), got %d", len(cgRepo.gains))
+	// Resolution-month model (2026-06-04): only the writer's (seller's) premium
+	// income is booked at accept. The buyer's premium is realised at
+	// exercise/expiry, so no buyer row exists here. Spec §3, §4 C1.
+	if len(cgRepo.gains) != 1 {
+		t.Fatalf("expected 1 capital gain row (writer premium only), got %d", len(cgRepo.gains))
 	}
 	sellerUID := uint64(fx.sellerID)
 	buyerUID := uint64(fx.buyerID)
@@ -233,8 +236,8 @@ func TestAcceptSaga_RecordsOptionPremiumCapitalGains(t *testing.T) {
 	if writerCG == nil {
 		t.Fatalf("missing writer CG row")
 	}
-	if buyerCG == nil {
-		t.Fatalf("missing buyer CG row")
+	if buyerCG != nil {
+		t.Fatalf("buyer premium row must NOT be booked at accept under the resolution-month model")
 	}
 	// Premium in fixture = 50000.
 	wantPremium := decimal.NewFromInt(50000)
@@ -244,14 +247,8 @@ func TestAcceptSaga_RecordsOptionPremiumCapitalGains(t *testing.T) {
 	if !writerCG.TotalGain.Equal(wantPremium) {
 		t.Errorf("writer TotalGain = %s, want +%s", writerCG.TotalGain, wantPremium)
 	}
-	if buyerCG.SecurityType != "option" {
-		t.Errorf("buyer SecurityType = %q, want option", buyerCG.SecurityType)
-	}
-	if !buyerCG.TotalGain.Equal(wantPremium.Neg()) {
-		t.Errorf("buyer TotalGain = %s, want -%s", buyerCG.TotalGain, wantPremium)
-	}
-	if !writerCG.OTC || !buyerCG.OTC {
-		t.Error("both option CG rows must have OTC=true")
+	if !writerCG.OTC {
+		t.Error("writer option CG row must have OTC=true")
 	}
 }
 
