@@ -189,7 +189,9 @@ func (h *WatchlistHandler) ListWatchlists(c *gin.Context) {
 		handleGRPCError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"watchlists": resp.Watchlists})
+	// Emit all fields (incl. item_count=0) so a list-management UI never sees
+	// a count drop to null on an empty list.
+	c.JSON(http.StatusOK, gin.H{"watchlists": protoJSONSlice(resp.Watchlists)})
 }
 
 // CreateWatchlist godoc

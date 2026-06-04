@@ -118,7 +118,9 @@ func (h *InvestmentFundHandler) ListFunds(c *gin.Context) {
 		handleGRPCError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"funds": resp.Funds, "total": resp.Total})
+	// Emit all fields (incl. metrics_available=false) so discovery cards can
+	// rely on every field being present.
+	c.JSON(http.StatusOK, gin.H{"funds": protoJSONSlice(resp.Funds), "total": resp.Total})
 }
 
 // GetFund godoc
