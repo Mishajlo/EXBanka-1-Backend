@@ -60,8 +60,10 @@ func TestWF_FundStatistics_SurfaceAndSort(t *testing.T) {
 		fr, _ := raw.(map[string]interface{})
 		if int(fr["id"].(float64)) == fundID {
 			found = true
-			if _, ok := fr["metrics_available"]; !ok {
-				t.Errorf("fund in sorted list missing metrics_available")
+			// proto JSON omits false bools, but the metric strings ("0" when
+			// unavailable) are non-empty and present — assert they flow through.
+			if _, ok := fr["annualized_return_pct"]; !ok {
+				t.Errorf("fund in sorted list missing annualized_return_pct")
 			}
 		}
 	}
