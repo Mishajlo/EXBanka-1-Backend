@@ -3,6 +3,7 @@ package handler_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -61,7 +62,22 @@ func (s *otcStubAccountClient) GetAccountByNumber(_ context.Context, in *account
 // account stubs (ticker resolves to stock 11; accounts are owned by client
 // principal 42). Tests needing other behaviour construct the handler directly.
 func otcHandler(cl *stubOTCOptionsClient, peer *stubPeerOTCExerciseClient) *handler.OTCOptionsHandler {
-	return handler.NewOTCOptionsHandler(cl, peer, &otcStubSecurityClient{}, &otcStubAccountClient{})
+	return handler.NewOTCOptionsHandler(cl, peer, &otcStubSecurityClient{}, &otcStubAccountClient{}, &stubOTCGRPCClient{})
+}
+
+// stubOTCGRPCClient implements stockpb.OTCGRPCServiceClient; only
+// GetRemoteOTCOffer carries test behaviour. The remaining RPCs are
+// embedded as Unimplemented and unused by the OTC options handler.
+type stubOTCGRPCClient struct {
+	stockpb.OTCGRPCServiceClient
+	getRemoteFn func(*stockpb.GetRemoteOTCOfferRequest) (*stockpb.GetRemoteOTCOfferResponse, error)
+}
+
+func (s *stubOTCGRPCClient) GetRemoteOTCOffer(_ context.Context, in *stockpb.GetRemoteOTCOfferRequest, _ ...grpc.CallOption) (*stockpb.GetRemoteOTCOfferResponse, error) {
+	if s.getRemoteFn != nil {
+		return s.getRemoteFn(in)
+	}
+	return nil, status.Error(codes.NotFound, "remote offer not found")
 }
 
 // stubOTCOptionsClient implements stockpb.OTCOptionsServiceClient.
@@ -266,7 +282,7 @@ func TestOTCOpt_CreateOffer_UnknownTicker(t *testing.T) {
 	sec := &otcStubSecurityClient{byTickerFn: func(*stockpb.GetStockByTickerRequest) (*stockpb.StockDetail, error) {
 		return nil, status.Error(codes.NotFound, "no stock")
 	}}
-	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}, sec, &otcStubAccountClient{})
+	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}, sec, &otcStubAccountClient{}, &stubOTCGRPCClient{})
 	r := otcOptionsRouter(h)
 	body := `{"direction":"sell_initiated","ticker":"NOPE","quantity":"1","strike_price":"5","premium":"1","settlement_date":"2026-12-31","account_id":50}`
 	rec := httptest.NewRecorder()
@@ -278,7 +294,7 @@ func TestOTCOpt_CreateOffer_AccountNotOwned(t *testing.T) {
 	acct := &otcStubAccountClient{getFn: func(in *accountpb.GetAccountRequest) (*accountpb.AccountResponse, error) {
 		return &accountpb.AccountResponse{Id: in.Id, OwnerId: 999, AccountKind: "current"}, nil
 	}}
-	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}, &otcStubSecurityClient{}, acct)
+	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}, &otcStubSecurityClient{}, acct, &stubOTCGRPCClient{})
 	r := otcOptionsRouter(h)
 	body := `{"direction":"sell_initiated","ticker":"AAPL","quantity":"1","strike_price":"5","premium":"1","settlement_date":"2026-12-31","account_id":50}`
 	rec := httptest.NewRecorder()
@@ -373,6 +389,80 @@ func TestOTCOpt_GetOffer_BadID(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+// SP-1: a local offer detail is decorated with kind=local + me_owner=true
+// when the caller is the offer's client initiator, and the legacy {offer}
+// body is preserved.
+func TestGetOffer_LocalDecorated(t *testing.T) {
+	cl := &stubOTCOptionsClient{
+		getOfferFn: func(in *stockpb.GetOTCOfferRequest) (*stockpb.OTCOfferDetailResponse, error) {
+			require.Equal(t, uint64(15), in.OfferId)
+			return &stockpb.OTCOfferDetailResponse{Offer: &stockpb.OTCOfferResponse{
+				Id:        15,
+				Initiator: &stockpb.PartyRef{UserId: 42, SystemType: "client"},
+			}}, nil
+		},
+	}
+	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/offers/15", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "local", body["kind"])
+	require.Equal(t, true, body["me_owner"])
+	require.Contains(t, body, "offer") // legacy field preserved
+}
+
+// SP-1: when the id is not a local offer (GetOffer → NotFound), GetOffer
+// resolves the remote mirror and returns kind=remote + me_owner=false.
+func TestGetOffer_RemoteFallback(t *testing.T) {
+	cl := &stubOTCOptionsClient{
+		getOfferFn: func(*stockpb.GetOTCOfferRequest) (*stockpb.OTCOfferDetailResponse, error) {
+			return nil, status.Error(codes.NotFound, "not local")
+		},
+	}
+	grpcStub := &stubOTCGRPCClient{
+		getRemoteFn: func(in *stockpb.GetRemoteOTCOfferRequest) (*stockpb.GetRemoteOTCOfferResponse, error) {
+			require.Equal(t, uint64(7), in.LocalId)
+			return &stockpb.GetRemoteOTCOfferResponse{
+				LocalId: 7, BankCode: "222", ForeignOfferId: "off-9",
+				SellerId: "client-3", Direction: "sell_initiated", Ticker: "AAPL",
+				Status: "open",
+			}, nil
+		},
+	}
+	h := handler.NewOTCOptionsHandler(cl, &stubPeerOTCExerciseClient{}, &otcStubSecurityClient{}, &otcStubAccountClient{}, grpcStub)
+	r := otcOptionsRouter(h)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/offers/7", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "remote", body["kind"])
+	require.Equal(t, false, body["me_owner"])
+	require.Equal(t, float64(7), body["id"])
+	require.Equal(t, "open", body["status"])
+}
+
+// SP-1: NotFound from both the local lookup and the remote mirror → 404.
+func TestGetOffer_NotFoundBoth(t *testing.T) {
+	cl := &stubOTCOptionsClient{
+		getOfferFn: func(*stockpb.GetOTCOfferRequest) (*stockpb.OTCOfferDetailResponse, error) {
+			return nil, status.Error(codes.NotFound, "not local")
+		},
+	}
+	grpcStub := &stubOTCGRPCClient{
+		getRemoteFn: func(*stockpb.GetRemoteOTCOfferRequest) (*stockpb.GetRemoteOTCOfferResponse, error) {
+			return nil, status.Error(codes.NotFound, "not remote")
+		},
+	}
+	h := handler.NewOTCOptionsHandler(cl, &stubPeerOTCExerciseClient{}, &otcStubSecurityClient{}, &otcStubAccountClient{}, grpcStub)
+	r := otcOptionsRouter(h)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/offers/99", nil))
+	require.Equal(t, http.StatusNotFound, rec.Code)
+}
+
 func TestOTCOpt_CounterOffer_Success(t *testing.T) {
 	cl := &stubOTCOptionsClient{
 		counterFn: func(in *stockpb.CounterOTCOfferRequest) (*stockpb.OTCOfferResponse, error) {
@@ -427,7 +517,7 @@ func TestOTCOpt_AcceptOffer_AccountNotOwned(t *testing.T) {
 	acct := &otcStubAccountClient{getFn: func(in *accountpb.GetAccountRequest) (*accountpb.AccountResponse, error) {
 		return &accountpb.AccountResponse{Id: in.Id, OwnerId: 999, AccountKind: "current"}, nil
 	}}
-	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}, &otcStubSecurityClient{}, acct)
+	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}, &otcStubSecurityClient{}, acct, &stubOTCGRPCClient{})
 	r := otcOptionsRouter(h)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers/1/accept", strings.NewReader(`{"account_id":50}`)))
@@ -564,7 +654,7 @@ func TestOTCOpt_ExercisePeerContract_StrikeAccountNotOwned(t *testing.T) {
 	acct := &otcStubAccountClient{getByNumFn: func(in *accountpb.GetAccountByNumberRequest) (*accountpb.AccountResponse, error) {
 		return &accountpb.AccountResponse{AccountNumber: in.AccountNumber, OwnerId: 999, AccountKind: "current"}, nil // not the caller (42)
 	}}
-	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, peer, &otcStubSecurityClient{}, acct)
+	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, peer, &otcStubSecurityClient{}, acct, &stubOTCGRPCClient{})
 	r := otcOptionsRouter(h)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/me/otc/contracts/peer/8/exercise", strings.NewReader(`{"buyer_account_number":"111000130146666611"}`)))

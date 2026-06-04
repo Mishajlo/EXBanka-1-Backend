@@ -8427,6 +8427,60 @@ History view: every OTC option listing the caller has ever posted, **any status*
 
 ---
 
+#### GET /api/v3/otc/options/:id
+
+Resolve a single OTC option offer by its **stable surrogate id** — the `local_id` surfaced on every row of `GET /api/v3/otc/options`. Works for both **local** offers (this bank's listings) and **remote** offers (a peer-bank listing mirrored locally). The handler first tries the local lookup; if that 404s it falls back to the persistent remote mirror, so a frontend can address any discovered offer — local or remote — by the same id.
+
+**Authentication:** Any JWT + `ResolveIdentity`.
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | uint64 | The surrogate id from the discovery feed (`local_id`) |
+
+**Response 200 — local offer** (backward-compatible: the existing `offer` / `revisions` body is preserved, with two decoration fields added):
+```json
+{
+  "offer":    { "...": "OTCOfferResponse" },
+  "revisions": [ "..." ],
+  "kind":     "local",
+  "me_owner": true
+}
+```
+- `kind` is always `"local"` here.
+- `me_owner` is `true` when the acting identity owns the listing (client whose `seller_id` is `client-<their owner id>`, or an employee acting as the bank on a `bank`-owned listing), else `false`.
+
+**Response 200 — remote (cross-bank) offer** (resolved from the mirror; flat shape):
+```json
+{
+  "id":               7,
+  "kind":             "remote",
+  "me_owner":         false,
+  "offer_id":         "off-9",
+  "bank_code":        "222",
+  "routing_number":   222,
+  "seller_id":        "client-3",
+  "direction":        "sell_initiated",
+  "ticker":           "AAPL",
+  "amount":           50,
+  "strike_price":     "180.50",
+  "strike_currency":  "USD",
+  "premium":          "700.00",
+  "premium_currency": "USD",
+  "settlement_date":  "2026-12-31T00:00:00Z",
+  "status":           "open",
+  "created_at":       "2026-05-10T14:00:00Z"
+}
+```
+- `kind` is always `"remote"` and `me_owner` is always `false` (a peer hosts the listing — it is never ours).
+- `status` is `open` or `cancelled` (cancelled mirror rows are still returned so the FE can render a terminal state rather than a 404).
+
+**Response 400:** `{ "error": { "code": "validation_error", "message": "invalid id" } }`
+**Response 404:** `{ "error": { "code": "not_found", "message": "OTC offer not found" } }` — neither a local offer nor a remote mirror row exists for `id`.
+
+---
+
 #### GET /api/v3/otc/options
 
 Unified cross-bank discovery view: every open OTC option listing on this bank + every peer bank's open listings (refreshed every ~5 s by the OptionRefresher). Filterable, paginated, partial-failure tolerant (the cache exposes `peers_total` / `peers_reached` / `partial=true` if some peers were unreachable in the last refresh).

@@ -1009,7 +1009,7 @@ func main() {
 			unifiedPortfolioSvc := service.NewUnifiedPortfolioService(holdingRepo, fundPositionRepo, fundRepo, fundHoldingRepo, listingRepo, fundAccountAdapter).
 				WithDividendService(dividendSvc)
 			pb.RegisterPortfolioGRPCServiceServer(s, handler.NewPortfolioHandler(portfolioSvc, taxSvc).WithUnifiedPortfolioService(unifiedPortfolioSvc))
-			pb.RegisterOTCGRPCServiceServer(s, handler.NewOTCHandlerWithCache(otcSvc, otcOfferCache).WithOptionCache(optionOfferCache))
+			pb.RegisterOTCGRPCServiceServer(s, handler.NewOTCHandlerWithCache(otcSvc, otcOfferCache).WithOptionCache(optionOfferCache).WithRemoteOffers(remoteOfferRepo))
 			pb.RegisterTaxGRPCServiceServer(s, handler.NewTaxHandler(taxSvc))
 			pb.RegisterInvestmentFundServiceServer(s, fundHandler)
 			pb.RegisterOTCOptionsServiceServer(s, otcOptionsHandler)

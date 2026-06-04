@@ -764,6 +764,10 @@ service OTCGRPCService {
   // every ~5 s from peer banks' GET /public-option-offers. Same partial-
   // failure tolerance as ListUnifiedOffers (peers_total / peers_reached).
   rpc ListUnifiedOptionOffers(ListUnifiedOptionOffersRequest) returns (ListUnifiedOptionOffersResponse);
+  // GetRemoteOTCOffer resolves a single remote (cross-bank) OTC option offer
+  // by its stable local surrogate id, from the persistent mirror. Returns
+  // NotFound if no such mirror row exists. Includes cancelled rows. (SP-1)
+  rpc GetRemoteOTCOffer(GetRemoteOTCOfferRequest) returns (GetRemoteOTCOfferResponse);
 }
 
 message OTCOffer {
@@ -897,6 +901,27 @@ message ListUnifiedOptionOffersResponse {
   int32 peers_reached     = 4;
   bool  partial           = 5;
   int64 last_refresh_unix = 6;
+}
+
+message GetRemoteOTCOfferRequest {
+  uint64 local_id = 1;
+}
+message GetRemoteOTCOfferResponse {
+  uint64 local_id         = 1;
+  string bank_code        = 2;
+  int64  routing_number   = 3;
+  string foreign_offer_id = 4;
+  string seller_id        = 5;
+  string direction        = 6;
+  string ticker           = 7;
+  int64  amount           = 8;
+  string strike_price     = 9;
+  string strike_currency  = 10;
+  string premium          = 11;
+  string premium_currency = 12;
+  string settlement_date  = 13;
+  string status           = 14; // open | cancelled
+  string created_at       = 15; // peer-published created-at
 }
 
 message BuyOTCOfferRequest {

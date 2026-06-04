@@ -1530,6 +1530,7 @@ const (
 	OTCGRPCService_BuyOffer_FullMethodName                = "/stock.OTCGRPCService/BuyOffer"
 	OTCGRPCService_ListUnifiedOffers_FullMethodName       = "/stock.OTCGRPCService/ListUnifiedOffers"
 	OTCGRPCService_ListUnifiedOptionOffers_FullMethodName = "/stock.OTCGRPCService/ListUnifiedOptionOffers"
+	OTCGRPCService_GetRemoteOTCOffer_FullMethodName       = "/stock.OTCGRPCService/GetRemoteOTCOffer"
 )
 
 // OTCGRPCServiceClient is the client API for OTCGRPCService service.
@@ -1547,6 +1548,10 @@ type OTCGRPCServiceClient interface {
 	// every ~5 s from peer banks' GET /public-option-offers. Same partial-
 	// failure tolerance as ListUnifiedOffers (peers_total / peers_reached).
 	ListUnifiedOptionOffers(ctx context.Context, in *ListUnifiedOptionOffersRequest, opts ...grpc.CallOption) (*ListUnifiedOptionOffersResponse, error)
+	// GetRemoteOTCOffer resolves a single remote (cross-bank) OTC option offer
+	// by its stable local surrogate id, from the persistent mirror. Returns
+	// NotFound if no such mirror row exists. Includes cancelled rows. (SP-1)
+	GetRemoteOTCOffer(ctx context.Context, in *GetRemoteOTCOfferRequest, opts ...grpc.CallOption) (*GetRemoteOTCOfferResponse, error)
 }
 
 type oTCGRPCServiceClient struct {
@@ -1597,6 +1602,16 @@ func (c *oTCGRPCServiceClient) ListUnifiedOptionOffers(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *oTCGRPCServiceClient) GetRemoteOTCOffer(ctx context.Context, in *GetRemoteOTCOfferRequest, opts ...grpc.CallOption) (*GetRemoteOTCOfferResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRemoteOTCOfferResponse)
+	err := c.cc.Invoke(ctx, OTCGRPCService_GetRemoteOTCOffer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // OTCGRPCServiceServer is the server API for OTCGRPCService service.
 // All implementations must embed UnimplementedOTCGRPCServiceServer
 // for forward compatibility.
@@ -1612,6 +1627,10 @@ type OTCGRPCServiceServer interface {
 	// every ~5 s from peer banks' GET /public-option-offers. Same partial-
 	// failure tolerance as ListUnifiedOffers (peers_total / peers_reached).
 	ListUnifiedOptionOffers(context.Context, *ListUnifiedOptionOffersRequest) (*ListUnifiedOptionOffersResponse, error)
+	// GetRemoteOTCOffer resolves a single remote (cross-bank) OTC option offer
+	// by its stable local surrogate id, from the persistent mirror. Returns
+	// NotFound if no such mirror row exists. Includes cancelled rows. (SP-1)
+	GetRemoteOTCOffer(context.Context, *GetRemoteOTCOfferRequest) (*GetRemoteOTCOfferResponse, error)
 	mustEmbedUnimplementedOTCGRPCServiceServer()
 }
 
@@ -1633,6 +1652,9 @@ func (UnimplementedOTCGRPCServiceServer) ListUnifiedOffers(context.Context, *Lis
 }
 func (UnimplementedOTCGRPCServiceServer) ListUnifiedOptionOffers(context.Context, *ListUnifiedOptionOffersRequest) (*ListUnifiedOptionOffersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListUnifiedOptionOffers not implemented")
+}
+func (UnimplementedOTCGRPCServiceServer) GetRemoteOTCOffer(context.Context, *GetRemoteOTCOfferRequest) (*GetRemoteOTCOfferResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRemoteOTCOffer not implemented")
 }
 func (UnimplementedOTCGRPCServiceServer) mustEmbedUnimplementedOTCGRPCServiceServer() {}
 func (UnimplementedOTCGRPCServiceServer) testEmbeddedByValue()                        {}
@@ -1727,6 +1749,24 @@ func _OTCGRPCService_ListUnifiedOptionOffers_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OTCGRPCService_GetRemoteOTCOffer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRemoteOTCOfferRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OTCGRPCServiceServer).GetRemoteOTCOffer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OTCGRPCService_GetRemoteOTCOffer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OTCGRPCServiceServer).GetRemoteOTCOffer(ctx, req.(*GetRemoteOTCOfferRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // OTCGRPCService_ServiceDesc is the grpc.ServiceDesc for OTCGRPCService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1749,6 +1789,10 @@ var OTCGRPCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListUnifiedOptionOffers",
 			Handler:    _OTCGRPCService_ListUnifiedOptionOffers_Handler,
+		},
+		{
+			MethodName: "GetRemoteOTCOffer",
+			Handler:    _OTCGRPCService_GetRemoteOTCOffer_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

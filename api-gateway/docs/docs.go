@@ -14477,17 +14477,18 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Resolves an OTC option offer by its stable surrogate id (the local_id from the discovery feed). Local offers return the {offer,revisions} body decorated with kind=\"local\" + me_owner. If the id is not a local offer it is resolved from the remote (cross-bank) mirror and returned as a flat body with kind=\"remote\" + me_owner=false.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "OTCOptions"
                 ],
-                "summary": "Get an OTC offer with revisions",
+                "summary": "Get an OTC option offer by surrogate id (local or remote)",
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "offer id",
+                        "description": "surrogate offer id",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -14496,6 +14497,20 @@ const docTemplate = `{
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
