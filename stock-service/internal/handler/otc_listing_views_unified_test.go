@@ -345,6 +345,76 @@ func TestListingNegotiations_BankOwnedOffer_PeerBid(t *testing.T) {
 	}
 }
 
+// seedBankListingNoNative inserts a BANK-owned LOCAL OTCOffer with NO native_id
+// — the production reality: a local offer's native_id column stays empty, and
+// its cross-bank "native id" (the lot key a peer bidder echoes back) is the
+// offer's SURROGATE id as a string (GetPublicOptionOffers publishes
+// OfferId.Id = strconv(o.ID)).
+func seedBankListingNoNative(t *testing.T, db *gorm.DB, offerID uint64) {
+	t.Helper()
+	o := &model.OTCOffer{
+		ID:                          offerID,
+		RoutingNumber:               model.OwnRouting(),
+		// NativeID intentionally nil (matches a real local offer).
+		InitiatorOwnerType:          model.OwnerBank,
+		InitiatorOwnerID:            nil,
+		Direction:                   "sell_initiated",
+		StockID:                     1,
+		Ticker:                      "ACME",
+		Quantity:                    decimal.NewFromInt(10),
+		StrikePrice:                 decimal.NewFromInt(150),
+		Premium:                     decimal.NewFromInt(20),
+		SettlementDate:              time.Now().AddDate(0, 0, 30),
+		Status:                      "open",
+		LastModifiedByPrincipalType: "employee",
+		LastModifiedByPrincipalID:   1,
+		InitiatorAccountID:          9001,
+		CreatedAt:                   time.Now(),
+		UpdatedAt:                   time.Now(),
+	}
+	if err := db.Create(o).Error; err != nil {
+		t.Fatalf("seed bank listing (no native): %v", err)
+	}
+}
+
+// TestListingNegotiations_BankOwnedOffer_PeerBid_SurrogateIdKey reproduces the
+// LIVE cross-bank bug: a BANK-owned LOCAL offer has no native_id, so a peer's
+// inbound chain carries RemoteParentNativeID = the offer's SURROGATE id string
+// (what GetPublicOptionOffers publishes). The on-listing bank merge must
+// correlate against that surrogate id, NOT the empty native_id column.
+func TestListingNegotiations_BankOwnedOffer_PeerBid_SurrogateIdKey(t *testing.T) {
+	const ownRouting int64 = 111
+	model.SetOwnRouting("111")
+	const peerBuyerRouting int64 = 222
+	const offerID uint64 = 71
+	surrogateKey := "71" // strconv(offerID) — the published cross-bank native id
+	peer := &fakePeerNegLister{bankRows: []model.OTCNegotiation{
+		// A peer bid on THIS bank-owned listing, keyed by the surrogate id.
+		peerRowWithParent(90, peerBuyerRouting, "employee-1", ownRouting, "employee-1", "ongoing", ownRouting, surrogateKey),
+		// A peer bid on a DIFFERENT bank-owned listing — must be excluded.
+		peerRowWithParent(91, peerBuyerRouting, "employee-2", ownRouting, "employee-1", "ongoing", ownRouting, "999"),
+	}}
+	h, db := newListingViewsFixture(t, ownRouting, &fakeRemoteOfferGetter{}, peer)
+	seedBankListingNoNative(t, db, offerID)
+
+	resp, err := h.ListNegotiationsByListing(context.Background(), &stockpb.ListNegotiationsByListingRequest{
+		ParentOfferId: offerID, CallerOwnerType: "bank", CallerOwnerId: 0,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(resp.GetNegotiations()) != 1 {
+		t.Fatalf("want 1 chain (the peer bid on THIS surrogate-keyed listing), got %d", len(resp.GetNegotiations()))
+	}
+	got := resp.GetNegotiations()[0]
+	if got.GetKind() != "remote" || got.GetId() != 90 {
+		t.Errorf("got kind=%q id=%d, want remote/90", got.GetKind(), got.GetId())
+	}
+	if !got.GetMeOwner() {
+		t.Errorf("me_owner=false; the bank owns this listing")
+	}
+}
+
 // TestListingNegotiations_ClientOwnedOffer_NoBankMerge: a CLIENT-owned local
 // listing must NOT pull bank-party remote chains (the bank merge is gated on
 // owner_type="bank"). Only the client's local chains appear. SP-3 Task 5b

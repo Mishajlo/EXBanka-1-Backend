@@ -712,10 +712,13 @@ func (h *OTCOptionsHandler) ListNegotiationsByListing(ctx context.Context, in *s
 		if perr != nil {
 			return nil, status.Errorf(codes.Internal, "list peer negotiations: %v", perr)
 		}
-		parentNative := ""
-		if parentOffer.NativeID != nil {
-			parentNative = *parentOffer.NativeID
-		}
+		// The cross-bank lot key of a LOCAL listing is the native_id column when
+		// set, otherwise the offer's SURROGATE id as a string — that is what
+		// GetPublicOptionOffers publishes as OfferId.Id, and what a peer bidder
+		// echoes back as parentOfferId.id. A local offer leaves native_id empty,
+		// so matching only on native_id would never correlate inbound chains on a
+		// bank-owned listing (the bank could not see bids on its own listing).
+		parentNative := localOfferCrossBankNativeID(parentOffer)
 		for i := range peerRows {
 			row := &peerRows[i]
 			if row.RemoteParentRouting == nil || row.RemoteParentNativeID == nil {
@@ -740,6 +743,23 @@ func (h *OTCOptionsHandler) ListNegotiationsByListing(ctx context.Context, in *s
 		Negotiations: out,
 		Total:        int64(len(out)),
 	}, nil
+}
+
+// localOfferCrossBankNativeID returns the cross-bank lot key of a LOCAL OTC
+// listing — the id a peer bidder echoes back as parentOfferId.id. It is the
+// offer's native_id column when populated, otherwise the offer's SURROGATE id as
+// a string, which is exactly what GetPublicOptionOffers publishes for a local
+// offer (OfferId.Id = strconv(o.ID)). A local offer's native_id stays empty, so
+// without this fallback an inbound cross-bank chain (keyed on the surrogate id)
+// could never be correlated to the listing it bid on.
+func localOfferCrossBankNativeID(o *model.OTCOffer) string {
+	if o == nil {
+		return ""
+	}
+	if o.NativeID != nil && *o.NativeID != "" {
+		return *o.NativeID
+	}
+	return strconv.FormatUint(o.ID, 10)
 }
 
 // isOTCOfferNotFound reports whether an error means "the parent listing is not
