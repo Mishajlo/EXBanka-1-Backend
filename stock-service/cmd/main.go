@@ -950,6 +950,10 @@ func main() {
 	// the currency resolver to stamp strike/premium currency.
 	peerOtcHandler = peerOtcHandler.WithOTCOfferReader(otcOfferRepo, optionCurrencyResolver)
 	peerOtcHandler = peerOtcHandler.WithCapitalGain(capitalGainRepo)
+	// Phantom-seller guard: reject inbound cross-bank negotiations whose
+	// client-<n> seller does not resolve to a real local client (closes the
+	// resource-pollution loophole found in the live adversarial sweep).
+	peerOtcHandler = peerOtcHandler.WithSellerValidator(handler.NewClientSellerValidator(clientClient))
 
 	// Phase 6 refresher: now that otcOfferRepo and ownRouting exist,
 	// start the OPTION cache refresher that polls every active peer's

@@ -42,6 +42,22 @@ type HoldingReader interface {
 	GetByOwnerAndTicker(ownerType model.OwnerType, ownerID *uint64, securityType, ticker string) (*model.Holding, error)
 }
 
+// LocalSellerValidator answers "does this client-<n> participant id resolve to a
+// real client on THIS bank?" for inbound cross-bank negotiations. Only the
+// client-<n> form is ever passed in — bank/employee-<n> sellers are validated
+// structurally by the handler (the bank always exists) before the validator is
+// consulted. Wired in production against client-service GetClient; left nil in
+// tests / legacy mode (then existence is not enforced at create time).
+//
+// It closes the phantom-row loophole: without it, a raw peer could POST
+// /cross-bank-protocol/negotiations with sellerId.id="client-<bogus>" (correct
+// routing, non-existent client) and the handler would persist an inert junk row
+// (HTTP 201) instead of returning a clean 4xx — an unbounded resource-pollution
+// vector. SellerExists==false ⇒ NotFound, no row persisted.
+type LocalSellerValidator interface {
+	SellerExists(ctx context.Context, participantID string) bool
+}
+
 // PeerOTCGRPCHandler implements stockpb.PeerOTCServiceServer.
 //
 // GetPublicStocks queries the local holdings table for rows flagged
@@ -125,6 +141,12 @@ type PeerOTCGRPCHandler struct {
 	// pre-fix degraded mode where no CG is written. Wired via
 	// WithCapitalGain.
 	capitalGainRepo PeerCapitalGainRepo
+
+	// sellerValidator gates inbound CreateNegotiation on the seller actually
+	// existing locally (client-<n> only). Optional — nil disables the check
+	// (legacy/test mode). Wired via WithSellerValidator. Closes the
+	// phantom-seller row loophole.
+	sellerValidator LocalSellerValidator
 }
 
 // PeerCapitalGainRepo is the narrow surface PeerOTCGRPCHandler uses to
@@ -138,6 +160,14 @@ type PeerCapitalGainRepo interface {
 // cross-bank exercise. Returns the handler for chaining.
 func (h *PeerOTCGRPCHandler) WithCapitalGain(repo PeerCapitalGainRepo) *PeerOTCGRPCHandler {
 	h.capitalGainRepo = repo
+	return h
+}
+
+// WithSellerValidator wires the local-seller existence check consulted by
+// CreateNegotiation (closes the phantom-row loophole). Returns the handler for
+// chaining. nil leaves the check disabled (legacy/test mode).
+func (h *PeerOTCGRPCHandler) WithSellerValidator(v LocalSellerValidator) *PeerOTCGRPCHandler {
+	h.sellerValidator = v
 	return h
 }
 
@@ -490,6 +520,22 @@ func (h *PeerOTCGRPCHandler) CreateNegotiation(ctx context.Context, req *stockpb
 			"seller_id.routing_number (%d) must match this bank's routing (%d) — inbound bids target a seller on this bank only",
 			req.GetSellerId().GetRoutingNumber(), h.ownRouting)
 	}
+	// Phantom-seller guard: the seller routing is ours, but the participant id
+	// must resolve to a REAL local seller. Without this a raw peer could spam
+	// inbound rows naming a non-existent client-<n> (correct routing, bogus id):
+	// they fail closed at accept (NO_SUCH_ACCOUNT) but still persist as inert
+	// junk rows — an unbounded resource-pollution vector. Only client-<n> needs
+	// the existence check; "bank"/"employee-<n>" always resolve to the bank.
+	// Skipped when no validator is wired (legacy/test mode).
+	if h.sellerValidator != nil {
+		sellerID := req.GetSellerId().GetId()
+		if strings.HasPrefix(sellerID, "client-") {
+			if !h.sellerValidator.SellerExists(ctx, sellerID) {
+				return nil, status.Errorf(codes.NotFound,
+					"seller_id.id %q does not resolve to a client on this bank", sellerID)
+			}
+		}
+	}
 	offer := protoToOffer(req.GetOffer())
 	offerJSON, err := json.Marshal(offer)
 	if err != nil {
@@ -667,6 +713,21 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	buyerRouting, buyerID := remoteBuyer(row)
 	sellerRouting, sellerID := remoteSeller(row)
 	foreignID := remoteNativeIDOf(row)
+
+	// Anti-self-accept (defense-in-depth, inbound). The /accept must come from the
+	// COUNTERPARTY's bank — i.e. the side that did NOT last propose the current
+	// terms. If the calling peer (peerRouting) is the bank whose party last
+	// proposed (lastModifiedBy.routingNumber == peerRouting), it is trying to
+	// accept its OWN terms through us → reject before claiming/dispatching. The
+	// initiating bank's gateway already blocks this for honest peers; this guard
+	// also stops a MALICIOUS peer that crafts a self-accept directly against our
+	// inbound endpoint (forming a contract + settling premium with no agreement
+	// from our local party). A zero/absent lastModifiedBy cannot match a real
+	// peer routing, so it never spuriously blocks a well-formed accept.
+	if lm := offer.LastModifiedBy; lm.RoutingNumber == peerRouting && lm.RoutingNumber != 0 {
+		return nil, status.Error(codes.PermissionDenied,
+			"accept must come from the counterparty (the side that did not last propose the terms)")
+	}
 
 	// Atomically claim the negotiation for acceptance (ongoing → accepted) BEFORE
 	// composing/dispatching the option-formation SI-TX. This serialises concurrent

@@ -256,6 +256,22 @@ func (h *OTCOptionsHandler) counterRemoteNegotiation(
 func (h *OTCOptionsHandler) acceptRemoteNegotiation(
 	ctx context.Context, rc *remoteNegContext,
 ) (*stockpb.OTCAcceptNegotiationResponse, error) {
+	// Anti-self-accept guard (mirrors the LOCAL path's "caller must be OPPOSITE
+	// to whoever proposed the current terms" rule). resolveRemoteNegAction has
+	// already proven the caller owns the side WE host (rc.hostedPartyID); here we
+	// additionally forbid that hosted side from accepting terms IT last proposed.
+	// Without it, a bidder could accept their OWN cross-bank bid — forming a
+	// contract and settling the premium with NO agreement from the counterparty
+	// (verified live 2026-06-05). lastModifiedBy is carried on the chain's offer
+	// JSON and round-tripped identically on both banks, so the comparison is
+	// authoritative. A malformed/absent lastModifiedBy (zero value) cannot match
+	// a real hosted id, so it fails OPEN only in the degenerate case where the
+	// proposer is unknown — never granting a self-accept on a well-formed chain.
+	lm := rc.offer.LastModifiedBy
+	if lm.RoutingNumber == h.ownRouting && lm.ID != "" && lm.ID == rc.hostedPartyID {
+		return nil, status.Error(codes.PermissionDenied,
+			"cannot accept the terms you last proposed — the counterparty must accept")
+	}
 	resp, code, err := h.peerDispatch.Proxy(ctx, rc.counterpartyCode, rc.rid, rc.foreignID, "GET", "/accept", nil)
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "cross-bank accept dispatch failed: %v", err)
