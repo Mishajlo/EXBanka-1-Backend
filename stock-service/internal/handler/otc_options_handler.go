@@ -367,9 +367,10 @@ func (h *OTCOptionsHandler) ListMyOffers(ctx context.Context, in *stockpb.ListMy
 // GetOffer. A history row where the caller was the bidder/counterparty is
 // me_owner=false.
 //
-// REMOTE items: only for client principals (cross-bank party ids are
-// "client-<N>"); a bank/employee caller has no cross-bank identity and skips
-// the remote merge. Each remote chain is mapped onto OTCOfferResponse with
+// REMOTE items: a CLIENT caller sees its own cross-bank chains by its exact
+// "client-<N>" principal; a BANK caller (employee acting as the bank) sees the
+// bank's cross-bank chains via the routing-scoped, "employee-%"-prefixed bank
+// lister (SP-3 T5b). Each remote chain is mapped onto OTCOfferResponse with
 // kind="remote", COUNTERPARTY/peer provenance, and me_owner = WE host the
 // seller/poster side (SellerRoutingNumber == ownRouting). Only chains in a
 // terminal peer status are surfaced (history is past data) and the request's
