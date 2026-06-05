@@ -502,7 +502,7 @@ func (h *OTCOptionsHandler) AcceptOffer(ctx context.Context, in *stockpb.AcceptO
 		return nil, mapOTCErr(err)
 	}
 	return &stockpb.AcceptOfferResponse{
-		OfferId: c.OfferID, ContractId: c.ID, Status: c.Status,
+		OfferId: derefU64(c.OfferID), ContractId: c.ID, Status: c.Status,
 		SagaId: c.SagaID, Contract: h.withMarketRef(c, toContractProto(c)),
 	}, nil
 }
@@ -765,7 +765,7 @@ func (h *OTCOptionsHandler) ExerciseContract(ctx context.Context, in *stockpb.Ex
 func toContractProto(c *model.OptionContract) *stockpb.OptionContractResponse {
 	resp := &stockpb.OptionContractResponse{
 		Id:              c.ID,
-		OfferId:         c.OfferID,
+		OfferId:         derefU64(c.OfferID),
 		StockId:         c.StockID,
 		Quantity:        c.Quantity.String(),
 		StrikePrice:     c.StrikePrice.String(),

@@ -57,7 +57,12 @@ func (o *OTCOffer) IsOpenListing() bool {
 // external_correlation_id) stay NULL for intra-bank trades. Spec 4 wires
 // them up.
 type OTCOffer struct {
-	ID                    uint64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	ID uint64 `gorm:"primaryKey;autoIncrement" json:"id"`
+	// RoutingNumber is the bank that owns this row; stamped to OwnRouting on
+	// local create by BeforeCreate. (routing_number, native_id) is the
+	// bank-scoped natural key. Local-vs-remote is `RoutingNumber == OwnRouting()`.
+	RoutingNumber int64   `gorm:"not null;default:0;uniqueIndex:ux_otc_offer_native,priority:1" json:"routing_number"`
+	NativeID      *string `gorm:"size:128;uniqueIndex:ux_otc_offer_native,priority:2" json:"native_id,omitempty"`
 	InitiatorOwnerType    OwnerType       `gorm:"size:8;not null;index:ix_otc_initiator,priority:1;check:initiator_owner_type IN ('client','bank')" json:"initiator_owner_type"`
 	InitiatorOwnerID      *uint64         `gorm:"index:ix_otc_initiator,priority:2" json:"initiator_owner_id,omitempty"`
 	InitiatorBankCode     *string         `gorm:"size:32" json:"initiator_bank_code,omitempty"`
@@ -92,6 +97,16 @@ type OTCOffer struct {
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 	Version           int64     `gorm:"not null;default:0" json:"-"`
+}
+
+// BeforeCreate stamps the own routing number on local rows. Remote rows
+// (added in later tasks) arrive with RoutingNumber already set to the peer's
+// routing and are left untouched. Tolerates a nil tx (only touches the struct).
+func (o *OTCOffer) BeforeCreate(tx *gorm.DB) error {
+	if o.RoutingNumber == 0 {
+		o.RoutingNumber = OwnRouting()
+	}
+	return nil
 }
 
 func (o *OTCOffer) BeforeSave(tx *gorm.DB) error {

@@ -164,8 +164,9 @@ func (s *OTCOfferService) MintContractFromAcceptedNegotiation(ctx context.Contex
 		onBehalfFundPtr = &fid
 	}
 
+	parentOfferID := parent.ID
 	contract := &model.OptionContract{
-		OfferID:          parent.ID,
+		OfferID:          &parentOfferID,
 		BuyerOwnerType:   buyerOwnerType,
 		BuyerOwnerID:     buyerOwnerID,
 		SellerOwnerType:  sellerOwnerType,

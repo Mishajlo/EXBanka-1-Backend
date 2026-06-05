@@ -854,7 +854,7 @@ func mintedContractToProto(c *model.OptionContract) *stockpb.OTCMintedContract {
 	}
 	return &stockpb.OTCMintedContract{
 		Id:              c.ID,
-		OfferId:         c.OfferID,
+		OfferId:         derefU64(c.OfferID),
 		BuyerOwnerType:  string(c.BuyerOwnerType),
 		BuyerOwnerId:    buyerID,
 		SellerOwnerType: string(c.SellerOwnerType),

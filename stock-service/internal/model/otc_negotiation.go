@@ -47,13 +47,21 @@ const (
 type OTCNegotiation struct {
 	ID uint64 `gorm:"primaryKey;autoIncrement" json:"id"`
 
+	// RoutingNumber is the bank that owns this row; stamped to OwnRouting on
+	// local create by BeforeCreate. (routing_number, native_id) is the
+	// bank-scoped natural key. It is ALSO the first column of ux_otcneg_chain
+	// so the "one chain per bidder per parent" invariant is routing-scoped —
+	// remote rows (routing = peer) never collide with local ones.
+	RoutingNumber int64   `gorm:"not null;default:0;uniqueIndex:ux_otcneg_native,priority:1;uniqueIndex:ux_otcneg_chain,priority:1" json:"routing_number"`
+	NativeID      *string `gorm:"size:128;uniqueIndex:ux_otcneg_native,priority:2" json:"native_id,omitempty"`
+
 	// ParentOfferID points at the OTCOffer listing this chain negotiates
 	// against. Foreign-key not modeled with GORM tags (manual integrity)
 	// — same convention used by OTCOfferRevision.
-	ParentOfferID uint64 `gorm:"not null;index:idx_otcneg_parent;uniqueIndex:ux_otcneg_chain,priority:1" json:"parent_offer_id"`
+	ParentOfferID uint64 `gorm:"not null;index:idx_otcneg_parent;uniqueIndex:ux_otcneg_chain,priority:2" json:"parent_offer_id"`
 
-	BidderOwnerType OwnerType `gorm:"size:8;not null;uniqueIndex:ux_otcneg_chain,priority:2;check:bidder_owner_type IN ('client','bank')" json:"bidder_owner_type"`
-	BidderOwnerID   *uint64   `gorm:"uniqueIndex:ux_otcneg_chain,priority:3" json:"bidder_owner_id,omitempty"`
+	BidderOwnerType OwnerType `gorm:"size:8;not null;uniqueIndex:ux_otcneg_chain,priority:3;check:bidder_owner_type IN ('client','bank')" json:"bidder_owner_type"`
+	BidderOwnerID   *uint64   `gorm:"uniqueIndex:ux_otcneg_chain,priority:4" json:"bidder_owner_id,omitempty"`
 	BidderBankCode  *string   `gorm:"size:32" json:"bidder_bank_code,omitempty"`
 
 	// BidderAccountID is the bidder's account bound at chain creation:
@@ -95,6 +103,16 @@ type OTCNegotiation struct {
 }
 
 func (OTCNegotiation) TableName() string { return "otc_negotiations" }
+
+// BeforeCreate stamps the own routing number on local rows. Remote rows
+// (added in later tasks) arrive with RoutingNumber already set to the peer's
+// routing and are left untouched. Tolerates a nil tx (only touches the struct).
+func (n *OTCNegotiation) BeforeCreate(tx *gorm.DB) error {
+	if n.RoutingNumber == 0 {
+		n.RoutingNumber = OwnRouting()
+	}
+	return nil
+}
 
 func (n *OTCNegotiation) BeforeSave(tx *gorm.DB) error {
 	return ValidateOwner(n.BidderOwnerType, n.BidderOwnerID)

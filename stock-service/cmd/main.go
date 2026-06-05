@@ -55,6 +55,11 @@ func main() {
 
 	cfg := config.Load()
 
+	// Set this bank's routing number once, before any OTC row is created.
+	// BeforeCreate hooks stamp it onto local OTC rows so local-vs-remote is
+	// `routing_number == model.OwnRouting()`.
+	model.SetOwnRouting(cfg.OwnBankCode)
+
 	// --- Database ---
 	db, err := gorm.Open(postgres.Open(cfg.DSN()), &gorm.Config{
 		NowFunc: func() time.Time { return time.Now().UTC() },
