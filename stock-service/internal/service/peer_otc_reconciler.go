@@ -1,5 +1,5 @@
 // Package service — PeerOTCNegotiationReconciler is the safety-net
-// background poller for missed cross-bank negotiation cancels (SP-1 Task 9).
+// background poller for missed cross-bank negotiation state changes (SP-1 Task 9).
 //
 // Normal flow: when a peer cancels a negotiation they call our inbound
 // DELETE /api/v3/cross-bank-protocol/negotiations/:rid/:id webhook, which
@@ -8,11 +8,18 @@
 //
 // This reconciler ticks every `interval` (default 2 min), lists our local
 // "ongoing" rows, and for each row where the COUNTERPARTY bank is
-// authoritative (i.e. they issued the ForeignID — identified as "outbound"
-// rows where our ownRouting does NOT match the seller's routing), it polls
-// the peer's GET /negotiations/{rid}/{id}. If the peer reports non-ongoing
-// and we have 2xx, we flip the local row to "cancelled" via the same
-// UpdateStatus path the inbound webhook uses.
+// authoritative (i.e. they issued the ForeignID — identified as outbound
+// rows where our ownRouting matches the BUYER's routing and the SELLER's
+// routing belongs to the peer), it polls the peer's GET /negotiations/{rid}/{id}.
+// If the peer reports non-ongoing (isOngoing=false) with a 2xx response, we
+// determine the correct terminal status:
+//   - If a local peer_option_contract row exists for this negotiation, the
+//     negotiation was accepted — we reconcile our row to "accepted".
+//   - Otherwise, we reconcile our row to "cancelled".
+//
+// This invariant is CRITICAL: an accepted negotiation must NEVER be
+// reconciled to "cancelled". The peer wire only exposes isOngoing (not the
+// full status), so we use the local contract table as the acceptance oracle.
 //
 // False-cancel guard: ANY transport error, non-2xx, or JSON parse failure
 // on a poll causes that row to be SKIPPED for this tick. We never cancel
@@ -58,23 +65,38 @@ type peerOtcNegRepo interface {
 	UpdateStatus(peerCode, foreignID, status string) error
 }
 
+// peerContractChecker is the narrow interface the reconciler uses to determine
+// whether a local peer_option_contract row exists for a given negotiation.
+// When the peer reports isOngoing=false, a contract row proves the negotiation
+// was ACCEPTED (not cancelled) — so we reconcile our row to "accepted" instead
+// of "cancelled". Satisfied by *repository.PeerOptionContractRepository.
+type peerContractChecker interface {
+	// HasContractForNegotiation returns true if any peer_option_contracts row
+	// exists with the given negotiation_routing_number + negotiation_id.
+	// A DB error is returned as (false, err); not-found is (false, nil).
+	HasContractForNegotiation(negotiationRoutingNumber int64, negotiationID string) (bool, error)
+}
+
 // PeerOTCNegotiationReconciler polls every active peer bank for the current
 // status of our outbound "ongoing" negotiations, reconciling any that the
 // peer has moved to a terminal state.
 type PeerOTCNegotiationReconciler struct {
-	repo       peerOtcNegRepo
-	peerAdmin  transactionpb.PeerBankAdminServiceClient
-	fetcher    PeerNegStatusFetcher
-	notifier   ReconcilerNotifier // optional; nil ⇒ silent
-	ownRouting int64
-	interval   time.Duration
+	repo            peerOtcNegRepo
+	contractChecker peerContractChecker // nil ⇒ acceptance check skipped (always cancels)
+	peerAdmin       transactionpb.PeerBankAdminServiceClient
+	fetcher         PeerNegStatusFetcher
+	notifier        ReconcilerNotifier // optional; nil ⇒ silent
+	ownRouting      int64
+	interval        time.Duration
 }
 
 // NewPeerOTCNegotiationReconciler constructs the reconciler with a real
 // HTTP-based fetcher. Pass httpClient=nil to use the default client with a
-// 5-second timeout.
+// 5-second timeout. contractChecker may be nil (disables the acceptance guard —
+// should only be nil in legacy tests; production always passes the real repo).
 func NewPeerOTCNegotiationReconciler(
 	repo *repository.PeerOtcNegotiationRepository,
+	contractChecker peerContractChecker,
 	peerAdmin transactionpb.PeerBankAdminServiceClient,
 	httpClient *http.Client,
 	ownRouting int64,
@@ -88,11 +110,12 @@ func NewPeerOTCNegotiationReconciler(
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
 	return &PeerOTCNegotiationReconciler{
-		repo:       repo,
-		peerAdmin:  peerAdmin,
-		fetcher:    newHTTPStatusFetcher(client),
-		ownRouting: ownRouting,
-		interval:   interval,
+		repo:            repo,
+		contractChecker: contractChecker,
+		peerAdmin:       peerAdmin,
+		fetcher:         newHTTPStatusFetcher(client),
+		ownRouting:      ownRouting,
+		interval:        interval,
 	}
 }
 
@@ -191,26 +214,33 @@ func (r *PeerOTCNegotiationReconciler) buildPeerMap(ctx context.Context) (map[st
 }
 
 // reconcileRow checks one ongoing row against its authoritative peer bank.
-// "Authoritative" = the counterparty who issued ForeignID (PeerBankCode).
-// We skip rows where WE are the seller and use our ownRouting — those are
-// inbound negotiations where WE are authoritative, not the peer.
+//
+// The primary use case is OUTBOUND negotiations: we are the buyer (our
+// ownRouting == buyerRoutingNumber) and the peer's bank issued the ForeignID
+// (they are authoritative over that negotiation id). We poll the seller's
+// (peer's) bank for the current status.
+//
+// Rows where we are the seller (sellerRoutingNumber == ownRouting) are
+// INBOUND negotiations: the peer's bank received the POST from us, we
+// issued the ForeignID, and WE are authoritative. These rows are also
+// polled (peerRoutingForRow returns the buyer's routing) in case the
+// buyer cancelled without hitting our DELETE webhook.
 //
 // The decision logic:
-//  1. Is this a row where the counterparty is authoritative?
-//     We identify this by checking whether the seller routing == ownRouting
-//     AND seller bank == our bank (i.e. we issued the listing, so the buyer's
-//     bank — PeerBankCode — issued the ForeignID). In that case we ARE the
-//     seller bank and the counterparty (buyer bank = PeerBankCode) is
-//     authoritative over the negotiation id.
-//
-//     Alternatively, if the buyer routing == ownRouting, WE are the buyer
-//     and the seller bank (PeerBankCode) is authoritative.
-//
-//     In both cases PeerBankCode is the bank that holds the authoritative
-//     copy of the negotiation, so we poll it.
-//
+//  1. Determine the peer routing (the routing number of the counterparty)
+//     via peerRoutingForRow. Use it as the rid in the GET request.
 //  2. Poll GET /negotiations/{rid}/{id} on the peer. Strict 2xx-only guard.
-//  3. If peer says not-ongoing and we're still ongoing → flip to cancelled.
+//  3. If the peer reports isOngoing=true → no change needed.
+//  4. If the peer reports isOngoing=false (terminal):
+//     a. Check whether a local peer_option_contracts row exists for this
+//     negotiation (using NegotiationID == row.ForeignID). If yes, the
+//     negotiation was ACCEPTED — reconcile our row to "accepted" (never
+//     cancel an accepted negotiation).
+//     b. If no contract row exists → reconcile our row to "cancelled".
+//
+// False-cancel guard: ANY transport error, non-2xx, JSON parse failure, or
+// contract-checker error on a poll causes that row to be SKIPPED for this
+// tick. We never cancel based on ambiguous data.
 func (r *PeerOTCNegotiationReconciler) reconcileRow(
 	ctx context.Context,
 	row *model.PeerOtcNegotiation,
@@ -243,17 +273,37 @@ func (r *PeerOTCNegotiationReconciler) reconcileRow(
 		return nil
 	}
 
-	// Peer reports terminal status and we're still "ongoing" — reconcile.
-	log.Printf("peer-otc-reconciler: reconciling missed cancel peer=%s fid=%s (peer reports non-ongoing)",
-		row.PeerBankCode, row.ForeignID)
-	if err := r.repo.UpdateStatus(row.PeerBankCode, row.ForeignID, "cancelled"); err != nil {
+	// Peer reports terminal status and our local row is still "ongoing".
+	// Before marking cancelled, rule out acceptance: if a local
+	// peer_option_contracts row exists for this negotiation, the option
+	// formation TX was committed — the negotiation was ACCEPTED.
+	// An accepted negotiation must never be reconciled to "cancelled".
+	targetStatus := "cancelled"
+	if r.contractChecker != nil {
+		// The NegotiationRoutingNumber in peer_option_contracts is the
+		// routing number of the bank that issued the negotiation ForeignID,
+		// which is the peer routing number for this row.
+		hasContract, checkErr := r.contractChecker.HasContractForNegotiation(peerRouting, row.ForeignID)
+		if checkErr != nil {
+			// False-cancel guard: contract check error ⇒ skip this row.
+			return fmt.Errorf("contract check peer=%s fid=%s: %w", row.PeerBankCode, row.ForeignID, checkErr)
+		}
+		if hasContract {
+			targetStatus = "accepted"
+		}
+	}
+
+	log.Printf("peer-otc-reconciler: reconciling peer=%s fid=%s → %s (peer reports non-ongoing)",
+		row.PeerBankCode, row.ForeignID, targetStatus)
+	if err := r.repo.UpdateStatus(row.PeerBankCode, row.ForeignID, targetStatus); err != nil {
 		return fmt.Errorf("update status: %w", err)
 	}
 
-	// Best-effort notification to the local party (mirrors what the inbound
-	// DELETE webhook would have sent). Failures are logged but don't
-	// block the reconcile.
-	r.notifyLocalParty(ctx, row)
+	// Best-effort notification to the local party. Only send a cancellation
+	// notification when the outcome is actually a cancel.
+	if targetStatus == "cancelled" {
+		r.notifyLocalParty(ctx, row)
+	}
 	return nil
 }
 
@@ -341,6 +391,14 @@ func newHTTPStatusFetcher(client *http.Client) PeerNegStatusFetcher {
 		if resp.StatusCode != http.StatusOK {
 			// Non-2xx — could be a temporary peer error; false-cancel guard.
 			return false, fmt.Errorf("peer returned status %d: %s", resp.StatusCode, string(body))
+		}
+
+		// Empty-body guard: a truncated or empty response must never
+		// deserialise to a zero-value {IsOngoing:false} and trigger a
+		// spurious cancel. Treat an empty body as an ambiguous response
+		// and skip this row (false-cancel guard).
+		if len(body) == 0 {
+			return false, fmt.Errorf("peer returned empty body for negotiation %s", foreignID)
 		}
 
 		var parsed peerNegStatusResponse

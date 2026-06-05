@@ -109,6 +109,21 @@ func (r *PeerOptionContractRepository) CompareAndSetStatus(id uint64, from, to s
 	return res.RowsAffected == 1, nil
 }
 
+// HasContractForNegotiation returns true if at least one peer_option_contracts
+// row exists with the given negotiation_routing_number + negotiation_id. Used
+// by the reconciler to distinguish an ACCEPTED negotiation (contract formed)
+// from a CANCELLED one (no contract) when the peer wire only reports isOngoing.
+func (r *PeerOptionContractRepository) HasContractForNegotiation(negotiationRoutingNumber int64, negotiationID string) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.PeerOptionContract{}).
+		Where("negotiation_routing_number = ? AND negotiation_id = ?", negotiationRoutingNumber, negotiationID).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // ListExpiring returns up to limit ACTIVE peer option contracts whose
 // settlement_date is strictly before today (lex-compared as the
 // SI-TX-shaped ISO-8601 string). Used by the daily expiry cron.

@@ -846,15 +846,19 @@ func main() {
 		log.Fatalf("invalid OWN_BANK_CODE %q: %v", cfg.OwnBankCode, err)
 	}
 	peerOtcRepo := repository.NewPeerOtcNegotiationRepository(db)
+	peerOptionRepo := repository.NewPeerOptionContractRepository(db)
 
 	// SP-1 Task 9 — safety-net reconciler for missed cross-bank negotiation
-	// cancels. Polls each active peer's GET /negotiations/{rid}/{id} every
-	// 2 minutes for our "ongoing" rows; flips any that the peer reports as
-	// terminal to "cancelled" (false-cancel guard: skips on any non-2xx or
-	// transport error). Wrapped in cronreg so operators can pause/trigger it.
+	// state changes. Polls each active peer's GET /negotiations/{rid}/{id}
+	// every 2 minutes for our "ongoing" rows. When the peer reports
+	// isOngoing=false (terminal): checks for a local peer_option_contracts row
+	// (proof of acceptance); if found → flips to "accepted"; otherwise →
+	// "cancelled". False-cancel guard: skips on any non-2xx, transport error,
+	// empty body, or contract-check error. Wrapped in cronreg for operator
+	// visibility and manual triggering.
 	negReconcilerEntry := cronRegistry.Register("peer-otc-neg-reconciler", "Safety-net poll for missed cross-bank negotiation cancels (2 min tick)", 2*time.Minute)
 	negReconciler := service.NewPeerOTCNegotiationReconciler(
-		peerOtcRepo, peerBankAdminClient, nil /* default http.Client */, ownRouting, 2*time.Minute,
+		peerOtcRepo, peerOptionRepo, peerBankAdminClient, nil /* default http.Client */, ownRouting, 2*time.Minute,
 	).WithNotifier(producer)
 	go func() {
 		ticker := time.NewTicker(2 * time.Minute)
@@ -884,7 +888,6 @@ func main() {
 		}
 	}()
 
-	peerOptionRepo := repository.NewPeerOptionContractRepository(db)
 	peerOtcHandler := handler.NewPeerOTCGRPCHandler(peerOtcRepo, peerOptionRepo, holdingRepo, peerTxClient, ownRouting)
 	peerOtcHandler.SetHoldingReserver(holdingReservationSvc)
 	peerOtcHandler = peerOtcHandler.WithNotifier(producer)
