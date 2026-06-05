@@ -5746,9 +5746,19 @@ clean-cut) and its behaviour is folded in here.
   runs the cross-bank SI-TX option-exercise flow. **Only the buyer/holder** may
   exercise (the writer/seller side and non-parties get `404` — existence must not
   leak). Supply `buyer_account_number` — the buyer's currency account that pays
-  the strike; the gateway validates the caller owns it before forwarding (the only
-  client-supplied resource on the money path). The contract terms + counterparty
-  come from the persisted remote row.
+  the strike; this is the only client-supplied resource on the money path, so the
+  gateway gates it before forwarding (`403` on mismatch), authoritatively for ALL
+  principals (SP-3 Task 5 security fix):
+  - **client caller** → the account must be owned by that client;
+  - **employee acting AS the bank** (no `on_behalf_of_client_id`) → the account
+    must be a **BANK** account — a bank exercise can no longer pay its strike from
+    a client's account of the matching currency;
+  - **employee on behalf of a client** → the account must be owned by that client.
+
+  stock-service additionally re-asserts the same predicate (bank buyer → bank
+  account; client buyer → that client's account; active + strike-currency match)
+  before dispatch, as defense-in-depth. The contract terms + counterparty come
+  from the persisted remote row.
 
 **Authentication:** Any JWT + one of `otc.trade.accept`, `securities.trade`. Identity middleware: `OwnerIsBankIfEmployee`.
 
@@ -5762,7 +5772,7 @@ clean-cut) and its behaviour is folded in here.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `buyer_account_number` | string | Cross-bank only | The buyer's currency account that pays the strike. Required for a cross-bank (remote) contract; ignored for a local contract. The caller must own it (else `404`). |
+| `buyer_account_number` | string | Cross-bank only | The buyer's currency account that pays the strike. Required for a cross-bank (remote) contract; ignored for a local contract. The caller must be entitled to it per the gate above — a client must own it, a bank-acting employee must bind a BANK account, an on-behalf employee must bind that client's account (else `403`). |
 | `on_behalf_of_client_id` | uint64 | No | Employee acting on behalf of a client. |
 | `on_behalf_of_fund_id` | uint64 | No | *E2, Plan E.* When non-zero, exercises on behalf of an investment fund (local path). The acting employee must be the fund's manager; acquired shares land in `fund_holdings`. |
 
@@ -5773,8 +5783,8 @@ dispatch state (e.g. `pending`).
 
 **Error Responses:**
 - `400` — invalid `id`, or a remote contract exercised without `buyer_account_number`
-- `403` — `on_behalf_of_fund_id` set but acting employee is not the fund's manager
-- `404` — contract not found, the caller is not the buyer/holder of a remote contract, or the supplied settlement account is not owned by the caller
+- `403` — `on_behalf_of_fund_id` set but acting employee is not the fund's manager; or the supplied strike account is not one the caller is entitled to (client not the owner / bank-acting employee binding a non-bank account / on-behalf employee binding a non-matching account)
+- `404` — contract not found, or the caller is not the buyer/holder of a remote contract
 - `409` — business rule (e.g. contract not active/expired, insufficient funds on the cross-bank strike)
 
 > **Breaking change (SP-2b clean-cut):** the legacy
@@ -8105,6 +8115,14 @@ Both marketplaces support local + cross-bank discovery (peer banks publish their
 
 > **Migration note:** Phase 8 cleanup deletes the legacy `/api/v3/otc/offers/...` routes. Existing frontends should migrate to the routes below before that lands. See [Section 29](#29-otc-offers-public-stock-listings) and [Section 30](#30-otc-option-contracts-celina-4) for what was there before.
 
+> **The bank is a first-class cross-bank OTC principal (SP-3).** An employee acting **as the bank** (via the `bankIfEmp` group, which resolves `owner_type="bank"`) participates in the cross-bank option marketplace exactly like a client, settling against **BANK** accounts/holdings (owner sentinel `1000000000`):
+> - **Bank-owned offers are biddable cross-bank.** When a bank-owned `OTCOffer` is published to peers, its `sellerId` is the stable wire identity `employee-<ActingEmployeeID>` (never the legacy literal `"bank"`); legacy/seed bank offers with no acting employee are not exposed cross-bank. A peer bank may bid on it.
+> - **The bank can bid / counter / accept / reject / cancel / exercise cross-bank.** A bank-driven bid publishes `buyerId=employee-<ActingEmployeeID>`; later wire actions on that chain reuse the **row's** stored `employee-<N>` (a different acting employee keeps the same wire id). Settlement debits/credits BANK accounts and BANK holdings.
+> - **Stable per-resource wire id.** The acting employee is persisted in the `acting_employee_id` column on the offer / mirror row; it is SI-TX **wire identity only** and is never used to look up an employee for ownership — local ownership/settlement always binds the BANK.
+> - **The bank sees its own remote chains in every read view** — `ListMyNegotiations`, the per-listing `negotiations` view, history, timeline, and the `my_negotiation_id` stamp — matched by the `employee-<N>` prefix. Client and bank principal scopes never cross.
+> - **Exercise strike-account gate.** The cross-bank exercise's caller-supplied `buyer_account_number` is gated by the gateway's `ResolveAndCheckAccountByNumber` (a bank-acting employee must bind a BANK account, else `403`), and stock-service re-asserts the bank settlement.
+> - **Inbound back-compat.** A peer that still sends the legacy literal `"bank"` party id is parsed to bank ownership; the wire-conformant `employee-<N>` form is parsed identically (the numeric id is audit-only).
+
 ### 47.1 Stocks marketplace
 
 #### POST /api/v3/me/otc/stocks
@@ -8247,7 +8265,7 @@ Each OTC option listing (an `OTCOffer` posted by a seller or buyer) can accept m
 Open a new negotiation chain by placing the initial bid on an open listing. `:id` may resolve to a **LOCAL** listing (an `OTCOffer` this bank hosts) or a folded-in **REMOTE** listing (a peer-bank listing surfaced via the cross-bank discovery feed). The same route handles both — stock-service dispatches by the parent listing's routing (SP-2b):
 
 - **LOCAL listing** — runs the intra-bank first-accept-wins negotiation path (unchanged). Returns a `kind=local` negotiation.
-- **REMOTE listing** — composes the SI-TX `OtcOffer` (with the caller's `buyerId`, the listing's `sellerId`, the resolved `buyerAccountNumber`, and the listing's cascade-cancel `parentOfferId` lot key) and POSTs it to the seller's bank. Records a local **remote** negotiation mirror row and returns a `kind=remote` negotiation carrying the peer-assigned id. **Client bidders only** — a bank/employee-acting-as-bank bidder is rejected with **409** (`cross-bank bidding as the bank is not yet supported`, SP-3). Cross-bank SI-TX has **no FX**, so the bidder account's currency must equal the listing's premium currency.
+- **REMOTE listing** — composes the SI-TX `OtcOffer` (with the caller's `buyerId`, the listing's `sellerId`, the resolved `buyerAccountNumber`, and the listing's cascade-cancel `parentOfferId` lot key) and POSTs it to the seller's bank. Records a local **remote** negotiation mirror row and returns a `kind=remote` negotiation carrying the peer-assigned id. **Both a client AND the bank may bid cross-bank (SP-3):** a client bidder publishes `buyerId=client-<ownerID>`; an **employee acting as the bank** (the `bankIfEmp` group resolves the caller to bank ownership) publishes the stable `buyerId=employee-<actingEmployeeID>` and the bid settles against a **BANK** account — the gateway's `ResolveAndCheckAccount` ownership gate requires a bank-owned `bidder_account_id` for the bank principal (a non-bank account ⇒ 403), and stock-service re-asserts the bank settlement on the wire-identity path. Cross-bank SI-TX has **no FX**, so the bidder account's currency must equal the listing's premium currency.
 
 **Authentication:** Any JWT + `securities.trade` OR `otc.trade.accept` + `ResolveIdentity`
 
@@ -8265,7 +8283,7 @@ Open a new negotiation chain by placing the initial bid on an open listing. `:id
 
 **Response 201:** `{ "negotiation": OTCNegotiationResponse }`. Status `open` (local) / `ongoing` (remote, peer status vocabulary). `kind` is `local` or `remote`.
 
-**Response 400/403/409:** Validation, account-ownership, chain-already-exists (one chain per bidder per listing), or — for a remote listing — a bank bidder (SP-3 deferral) / currency mismatch.
+**Response 400/403/409:** Validation, account-ownership, chain-already-exists (one chain per bidder per listing), or — for a remote listing — a premium-currency mismatch (SI-TX has no FX). A bank/employee-acting-as-bank bidder is **accepted** cross-bank (SP-3 lifted the earlier deferral); the bid publishes `employee-<N>` and settles against a bank account.
 
 **Response 412:** Parent listing is no longer open (consumed, cancelled, or expired).
 
@@ -8431,7 +8449,9 @@ List the negotiation chains against a listing. `:id` is the stable surrogate id 
 
 **LOCAL `:id` — unchanged audience + behavior.** Returns **every** chain on the listing (any status). **Restricted audience:** only the listing's poster (a client whose `principal_id` matches the offer's initiator) or an employee holding the `otc.read.all` permission may call this. A competing bidder — or any other client — receives **403**; bidders see only their own chain via `GET /api/v3/me/otc/options/negotiations`. Each item is now stamped `kind="local"` + own `routing_number` / `bank_code`; `me_owner` is `false` (the field reflects the *chain's* bidder ownership, not the listing's — a bidder is never the owner).
 
-**REMOTE `:id` — caller's own chain(s) only.** We do not host the listing, so we can only surface the **caller's own** chain(s) against it — never other parties' chains. Returns the caller's `peer_otc_negotiation` rows whose `(ParentOfferRouting, ParentOfferID)` lot key matches the mirror's `(PeerRoutingNumber, ForeignOfferID)`, each stamped `kind="remote"` with counterparty provenance and `me_owner` per the seller-side rule. If the caller has no chain on it → **empty list** (not 403/404). Only client principals have a cross-bank identity; a bank/employee caller gets an empty list for a remote id.
+> **Bank-owned LOCAL listing — peer bids included (SP-3 Task 5b).** When the LOCAL listing is **bank-owned** (`owner_type="bank"`) and a **peer** bank bid on it cross-bank, those peer bids live as REMOTE chains where we host the seller as the bank (party id `employee-<N>`). For a bank caller, the response now also merges those peer bids — correlated to this listing by the remote chain's `(remote_parent_routing, remote_parent_native_id)` lot key == the offer's `(routing_number, native_id)`, so only bids on *this* listing appear (each `kind="remote"`, `me_owner=true` because the bank owns the listing). Client-owned listings are unaffected (no bank merge).
+
+**REMOTE `:id` — caller's own chain(s) only.** We do not host the listing, so we can only surface the **caller's own** chain(s) against it — never other parties' chains. Returns the caller's `peer_otc_negotiation` rows whose `(ParentOfferRouting, ParentOfferID)` lot key matches the mirror's `(PeerRoutingNumber, ForeignOfferID)`, each stamped `kind="remote"` with counterparty provenance and `me_owner` per the seller-side rule. If the caller has no chain on it → **empty list** (not 403/404). **Both a client AND the bank have a cross-bank bidder identity (SP-3 Task 5b):** a client matches its exact `client-<N>` chains; an employee acting as the bank matches its `employee-<N>` bid chains (prefix-matched). Any other caller yields an empty list. The two principal scopes never cross.
 
 **Response 200:** `{ "negotiations": [OTCNegotiationResponse...], "total": int }`.
 
@@ -8533,6 +8553,14 @@ offer.
 **Paging note:** `page`/`page_size` paginate the LOCAL set; REMOTE chains
 are appended in full after the local page (never silently truncated).
 `total` reflects the local total only.
+
+**Remote-merge principal scope (SP-3 Task 5b):** the REMOTE merge is keyed on
+the caller's cross-bank bidder identity. A **client** caller matches its exact
+wire principal `client-<N>`. A caller acting **as the bank** (`owner_type="bank"`,
+an employee) now also gets the bank's own cross-bank **bid** chains — matched by
+the `employee-<N>` prefix (the bank has no single wire principal across chains).
+The two scopes never cross: a client never receives bank chains, and a bank
+never receives client chains.
 
 ---
 
@@ -8648,7 +8676,7 @@ Resolve a single OTC option offer by its **stable surrogate id** — the `local_
 ```
 - `kind` is always `"remote"` and `me_owner` is always `false` (a peer hosts the listing — it is never ours).
 - `status` is `open` or `cancelled` (cancelled mirror rows are still returned so the FE can render a terminal state rather than a 404).
-- `my_negotiation_id` / `my_negotiation_status` (SP-2b) are present here too when the caller has bid on this remote offer cross-bank (matched on the chain's remote parent routing+native id); omitted/0/"" otherwise.
+- `my_negotiation_id` / `my_negotiation_status` (SP-2b) are present here too when the caller has bid on this remote offer cross-bank (matched on the chain's remote parent routing+native id); omitted/0/"" otherwise. Both a **client** caller (its `client-<N>` chain) and a caller acting **as the bank** (its `employee-<N>` bid chain, SP-3 Task 5b) are stamped; the two principal scopes never cross.
 
 **Response 400:** `{ "error": { "code": "validation_error", "message": "invalid id" } }`
 **Response 404:** `{ "error": { "code": "not_found", "message": "OTC offer not found" } }` — neither a local offer nor a remote mirror row exists for `id`.

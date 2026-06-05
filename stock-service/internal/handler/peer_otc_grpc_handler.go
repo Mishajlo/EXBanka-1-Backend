@@ -324,6 +324,16 @@ func (h *PeerOTCGRPCHandler) GetPublicOptionOffers(ctx context.Context, req *sto
 			}
 		}
 		sellerID := composePeerSellerID(o)
+		// A non-conformant seller id (legacy/seed bank offer with no acting
+		// employee, or a client offer missing its owner id) cannot be addressed
+		// by a peer's POST /negotiations — its sellerId.id would fail the
+		// ^(client|employee)-\d+$ check. Drop it from public exposure rather
+		// than ever emitting the legacy literal "bank" (or an empty id) on the
+		// wire, which peers reject.
+		if sellerID == "" {
+			log.Printf("WARN: offer %d skipped from public exposure: no conformant seller id", o.ID)
+			continue
+		}
 		currency := "USD"
 		if h.otcOptionCurrency != nil {
 			if c, err := h.otcOptionCurrency.CurrencyForStock(o.StockID); err == nil && c != "" {
@@ -367,11 +377,21 @@ func (h *PeerOTCGRPCHandler) GetPublicOptionOffers(ctx context.Context, req *sto
 	return &stockpb.GetPublicOptionOffersResponse{Offers: out}, nil
 }
 
-// composePeerSellerID mirrors the cache's helper but lives here so the
-// peer endpoint doesn't import the otccache package.
+// composePeerSellerID builds the conformant SI-TX party id
+// (^(client|employee)-\d+$) a peer bank uses to address this offer's poster
+// when bidding cross-bank. It NEVER returns the legacy literal "bank":
+//   - a BANK-owned offer publishes as "employee-<ActingEmployeeID>" — the
+//     stable wire identity of the employee who originated it. Legacy/seed bank
+//     rows have no acting employee → "" (not exposable cross-bank; the caller
+//     filters these out).
+//   - a CLIENT offer publishes as "client-<InitiatorOwnerID>" (or "" when the
+//     owner id is somehow unset).
 func composePeerSellerID(o *model.OTCOffer) string {
 	if o.InitiatorOwnerType == model.OwnerBank {
-		return "bank"
+		if o.ActingEmployeeID != nil {
+			return "employee-" + strconv.FormatUint(*o.ActingEmployeeID, 10)
+		}
+		return "" // legacy/seed bank offer w/o acting employee — not exposable cross-bank
 	}
 	if o.InitiatorOwnerID == nil {
 		return ""
@@ -1538,18 +1558,37 @@ func (h *PeerOTCGRPCHandler) ReleaseSellerSharesForNewTx(ctx context.Context, re
 	return &stockpb.ReleaseSellerSharesResponse{ReleasedQuantity: res.ReleasedQuantity}, nil
 }
 
-// parseSellerOwner maps an SI-TX participant id ("client-<n>",
-// "employee-<n>", or "bank") to the OwnerType + numeric owner id used
-// by the holdings table. Returns the bank-owner sentinel (ownerID nil)
-// for "bank". Errors on unparseable ids — caller can choose to log
-// without failing the parent RPC.
-func parseSellerOwner(sellerID string) (model.OwnerType, *uint64, error) {
-	if sellerID == "bank" {
+// parseSellerOwner maps an SI-TX participant id to the OwnerType + numeric
+// owner id used by the holdings / capital-gain tables. Despite its name it
+// parses ANY party id (seller OR buyer) — it is called for both sides at the
+// call sites. Recognised forms:
+//
+//   - "bank"          → (OwnerBank, nil): back-compat, a peer may still send
+//     the literal "bank" for a bank-owned party.
+//   - "employee-<N>"  → (OwnerBank, nil): a peer bank acting as a cross-bank
+//     OTC principal publishes itself as "employee-<N>" (SP-3 wire identity).
+//     The numeric id is WIRE IDENTITY ONLY — it is intentionally NOT used to
+//     look up an employee. Local ownership/settlement (share locks, capital
+//     gains, exercise credits) binds the BANK, exactly as for "bank".
+//   - "client-<n>"    → (OwnerClient, &n): a client principal on this bank.
+//
+// Errors on unparseable ids — callers choose whether to fail the RPC or log.
+func parseSellerOwner(partyID string) (model.OwnerType, *uint64, error) {
+	if partyID == "bank" {
+		return model.OwnerBank, nil, nil // back-compat: a peer may still send literal "bank"
+	}
+	if rest, ok := strings.CutPrefix(partyID, "employee-"); ok {
+		if _, err := strconv.ParseUint(rest, 10, 64); err != nil {
+			return "", nil, fmt.Errorf("invalid employee party id %q: %w", partyID, err)
+		}
+		// employee-<N> is SI-TX WIRE IDENTITY only; local ownership/settlement is the
+		// BANK. The numeric id is intentionally NOT used to look up an employee — it is
+		// kept verbatim in RemoteBuyerID/RemoteSellerID for audit/round-trip.
 		return model.OwnerBank, nil, nil
 	}
-	rest, ok := strings.CutPrefix(sellerID, "client-")
+	rest, ok := strings.CutPrefix(partyID, "client-")
 	if !ok {
-		return "", nil, errors.New("unsupported seller_id prefix; expected client-<n> or bank")
+		return "", nil, errors.New("unsupported party id; expected client-<n>, employee-<n>, or bank")
 	}
 	id, parseErr := strconv.ParseUint(rest, 10, 64)
 	if parseErr != nil {

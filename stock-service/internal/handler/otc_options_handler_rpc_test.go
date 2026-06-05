@@ -161,6 +161,56 @@ func TestOTCOptionsHandler_CreateOffer_BadDate(t *testing.T) {
 	}
 }
 
+func TestOTCOptionsHandler_CreateOffer_BankOffer_CapturesActingEmployee(t *testing.T) {
+	fx := newOTCOptionsHandlerFixture(t)
+	// Employee 17 acting AS the bank: gateway sends actor_system_type "bank",
+	// actor_user_id 0, acting_employee_id 17. Buy_initiated needs no holdings.
+	resp, err := fx.h.CreateOffer(context.Background(), &stockpb.CreateOTCOfferRequest{
+		ActorUserId: 0, ActorSystemType: "bank", ActingEmployeeId: 17,
+		Direction: model.OTCDirectionBuyInitiated, StockId: 42,
+		Quantity: "10", StrikePrice: "150", Premium: "20",
+		SettlementDate: time.Now().AddDate(0, 0, 30).Format("2006-01-02"),
+		AccountId:      9001,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	got, err := fx.offers.GetByID(resp.GetId())
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got.InitiatorOwnerType != model.OwnerBank {
+		t.Errorf("initiator owner type = %v, want bank", got.InitiatorOwnerType)
+	}
+	if got.ActingEmployeeID == nil || *got.ActingEmployeeID != 17 {
+		t.Fatalf("persisted ActingEmployeeID = %v, want 17", got.ActingEmployeeID)
+	}
+}
+
+func TestOTCOptionsHandler_CreateOffer_ClientOffer_NoActingEmployee(t *testing.T) {
+	fx := newOTCOptionsHandlerFixture(t)
+	fx.seedSellerHolding(t, 7, 42, 100)
+	// Even if an acting_employee_id is present, a client-owned offer must not
+	// capture it (employee acting on behalf of a client).
+	resp, err := fx.h.CreateOffer(context.Background(), &stockpb.CreateOTCOfferRequest{
+		ActorUserId: 7, ActorSystemType: "client", ActingEmployeeId: 17,
+		Direction: model.OTCDirectionSellInitiated, StockId: 42,
+		Quantity: "10", StrikePrice: "150", Premium: "20",
+		SettlementDate: time.Now().AddDate(0, 0, 30).Format("2006-01-02"),
+		AccountId:      9001,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	got, err := fx.offers.GetByID(resp.GetId())
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got.ActingEmployeeID != nil {
+		t.Errorf("persisted ActingEmployeeID = %v, want nil for client offer", *got.ActingEmployeeID)
+	}
+}
+
 func TestOTCOptionsHandler_CreateOffer_WithCounterparty(t *testing.T) {
 	fx := newOTCOptionsHandlerFixture(t)
 	fx.seedSellerHolding(t, 7, 42, 100)

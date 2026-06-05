@@ -82,6 +82,7 @@ func (h *OTCOptionsHandler) CreateOffer(c *gin.Context) {
 	in := &stockpb.CreateOTCOfferRequest{
 		ActorUserId:        int64(ownerToLegacyUserID(identity.OwnerID)),
 		ActorSystemType:    ownerToLegacySystemType(identity.OwnerType),
+		ActingEmployeeId:   derefU64(identity.ActingEmployeeID),
 		Direction:          req.Direction,
 		StockId:            stock.Id,
 		Quantity:           req.Quantity,
@@ -464,19 +465,23 @@ func (h *OTCOptionsHandler) ExerciseContract(c *gin.Context) {
 	identity := c.MustGet("identity").(*middleware.ResolvedIdentity)
 	// OWNERSHIP GATE (cross-bank path): when the caller supplies a settlement
 	// account (the strike money is debited from it on the cross-bank exercise),
-	// they MUST own it. Without this, a client could exercise a contract and
-	// charge the strike to ANOTHER client's account (the verified theft vector
-	// the former cross-bank exercise route guarded against, now folded here).
-	// The buyer account is the ONLY client-supplied resource on this path; the
-	// contract terms + counterparty come from the persisted row in stock-service.
+	// they MUST be entitled to it. Without this, a bank-acting employee could
+	// exercise a contract and charge the strike to ANOTHER client's account of
+	// the matching currency (the verified theft vector the bid/accept paths
+	// already guard against). The buyer account is the ONLY client-supplied
+	// resource on this path; the contract terms + counterparty come from the
+	// persisted row in stock-service.
+	//
+	// We use ResolveAndCheckAccountByNumber (not enforceOwnership) so the gate is
+	// authoritative for ALL principals, mirroring the bid/accept handlers:
+	//   - client caller            → account.owner == client
+	//   - employee, no on-behalf   → account must be a BANK account
+	//   - employee on-behalf-client → account == that client's
+	// enforceOwnership returned nil for any non-client principal, leaving the
+	// bank-acting employee ungated — that is the gap this closes.
 	if req.BuyerAccountNumber != "" {
-		acct, gerr := h.accounts.GetAccountByNumber(c.Request.Context(), &accountpb.GetAccountByNumberRequest{AccountNumber: req.BuyerAccountNumber})
-		if gerr != nil {
-			handleGRPCError(c, gerr)
-			return
-		}
-		if ownErr := enforceOwnership(c, acct.GetOwnerId()); ownErr != nil {
-			return // enforceOwnership already wrote the 404
+		if ownErr := ResolveAndCheckAccountByNumber(c, h.accounts, identity, req.BuyerAccountNumber, req.OnBehalfOfClientID); ownErr != nil {
+			return // ResolveAndCheckAccountByNumber already wrote the 403 / gRPC error
 		}
 	}
 	resp, err := h.client.ExerciseContract(c.Request.Context(), &stockpb.ExerciseContractRequest{

@@ -127,6 +127,116 @@ func TestOTCOfferService_Create_StoresInitiatorAccount(t *testing.T) {
 	}
 }
 
+func TestOTCOfferService_Create_BankOffer_CapturesActingEmployeeID(t *testing.T) {
+	fx := newOTCCRUDFixture(t)
+	// Employee 17 creates a buy_initiated offer acting AS the bank: the
+	// gateway resolves the bank owner (actor_system_type "bank", actor_user_id
+	// 0) and threads the originating employee id separately.
+	emp := uint64(17)
+	out, err := fx.svc.Create(context.Background(), CreateOfferInput{
+		ActorUserID:      0,
+		ActorSystemType:  "bank",
+		ActingEmployeeID: &emp,
+		Direction:        model.OTCDirectionBuyInitiated,
+		StockID:          42,
+		Quantity:         decimal.NewFromInt(10),
+		StrikePrice:      decimal.NewFromInt(150),
+		Premium:          decimal.NewFromInt(20),
+		SettlementDate:   time.Now().AddDate(0, 0, 30),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if out.InitiatorOwnerType != model.OwnerBank {
+		t.Errorf("initiator owner type = %v, want bank", out.InitiatorOwnerType)
+	}
+	if out.ActingEmployeeID == nil || *out.ActingEmployeeID != 17 {
+		t.Fatalf("ActingEmployeeID = %v, want 17", out.ActingEmployeeID)
+	}
+	// Persisted row carries it.
+	got, err := fx.offers.GetByID(out.ID)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got.ActingEmployeeID == nil || *got.ActingEmployeeID != 17 {
+		t.Errorf("persisted ActingEmployeeID = %v, want 17", got.ActingEmployeeID)
+	}
+}
+
+func TestOTCOfferService_Create_OnBehalfOfClient_NoActingEmployeeID(t *testing.T) {
+	fx := newOTCCRUDFixture(t)
+	fx.seedHolding(t, 42, 7, 100)
+	// Employee acting on behalf of client 42: the gateway resolves the client
+	// owner (actor_system_type "client", actor_user_id 42). Even if an acting
+	// employee id is threaded, a client-owned offer must NOT carry it.
+	emp := uint64(17)
+	out, err := fx.svc.Create(context.Background(), CreateOfferInput{
+		ActorUserID:      42,
+		ActorSystemType:  "client",
+		ActingEmployeeID: &emp,
+		Direction:        model.OTCDirectionSellInitiated,
+		StockID:          7,
+		Quantity:         decimal.NewFromInt(10),
+		StrikePrice:      decimal.NewFromInt(150),
+		Premium:          decimal.NewFromInt(20),
+		SettlementDate:   time.Now().AddDate(0, 0, 30),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if out.InitiatorOwnerType != model.OwnerClient {
+		t.Errorf("initiator owner type = %v, want client", out.InitiatorOwnerType)
+	}
+	if out.ActingEmployeeID != nil {
+		t.Errorf("ActingEmployeeID = %v, want nil for client-owned offer", *out.ActingEmployeeID)
+	}
+}
+
+func TestOTCOfferService_Create_ClientOffer_NoActingEmployeeID(t *testing.T) {
+	fx := newOTCCRUDFixture(t)
+	fx.seedHolding(t, 7, 42, 100)
+	out, err := fx.svc.Create(context.Background(), CreateOfferInput{
+		ActorUserID:     7,
+		ActorSystemType: "client",
+		Direction:       model.OTCDirectionSellInitiated,
+		StockID:         42,
+		Quantity:        decimal.NewFromInt(10),
+		StrikePrice:     decimal.NewFromInt(150),
+		Premium:         decimal.NewFromInt(20),
+		SettlementDate:  time.Now().AddDate(0, 0, 30),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if out.ActingEmployeeID != nil {
+		t.Errorf("ActingEmployeeID = %v, want nil for client offer", *out.ActingEmployeeID)
+	}
+}
+
+func TestOTCOfferService_Create_BankOffer_NilActingEmployeeForSystemPath(t *testing.T) {
+	fx := newOTCCRUDFixture(t)
+	// Bank offer created by a non-employee/system path (no acting employee).
+	out, err := fx.svc.Create(context.Background(), CreateOfferInput{
+		ActorUserID:     0,
+		ActorSystemType: "bank",
+		Direction:       model.OTCDirectionBuyInitiated,
+		StockID:         42,
+		Quantity:        decimal.NewFromInt(10),
+		StrikePrice:     decimal.NewFromInt(150),
+		Premium:         decimal.NewFromInt(20),
+		SettlementDate:  time.Now().AddDate(0, 0, 30),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if out.InitiatorOwnerType != model.OwnerBank {
+		t.Errorf("initiator owner type = %v, want bank", out.InitiatorOwnerType)
+	}
+	if out.ActingEmployeeID != nil {
+		t.Errorf("ActingEmployeeID = %v, want nil (system path)", *out.ActingEmployeeID)
+	}
+}
+
 func TestOTCOfferService_Create_RejectsZeroQuantity(t *testing.T) {
 	fx := newOTCCRUDFixture(t)
 	_, err := fx.svc.Create(context.Background(), CreateOfferInput{

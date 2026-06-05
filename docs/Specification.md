@@ -3047,9 +3047,21 @@ fire on the unified routes' remote-dispatch path:
   into one `contracts[]` array (`kind=remote` for cross-bank rows); the legacy
   `peer_contracts`/`peer_total` fields were removed.
 - **Exercise a remote contract.** `POST /api/v3/otc/contracts/:id/exercise`. Buyer-only
-  (rejects when this bank's row is `direction=DEBIT`); strike-account ownership is
-  enforced gateway-side. Dispatches the 4-posting exercise SI-TX using the
-  OPTION-pseudo-account form (see Exercise lifecycle below).
+  (rejects when this bank's row is `direction=DEBIT`); the strike account
+  (`buyer_account_number`) is the only client-supplied money-path resource and is
+  gated **authoritatively for ALL principals** gateway-side via
+  `ResolveAndCheckAccountByNumber` (client → must own it; employee acting as the bank →
+  must be a BANK account; employee on-behalf → that client's account; `403` on
+  mismatch). **SP-3 Task 5 security fix (2026-06-05):** this replaced an
+  `enforceOwnership` call that returned nil for any non-client principal, which had
+  let a bank-acting employee pay the bank's strike obligation from an **arbitrary
+  account** (including a client's) of the matching currency. stock-service's
+  `exerciseRemoteContract` additionally re-asserts the same predicate
+  (`isBankAccount` for a bank buyer; owner match for a client buyer; active +
+  strike-currency match) **before** dispatching `InitiateOptionExercise`, as
+  defense-in-depth — mirroring the already-hardened bid path (`openRemoteNegotiation`).
+  Dispatches the 4-posting exercise SI-TX using the OPTION-pseudo-account form (see
+  Exercise lifecycle below).
 - **Own-chain list / counter / accept / cancel on a remote chain.** Use the unified
   `GET /api/v3/me/otc/options/negotiations` (remote rows carry `kind="remote"` and a
   `role`) and the per-chain `…/:nid/{counter,accept}` + `DELETE …/:nid`; stock-service
@@ -3185,6 +3197,6 @@ Per Celina 5 §"Plaćanja" (*"u celosti, ili ne uopšte"*):
 
 ### Out of scope
 
-- Bank-side OTC participation across banks — employees acting as bank can already participate intra-bank, but the unified remote-bid path (`POST /api/v3/otc/options/:id/bid` against a remote listing) forces `client-<n>` from the JWT principal (a bank/employee-acting-as-bank remote bidder is rejected with 409, SP-3 deferral).
+- ~~Bank-side OTC participation across banks~~ — **DELIVERED in SP-3 (2026-06-05).** An employee acting as the bank is now a first-class cross-bank OTC principal: bank-owned offers publish `employee-<ActingEmployeeID>` on the SI-TX wire (biddable by peers), and the bank can bid/counter/accept/reject/cancel/exercise cross-bank against BANK accounts/holdings (sentinel `1000000000`). The unified bid path (`POST /api/v3/otc/options/:id/bid` against a remote listing) now publishes `buyerId=employee-<N>` for the bank principal (no longer a 409); the wire id is stable per-resource via the `acting_employee_id` column; the bank sees its own remote chains in all read views; inbound `employee-<N>` party ids parse to bank ownership; the exercise strike account is gated (gateway `ResolveAndCheckAccountByNumber` + stock-service bank re-assert).
 - Cross-bank currency conversion at exercise — buyer must hold the strike currency directly; cross-currency strikes would need exchange-service plumbing through the SI-TX path.
 - HMAC outbound auth has been wired but not exercised end-to-end with another team's bank.

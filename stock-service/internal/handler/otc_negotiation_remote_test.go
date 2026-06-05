@@ -1,11 +1,15 @@
 // Package handler — cross-bank (REMOTE) bid dispatch tests for OpenNegotiation
-// (Unified OTC SP-2b). The bid route dispatches local vs cross-bank in
-// stock-service based on whether the parent :id is a local or a folded-in
-// remote OTCOffer. These tests exercise the REMOTE branch:
+// (Unified OTC SP-2b / SP-3 Task 4). The bid route dispatches local vs
+// cross-bank in stock-service based on whether the parent :id is a local or a
+// folded-in remote OTCOffer. These tests exercise the REMOTE branch:
 //   - a client bid on a remote listing dispatches to the (fake) peer and
-//     records a remote OTCNegotiation mirror row,
-//   - an account-currency mismatch is rejected,
-//   - a bank caller is rejected (SP-3 deferral).
+//     records a remote OTCNegotiation mirror row (buyerId "client-<N>"),
+//   - a bank bid (employee acting as the bank) dispatches with buyerId
+//     "employee-<N>", settles against a BANK account, and persists
+//     ActingEmployeeID (SP-3 Task 4),
+//   - a bank bid against a non-bank account is rejected,
+//   - a bank bid with acting_employee_id == 0 is rejected,
+//   - an account-currency mismatch is rejected.
 package handler
 
 import (
@@ -31,13 +35,20 @@ import (
 )
 
 // fakeOTCAccountClient implements OTCAccountClient: returns a single canned
-// account for any GetAccount call.
+// account for any GetAccount / GetAccountByNumber call.
 type fakeOTCAccountClient struct {
 	acct *accountpb.AccountResponse
 	err  error
 }
 
 func (f *fakeOTCAccountClient) GetAccount(_ context.Context, _ *accountpb.GetAccountRequest, _ ...grpc.CallOption) (*accountpb.AccountResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.acct, nil
+}
+
+func (f *fakeOTCAccountClient) GetAccountByNumber(_ context.Context, _ *accountpb.GetAccountByNumberRequest, _ ...grpc.CallOption) (*accountpb.AccountResponse, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -178,6 +189,20 @@ func usdAccount(ownerID uint64) *accountpb.AccountResponse {
 	}
 }
 
+// usdBankAccount returns an active USD account flagged as a BANK account
+// (account_kind == "bank", owner_id == bank sentinel). Used by the SP-3 bank-bid
+// tests, where the bidder is the bank and must settle against a bank account.
+func usdBankAccount() *accountpb.AccountResponse {
+	return &accountpb.AccountResponse{
+		Id:            5001,
+		OwnerId:       1_000_000_000, // bank sentinel
+		AccountNumber: "111-BANK-USD-01",
+		CurrencyCode:  "USD",
+		Status:        "active",
+		AccountKind:   "bank",
+	}
+}
+
 func openReq(parentID, bidderID uint64, ownerType string) *stockpb.OpenNegotiationRequest {
 	return &stockpb.OpenNegotiationRequest{
 		ParentOfferId:       parentID,
@@ -190,6 +215,25 @@ func openReq(parentID, bidderID uint64, ownerType string) *stockpb.OpenNegotiati
 		SettlementDate:      "2026-07-01",
 		ActingPrincipalType: "client",
 		ActingPrincipalId:   bidderID,
+	}
+}
+
+// bankBidReq builds an OpenNegotiationRequest for an employee acting as the
+// bank: bidder_owner_type=bank, bidder_owner_id=0 (resolves to nil),
+// acting_principal_type=employee, and the acting_employee_id wire-identity.
+func bankBidReq(parentID, actingEmployeeID uint64) *stockpb.OpenNegotiationRequest {
+	return &stockpb.OpenNegotiationRequest{
+		ParentOfferId:       parentID,
+		BidderOwnerType:     "bank",
+		BidderOwnerId:       0,
+		BidderAccountId:     5001,
+		Quantity:            "10",
+		StrikePrice:         "150",
+		Premium:             "20",
+		SettlementDate:      "2026-07-01",
+		ActingPrincipalType: "employee",
+		ActingPrincipalId:   actingEmployeeID,
+		ActingEmployeeId:    actingEmployeeID,
 	}
 }
 
@@ -248,6 +292,10 @@ func TestOpenNegotiation_RemoteClientBid_DispatchesAndRecordsMirror(t *testing.T
 	if mirror.RemoteParentNativeID == nil || *mirror.RemoteParentNativeID != "peer-offer-1" {
 		t.Errorf("mirror RemoteParentNativeID: got %v", mirror.RemoteParentNativeID)
 	}
+	// A client bid never carries an acting-employee wire identity.
+	if mirror.ActingEmployeeID != nil {
+		t.Errorf("client-bid mirror ActingEmployeeID: got %v, want nil", *mirror.ActingEmployeeID)
+	}
 
 	// The unified response is kind=remote and carries the mirror surrogate id.
 	if resp.GetKind() != "remote" {
@@ -278,23 +326,96 @@ func TestOpenNegotiation_RemoteBid_BadAccountCurrency(t *testing.T) {
 	}
 }
 
-func TestOpenNegotiation_RemoteBid_BankCallerUnsupported(t *testing.T) {
-	dispatcher := &fakePeerDispatcher{routing: 222, foreignID: "neg-xyz"}
+// TestOpenNegotiation_RemoteBankBid_DispatchesAsEmployeeWireID is the SP-3
+// Task 4 happy path: an employee acting AS the bank places a cross-bank bid.
+// The SI-TX offer's buyerId is the stable wire identity "employee-<N>"; the
+// bidder account is validated as a BANK account; and the persisted remote
+// negotiation row carries ActingEmployeeID, RemoteBuyerID "employee-<N>", and
+// bidder owner type bank.
+func TestOpenNegotiation_RemoteBankBid_DispatchesAsEmployeeWireID(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{routing: 222, foreignID: "neg-bank"}
+	accounts := &fakeOTCAccountClient{acct: usdBankAccount()}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	parentID := seedRemoteOffer(t, db)
+
+	resp, err := h.OpenNegotiation(context.Background(), bankBidReq(parentID, 42))
+	if err != nil {
+		t.Fatalf("OpenNegotiation (bank bid): %v", err)
+	}
+
+	if dispatcher.calls != 1 {
+		t.Fatalf("dispatcher called %d times, want 1", dispatcher.calls)
+	}
+	// The wire buyer identity is the stable "employee-<actingEmployeeID>".
+	buyer, _ := dispatcher.gotOffer["buyerId"].(map[string]any)
+	if buyer == nil || buyer["id"] != "employee-42" {
+		t.Errorf("offer buyerId.id: got %v, want employee-42", dispatcher.gotOffer["buyerId"])
+	}
+	lastBy, _ := dispatcher.gotOffer["lastModifiedBy"].(map[string]any)
+	if lastBy == nil || lastBy["id"] != "employee-42" {
+		t.Errorf("offer lastModifiedBy.id: got %v, want employee-42", dispatcher.gotOffer["lastModifiedBy"])
+	}
+	// The bank's account number was bound for settlement.
+	if dispatcher.gotOffer["buyerAccountNumber"] != "111-BANK-USD-01" {
+		t.Errorf("offer buyerAccountNumber: got %v, want 111-BANK-USD-01", dispatcher.gotOffer["buyerAccountNumber"])
+	}
+
+	// The persisted remote mirror carries the bank wire identity + acting employee.
+	mirror, gerr := repository.NewOTCNegotiationRepository(db).GetRemoteNegByRoutingAndNative(222, "neg-bank")
+	if gerr != nil {
+		t.Fatalf("expected remote mirror row: %v", gerr)
+	}
+	if mirror.BidderOwnerType != model.OwnerBank {
+		t.Errorf("mirror BidderOwnerType: got %q, want bank", mirror.BidderOwnerType)
+	}
+	if mirror.ActingEmployeeID == nil || *mirror.ActingEmployeeID != 42 {
+		t.Errorf("mirror ActingEmployeeID: got %v, want 42", mirror.ActingEmployeeID)
+	}
+	if mirror.RemoteBuyerID == nil || *mirror.RemoteBuyerID != "employee-42" {
+		t.Errorf("mirror RemoteBuyerID: got %v, want employee-42", mirror.RemoteBuyerID)
+	}
+	if resp.GetKind() != "remote" || resp.GetId() != mirror.ID {
+		t.Errorf("response: kind=%q id=%d, want remote id=%d", resp.GetKind(), resp.GetId(), mirror.ID)
+	}
+}
+
+// TestOpenNegotiation_RemoteBankBid_NonBankAccount rejects a bank bid whose
+// bound account is NOT a bank account (a bank bidder must settle against a bank
+// account; the ownership assertion branches on bidder owner type).
+func TestOpenNegotiation_RemoteBankBid_NonBankAccount(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{routing: 222, foreignID: "neg-bank"}
+	// A client-owned (non-bank) USD account masquerading as the bid account.
 	accounts := &fakeOTCAccountClient{acct: usdAccount(9)}
 	h, db := newRemoteBidFixture(t, dispatcher, accounts)
 	parentID := seedRemoteOffer(t, db)
 
-	// owner_type=bank → bidder_owner_id resolves to nil → SP-3 deferral.
-	req := openReq(parentID, 0, "bank")
-	_, err := h.OpenNegotiation(context.Background(), req)
+	_, err := h.OpenNegotiation(context.Background(), bankBidReq(parentID, 42))
 	if err == nil {
-		t.Fatal("expected FailedPrecondition for bank caller, got nil")
-	}
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Errorf("code: got %v, want FailedPrecondition", status.Code(err))
+		t.Fatal("expected error for a non-bank bidder account, got nil")
 	}
 	if dispatcher.calls != 0 {
-		t.Errorf("dispatcher should NOT be called for a bank bidder: %d", dispatcher.calls)
+		t.Errorf("dispatcher should NOT be called for a non-bank account: %d", dispatcher.calls)
+	}
+}
+
+// TestOpenNegotiation_RemoteBankBid_MissingActingEmployee rejects a bank bid
+// without an acting_employee_id (no stable wire identity to publish as).
+func TestOpenNegotiation_RemoteBankBid_MissingActingEmployee(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{routing: 222, foreignID: "neg-bank"}
+	accounts := &fakeOTCAccountClient{acct: usdBankAccount()}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	parentID := seedRemoteOffer(t, db)
+
+	req := bankBidReq(parentID, 0) // acting_employee_id == 0
+	_, err := h.OpenNegotiation(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected InvalidArgument for missing acting_employee_id, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("code: got %v, want InvalidArgument", status.Code(err))
+	}
+	if dispatcher.calls != 0 {
+		t.Errorf("dispatcher should NOT be called without acting_employee_id: %d", dispatcher.calls)
 	}
 }
 

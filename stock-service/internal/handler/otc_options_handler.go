@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -124,11 +125,14 @@ type RemoteNegotiationWriter interface {
 	UpsertRemoteNeg(n *model.OTCNegotiation) error
 }
 
-// OTCAccountClient is the narrow account-service surface OpenNegotiation needs
-// to validate (and read the account number of) a bidder's account on the
-// cross-bank branch. Satisfied by accountpb.AccountServiceClient (SP-2b).
+// OTCAccountClient is the narrow account-service surface the cross-bank OTC
+// paths need: OpenNegotiation validates (and reads the account number of) a
+// bidder's account by id; exerciseRemoteContract re-asserts the buyer's
+// strike-debit account by NUMBER before dispatch (SP-3 Task 5 security gate).
+// Satisfied by accountpb.AccountServiceClient (SP-2b / SP-3).
 type OTCAccountClient interface {
 	GetAccount(ctx context.Context, in *accountpb.GetAccountRequest, opts ...grpc.CallOption) (*accountpb.AccountResponse, error)
+	GetAccountByNumber(ctx context.Context, in *accountpb.GetAccountByNumberRequest, opts ...grpc.CallOption) (*accountpb.AccountResponse, error)
 }
 
 // WithPeerOTCDispatch wires the cross-bank bid-dispatch path so OpenNegotiation
@@ -181,6 +185,13 @@ func (h *OTCOptionsHandler) WithCrossBankExerciser(e CrossBankExerciser) *OTCOpt
 // peer_otc_negotiation mirror was retired and folded into this table).
 type PeerNegotiationLister interface {
 	ListRemoteNegByClient(ownRouting int64, clientPrincipal, role string) ([]model.OTCNegotiation, error)
+	// ListRemoteNegByBankParty surfaces the REMOTE chains WE host where the
+	// hosted side is the BANK (party id "employee-<N>"). role: "buyer" → our
+	// cross-bank bids; "seller" → peer bids on our bank-owned offer; "" → either.
+	// Lets an employee acting AS THE BANK see/list its own cross-bank chains
+	// (SP-3 Task 5b). The bank has no single wire principal, so this matches by
+	// prefix; a CLIENT caller must never reach it (use ListRemoteNegByClient).
+	ListRemoteNegByBankParty(ownRouting int64, role string) ([]model.OTCNegotiation, error)
 }
 
 // WithPeerNegotiations wires the cross-bank peer-negotiation mirror so
@@ -308,7 +319,8 @@ func (h *OTCOptionsHandler) CreateOffer(ctx context.Context, in *stockpb.CreateO
 	}
 	input := service.CreateOfferInput{
 		ActorUserID: in.ActorUserId, ActorSystemType: in.ActorSystemType,
-		Direction: in.Direction, StockID: in.StockId,
+		ActingEmployeeID: optionalPtr(in.GetActingEmployeeId()),
+		Direction:        in.Direction, StockID: in.StockId,
 		Ticker:   in.Ticker,
 		Quantity: qty, StrikePrice: strike, Premium: prem,
 		SettlementDate:     settle,
@@ -355,9 +367,10 @@ func (h *OTCOptionsHandler) ListMyOffers(ctx context.Context, in *stockpb.ListMy
 // GetOffer. A history row where the caller was the bidder/counterparty is
 // me_owner=false.
 //
-// REMOTE items: only for client principals (cross-bank party ids are
-// "client-<N>"); a bank/employee caller has no cross-bank identity and skips
-// the remote merge. Each remote chain is mapped onto OTCOfferResponse with
+// REMOTE items: a CLIENT caller sees its own cross-bank chains by its exact
+// "client-<N>" principal; a BANK caller (employee acting as the bank) sees the
+// bank's cross-bank chains via the routing-scoped, "employee-%"-prefixed bank
+// lister (SP-3 T5b). Each remote chain is mapped onto OTCOfferResponse with
 // kind="remote", COUNTERPARTY/peer provenance, and me_owner = WE host the
 // seller/poster side (SellerRoutingNumber == ownRouting). Only chains in a
 // terminal peer status are surfaced (history is past data) and the request's
@@ -409,11 +422,26 @@ func (h *OTCOptionsHandler) ListNegotiationHistory(ctx context.Context, in *stoc
 	}
 
 	// REMOTE merge — cross-bank peer negotiation chains in a terminal status
-	// where the caller is a party. Only meaningful for client principals; a
-	// bank/employee caller has no cross-bank negotiation identity.
-	if h.peerNegs != nil && ownerType == model.OwnerClient && ownerID != nil {
-		principal := "client-" + strconv.FormatUint(*ownerID, 10)
-		peerRows, perr := h.peerNegs.ListRemoteNegByClient(h.ownRouting, principal, "")
+	// where the caller is a party. Two principal kinds have a cross-bank identity:
+	//
+	//   - CLIENT (cross-bank party id "client-<N>"): match the exact principal
+	//     via ListRemoteNegByClient. Both buyer + seller chains included — history
+	//     covers all the client's terminal cross-bank activity.
+	//   - BANK (an employee acting AS THE BANK; party id "employee-<N>"): the bank
+	//     has no single wire principal across chains, so match by prefix via
+	//     ListRemoteNegByBankParty(role="") which surfaces both buyer + seller
+	//     chains (SP-3 Task 5b completeness). A client caller never reaches the
+	//     bank lister (and vice versa).
+	if h.peerNegs != nil {
+		var peerRows []model.OTCNegotiation
+		var perr error
+		switch {
+		case ownerType == model.OwnerClient && ownerID != nil:
+			principal := "client-" + strconv.FormatUint(*ownerID, 10)
+			peerRows, perr = h.peerNegs.ListRemoteNegByClient(h.ownRouting, principal, "")
+		case ownerType == model.OwnerBank:
+			peerRows, perr = h.peerNegs.ListRemoteNegByBankParty(h.ownRouting, "")
+		}
 		if perr != nil {
 			return nil, status.Errorf(codes.Internal, "list peer negotiations: %v", perr)
 		}
@@ -1013,12 +1041,23 @@ func (h *OTCOptionsHandler) ExerciseContract(ctx context.Context, in *stockpb.Ex
 //     (including the holder-authorization NotFound for a non-buyer caller).
 //
 // Authorization mirrors resolveRemoteContract + the old ExercisePeerContract:
-// only the BUYER side this bank hosts may exercise. A REMOTE contract is
+// only the BUYER/HOLDER side this bank hosts may exercise. A REMOTE contract is
 // exercisable from this bank only when it carries RemoteDirection=="CREDIT"
-// (this bank holds the buyer/holder side); the caller's SI-TX participant id
-// ("client-<actorUserId>" for client callers) must equal the contract's
-// RemoteBuyerID. A non-buyer/non-holder (the writer, another client, or an
-// employee with no cross-bank identity) gets NotFound — existence must not leak.
+// (this bank holds the buyer/holder side). The buyer party id is read from the
+// ROW; the caller is authorized as that party by identity:
+//
+//   - CLIENT buyer (RemoteBuyerID "client-<N>") → the caller's SI-TX participant
+//     id "client-<actorUserId>" (client actors only) must equal RemoteBuyerID.
+//   - BANK buyer (RemoteBuyerID "employee-<N>") → the caller must be acting AS
+//     THE BANK (actor_system_type "bank", on_behalf_of_client_id == 0). The
+//     strike settles from the bank's bound account (buyer_account_number,
+//     gateway-validated as a bank account) and the holding owner resolves to
+//     (bank, nil) via the inbound parser (SP-3 Task 3). ANY employee may drive
+//     it (the originating employee is not re-derived here).
+//
+// A non-buyer/non-holder (the writer, another client, an employee on behalf of a
+// client, or a client on a bank-buyer contract) gets NotFound — existence must
+// not leak.
 func (h *OTCOptionsHandler) exerciseRemoteContract(ctx context.Context, in *stockpb.ExerciseContractRequest) (*stockpb.ExerciseResponse, bool, error) {
 	if h.peerContracts == nil || h.crossBankExerciser == nil {
 		return nil, false, nil
@@ -1032,31 +1071,73 @@ func (h *OTCOptionsHandler) exerciseRemoteContract(ctx context.Context, in *stoc
 		return nil, true, status.Errorf(codes.Internal, "load remote contract: %v", err)
 	}
 
-	// AUTHORIZE: only the buyer/holder side this bank hosts may exercise.
-	// Compute the caller's SI-TX participant id from the same identity fields
-	// the local ownership check uses (actor_user_id + actor_system_type). An
-	// employee has no cross-bank participant id and is therefore never the
-	// holder of a remote contract.
-	var callerPartyID string
-	if in.GetActorSystemType() == "client" {
-		callerPartyID = "client-" + strconv.FormatInt(in.GetActorUserId(), 10)
+	// AUTHORIZE: only the buyer/holder side this bank hosts (the CREDIT side) may
+	// exercise; the seller/DEBIT side never does (the writer never exercises).
+	buyerID := remoteContractBuyerID(contract)
+	authorized := false
+	if remoteContractDirection(contract) == "CREDIT" {
+		if isBankWireID(buyerID) {
+			// Bank-hosted buyer — authorize a caller acting as the bank.
+			authorized = in.GetActorSystemType() == "bank" && in.GetOnBehalfOfClientId() == 0
+		} else {
+			// Client-hosted buyer — authorize the matching client principal.
+			authorized = in.GetActorSystemType() == "client" &&
+				buyerID == "client-"+strconv.FormatInt(in.GetActorUserId(), 10)
+		}
 	}
-	// The exercisable (buyer/holder) side this bank hosts is the CREDIT side.
-	// Only that side carries a buyer participant id we can authorize against;
-	// the seller/DEBIT side may not exercise (the writer never exercises).
-	if remoteContractDirection(contract) != "CREDIT" || callerPartyID == "" || callerPartyID != remoteContractBuyerID(contract) {
+	if !authorized {
 		// NotFound — do not leak existence to non-holders (same policy as
 		// resolveRemoteContract / the gateway's enforceOwnership).
 		return nil, true, status.Error(codes.NotFound, "not_found")
 	}
 
 	// The buyer's settlement account is the only client-supplied resource; the
-	// gateway has already validated the caller owns it. Everything else
+	// gateway has already validated the caller is entitled to it. Everything else
 	// (counterparty, terms, routings) comes from the persisted remote row inside
 	// InitiateOptionExercise.
 	if in.GetBuyerAccountNumber() == "" {
 		return nil, true, status.Error(codes.InvalidArgument, "buyer_account_number is required to exercise a cross-bank contract")
 	}
+
+	// DEFENSE-IN-DEPTH RE-ASSERT (SP-3 Task 5 security gate): the buyer account
+	// number flows straight into InitiateOptionExercise as the strike-DEBIT
+	// posting (peer_otc_grpc_handler.go) with no further ownership check — Reserve
+	// only verifies active + currency. So if the gateway gate were ever bypassed,
+	// a bank exercise could debit the strike from ANY account of the matching
+	// currency, including a client's. Re-assert the same predicates the bid path
+	// uses (openRemoteNegotiation), branching on the buyer party recorded on the
+	// row, BEFORE dispatch. On failure → NotFound (no-leak policy used throughout
+	// this function), and DO NOT dispatch.
+	if h.accounts == nil {
+		return nil, true, status.Error(codes.FailedPrecondition, "account-service client not wired for cross-bank exercise")
+	}
+	acct, gerr := h.accounts.GetAccountByNumber(ctx, &accountpb.GetAccountByNumberRequest{AccountNumber: in.GetBuyerAccountNumber()})
+	if gerr != nil {
+		return nil, true, status.Error(codes.NotFound, "not_found")
+	}
+	if isBankWireID(buyerID) {
+		// BANK buyer — the strike must settle from a BANK account (account_kind
+		// "bank" or the legacy owner sentinel), never a client's.
+		if !isBankAccount(acct) {
+			return nil, true, status.Error(codes.NotFound, "not_found")
+		}
+	} else {
+		// CLIENT buyer ("client-<X>") — the strike account must be owned by that
+		// buyer client. Belt-and-suspenders to the gateway gate.
+		buyerClientID, perr := strconv.ParseUint(strings.TrimPrefix(buyerID, "client-"), 10, 64)
+		if perr != nil || acct.GetOwnerId() != buyerClientID {
+			return nil, true, status.Error(codes.NotFound, "not_found")
+		}
+	}
+	if acct.GetStatus() != "active" {
+		return nil, true, status.Error(codes.FailedPrecondition, "buyer account is not active")
+	}
+	if acct.GetCurrencyCode() != contract.StrikeCurrency {
+		return nil, true, status.Errorf(codes.InvalidArgument,
+			"currency mismatch: account is %s but the contract strike is %s",
+			acct.GetCurrencyCode(), contract.StrikeCurrency)
+	}
+
 	resp, err := h.crossBankExerciser.InitiateOptionExercise(ctx, &stockpb.InitiateOptionExerciseRequest{
 		PeerOptionContractId: contract.ID,
 		BuyerAccountNumber:   in.GetBuyerAccountNumber(),

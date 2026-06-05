@@ -29,6 +29,7 @@ import (
 	"errors"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -58,19 +59,37 @@ type remoteNegContext struct {
 	foreignID        string // the peer foreign negotiation id (= row.NativeID)
 	counterpartyCode string // the OTHER party's routing, stringified (the bank we proxy to)
 	offer            contractsitx.OtcOffer
+	// hostedPartyID is the STABLE SI-TX wire id of the side WE host — read from
+	// the ROW, never recomputed from the acting caller. For a client-hosted side
+	// it is "client-<N>"; for a bank-hosted side it is "employee-<row.ActingEmployeeID>".
+	// The counter compose uses it as lastModifiedBy so a counter performed by a
+	// DIFFERENT employee than the originator keeps the SAME employee-<N> the peer
+	// expects (wire-id stability — SP-3 Task 5).
+	hostedPartyID string
 }
 
 // resolveRemoteNegAction loads the REMOTE chain for :nid and authorizes the
-// caller as a party. The bool is false (nil error) when :nid is NOT a remote
-// chain this handler can dispatch (unwired, or a local id) — the caller then
-// surfaces the original local error. A non-party caller gets NotFound (existence
-// must not leak to outsiders — same policy as resolveRemoteContract).
+// caller as the party WE host. The bool is false (nil error) when :nid is NOT a
+// remote chain this handler can dispatch (unwired, or a local id) — the caller
+// then surfaces the original local error. A non-party caller gets NotFound
+// (existence must not leak to outsiders — same policy as resolveRemoteContract).
 //
-// Authorization: the caller is a party iff their acting identity matches the
-// side WE host. We host the buyer when RemoteBuyerRouting == ownRouting and the
-// seller when RemoteSellerRouting == ownRouting. Only client principals carry a
-// cross-bank identity ("client-<N>"); a bank/employee caller is never a party.
-// The counterparty bank code is the OTHER party's routing as a string.
+// Authorization (SP-3 Task 5 — lifts the bank party): the caller may drive the
+// chain iff their acting identity matches the side WE host. We host the buyer
+// when RemoteBuyerRouting == ownRouting and the seller when RemoteSellerRouting
+// == ownRouting. The hosted side is one of:
+//
+//   - CLIENT-owned — its wire id is "client-<N>". A client principal whose
+//     "client-<callerOwnerID>" equals that id is authorized (the original path).
+//   - BANK-owned — its wire id is "employee-<N>" (a chain we OPENED carries
+//     row.ActingEmployeeID; a chain where we host the SELLER of a bank-owned
+//     offer carries RemoteSellerID "employee-<N>"). A caller acting AS THE BANK
+//     (callerOwnerType == OwnerBank) is authorized — ANY employee may drive the
+//     bank's chain; the published wire id stays the ROW's stable employee-<N>.
+//
+// Either way the hosted party id, the (rid, foreignID), and the counterparty
+// come from the ROW — never from the caller. The counterparty bank code is the
+// OTHER party's routing as a string.
 func (h *OTCOptionsHandler) resolveRemoteNegAction(
 	nid uint64, callerOwnerType model.OwnerType, callerOwnerID *uint64,
 ) (*remoteNegContext, bool, error) {
@@ -85,27 +104,39 @@ func (h *OTCOptionsHandler) resolveRemoteNegAction(
 		return nil, false, status.Errorf(codes.Internal, "remote negotiation lookup failed: %v", err)
 	}
 
-	// Only client principals have a cross-bank identity.
-	if callerOwnerType != model.OwnerClient || callerOwnerID == nil {
-		return nil, false, status.Error(codes.NotFound, "negotiation not found")
-	}
-	callerPrincipal := "client-" + strconv.FormatUint(*callerOwnerID, 10)
-
 	buyerRouting, buyerID := remoteBuyer(row)
 	sellerRouting, sellerID := remoteSeller(row)
 	own := h.ownRouting
 
+	// Identify the side WE host (exactly one of buyer/seller routing == own on a
+	// well-formed remote row). The hosted party id is the STABLE wire id read off
+	// the row — "client-<N>" for a client side, "employee-<N>" for a bank side.
+	var hostedPartyID string
 	var counterpartyRouting int64
 	switch {
-	case buyerRouting == own && buyerID == callerPrincipal:
-		// We host the buyer; the counterparty is the seller's bank.
-		counterpartyRouting = sellerRouting
-	case sellerRouting == own && sellerID == callerPrincipal:
-		// We host the seller; the counterparty is the buyer's bank.
-		counterpartyRouting = buyerRouting
+	case buyerRouting == own:
+		hostedPartyID = buyerID
+		counterpartyRouting = sellerRouting // counterparty is the seller's bank
+	case sellerRouting == own:
+		hostedPartyID = sellerID
+		counterpartyRouting = buyerRouting // counterparty is the buyer's bank
 	default:
-		// Caller is not a party to this chain — do not leak existence.
+		// Neither side is hosted here — not our chain to drive.
 		return nil, false, status.Error(codes.NotFound, "negotiation not found")
+	}
+
+	// Authorize the caller against the hosted side. A bank-owned hosted side
+	// (wire id "employee-<N>") is driven by a caller acting AS THE BANK; a
+	// client-owned hosted side ("client-<N>") by the matching client principal.
+	if isBankWireID(hostedPartyID) {
+		if callerOwnerType != model.OwnerBank {
+			return nil, false, status.Error(codes.NotFound, "negotiation not found")
+		}
+	} else {
+		if callerOwnerType != model.OwnerClient || callerOwnerID == nil ||
+			hostedPartyID != "client-"+strconv.FormatUint(*callerOwnerID, 10) {
+			return nil, false, status.Error(codes.NotFound, "negotiation not found")
+		}
 	}
 
 	var offer contractsitx.OtcOffer
@@ -125,16 +156,31 @@ func (h *OTCOptionsHandler) resolveRemoteNegAction(
 		foreignID:        remoteNativeIDOf(row),
 		counterpartyCode: strconv.FormatInt(counterpartyRouting, 10),
 		offer:            offer,
+		hostedPartyID:    hostedPartyID,
 	}, true, nil
+}
+
+// isBankWireID reports whether an SI-TX party id denotes the bank party. The
+// bank publishes "employee-<N>" (the stable acting-employee wire identity);
+// clients publish "client-<N>". Anything without the employee- prefix is a
+// non-bank (client) id.
+func isBankWireID(id string) bool {
+	return strings.HasPrefix(id, "employee-")
 }
 
 // counterRemoteNegotiation proxies a counter (PUT) to the counterparty's bank
 // and mirrors the new terms onto the local REMOTE row. It relocates the
 // gateway's CounterPeerNegotiation → proxyPeerNegotiation(PUT, "") +
 // UpdateNegotiation mirror.
+//
+// Wire-id stability (SP-3 Task 5): the buyer/seller ids AND lastModifiedBy.id
+// are read from the ROW (remoteBuyer/remoteSeller + rc.hostedPartyID), NOT
+// recomputed from the acting caller. So a counter performed by a DIFFERENT
+// employee than the one who originated a bank-owned chain still publishes the
+// SAME "employee-<N>" the peer expects.
 func (h *OTCOptionsHandler) counterRemoteNegotiation(
 	ctx context.Context, rc *remoteNegContext,
-	callerPrincipal string, qty, strike, premium decimal.Decimal, settle time.Time,
+	qty, strike, premium decimal.Decimal, settle time.Time,
 ) (*stockpb.OTCNegotiationResponse, error) {
 	// Compose the SI-TX OtcOffer body from the request terms. SI-TX §2.5 /
 	// §2.8.1 require monetary amounts to be JSON NUMBERS — DecimalNumber emits
@@ -142,6 +188,8 @@ func (h *OTCOptionsHandler) counterRemoteNegotiation(
 	settlementDate := settle.Format("2006-01-02")
 	buyerRouting, buyerID := remoteBuyer(rc.row)
 	sellerRouting, sellerID := remoteSeller(rc.row)
+	// lastModifiedBy = the side WE host, with its STABLE wire id from the row.
+	hostedPartyID := rc.hostedPartyID
 	offerBody := map[string]any{
 		"stock":          map[string]any{"ticker": rc.offer.Ticker},
 		"settlementDate": settlementDate,
@@ -150,8 +198,8 @@ func (h *OTCOptionsHandler) counterRemoteNegotiation(
 		"buyerId":        map[string]any{"routingNumber": buyerRouting, "id": buyerID},
 		"sellerId":       map[string]any{"routingNumber": sellerRouting, "id": sellerID},
 		"amount":         qty.IntPart(),
-		// lastModifiedBy = the caller (the party we host placing the counter).
-		"lastModifiedBy": map[string]any{"routingNumber": h.ownRouting, "id": callerPrincipal},
+		// lastModifiedBy = the party we host placing the counter (stable row id).
+		"lastModifiedBy": map[string]any{"routingNumber": h.ownRouting, "id": hostedPartyID},
 	}
 	// Preserve the cascade-cancel lot key when this chain carries one.
 	if rc.row.RemoteParentRouting != nil && rc.row.RemoteParentNativeID != nil {
@@ -183,7 +231,7 @@ func (h *OTCOptionsHandler) counterRemoteNegotiation(
 		Premium:         premium,
 		PremiumCurrency: rc.offer.PremiumCurrency,
 		SettlementDate:  settlementDate,
-		LastModifiedBy:  contractsitx.ForeignBankId{RoutingNumber: h.ownRouting, ID: callerPrincipal},
+		LastModifiedBy:  contractsitx.ForeignBankId{RoutingNumber: h.ownRouting, ID: hostedPartyID},
 	}
 	mirrorJSON, _ := json.Marshal(mirrorOffer)
 	if err := h.remoteNegOps.UpdateRemoteNegOffer(rc.row.RoutingNumber, rc.foreignID, string(mirrorJSON)); err != nil {

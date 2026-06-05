@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	accountpb "github.com/exbanka/contract/accountpb"
 	stockpb "github.com/exbanka/contract/stockpb"
 )
 
@@ -35,12 +36,27 @@ func (f *fakeCrossBankExerciser) InitiateOptionExercise(_ context.Context, req *
 }
 
 // newRemoteExerciseFixture wires the unified-contract fixture PLUS a fake
-// cross-bank exerciser so the REMOTE branch of ExerciseContract is live.
+// cross-bank exerciser so the REMOTE branch of ExerciseContract is live. The
+// account client backs the SP-3 Task 5 strike-account re-assert; by default it
+// returns a client-owned USD account matching the buyer client-7 the seeded
+// contracts use, so the existing client-holder cases dispatch unchanged. Tests
+// that need a different account (bank-owned, mismatched owner/currency) call
+// newRemoteExerciseFixtureAcct.
 func newRemoteExerciseFixture(t *testing.T, ownRouting int64) (*OTCOptionsHandler, *otcOptionsHandlerFixture, *fakeCrossBankExerciser) {
+	t.Helper()
+	return newRemoteExerciseFixtureAcct(t, ownRouting, &fakeOTCAccountClient{acct: usdAccount(7)})
+}
+
+// newRemoteExerciseFixtureAcct is newRemoteExerciseFixture with an explicit
+// account client for the strike-account re-assert (SP-3 Task 5).
+func newRemoteExerciseFixtureAcct(t *testing.T, ownRouting int64, accounts OTCAccountClient) (*OTCOptionsHandler, *otcOptionsHandlerFixture, *fakeCrossBankExerciser) {
 	t.Helper()
 	h, fx := newUnifiedContractFixture(t, ownRouting, "111")
 	cb := &fakeCrossBankExerciser{}
-	h = h.WithCrossBankExerciser(cb)
+	// Wire the account client the same way main.go does (via WithPeerOTCDispatch,
+	// which sets h.accounts), then add the exerciser. nil dispatcher/writer are
+	// fine: the exercise path only reads h.accounts.
+	h = h.WithPeerOTCDispatch(nil, nil, accounts).WithCrossBankExerciser(cb)
 	return h, fx, cb
 }
 
@@ -103,6 +119,133 @@ func TestExerciseContract_Remote_HolderDispatches(t *testing.T) {
 	}
 	if resp.GetStrikeAmountSellerCcy() != "1000" {
 		t.Errorf("strike = %q, want 1000 (5 * 200)", resp.GetStrikeAmountSellerCcy())
+	}
+}
+
+// SP-3 Task 5: the BANK is the buyer/holder of a cross-bank CREDIT contract
+// (RemoteBuyerID "employee-<N>"); a caller acting AS THE BANK (actor_system_type
+// "bank", on_behalf_of_client_id 0) exercises it. Authorized → the cross-bank
+// dispatch fires with the bank's bound settlement account.
+func TestExerciseContract_Remote_BankHolderDispatches(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	// Bank buyer → the strike-account re-assert requires a BANK account.
+	h, fx, cb := newRemoteExerciseFixtureAcct(t, ownRouting, &fakeOTCAccountClient{acct: usdBankAccount()})
+	seedPeerContract(t, fx, &peerContractSeed{
+		ID:                 910,
+		CrossbankTxID:      "tx-910",
+		PostingIndex:       0,
+		NegotiationID:      "neg-910",
+		BuyerRoutingNumber: ownRouting, BuyerID: "employee-42", // WE host the BANK buyer
+		SellerRoutingNumber: peerSellerRouting, SellerID: "client-3",
+		Ticker:         "ACME",
+		Quantity:       5,
+		StrikePrice:    decimal.NewFromInt(200),
+		Currency:       "USD",
+		SettlementDate: "2030-01-01",
+		Direction:      "CREDIT",
+		Status:         "active",
+		CreatedAt:      time.Now(),
+	})
+
+	resp, err := h.ExerciseContract(context.Background(), &stockpb.ExerciseContractRequest{
+		ContractId:         910,
+		ActorUserId:        0,      // bank actor has no user id
+		ActorSystemType:    "bank", // acting AS THE BANK
+		OnBehalfOfClientId: 0,      // 0 = acting as the bank, not on behalf of a client
+		BuyerAccountNumber: "111-BANK-USD-01",
+	})
+	if err != nil {
+		t.Fatalf("bank holder exercise: unexpected err: %v", err)
+	}
+	if !cb.called {
+		t.Fatalf("cross-bank exercise was NOT dispatched for the bank holder")
+	}
+	if cb.gotReq.GetPeerOptionContractId() != 910 {
+		t.Errorf("dispatched contract id = %d, want 910", cb.gotReq.GetPeerOptionContractId())
+	}
+	// Settlement uses the bank's bound account (gateway-validated as a bank account).
+	if cb.gotReq.GetBuyerAccountNumber() != "111-BANK-USD-01" {
+		t.Errorf("dispatched buyer account = %q, want 111-BANK-USD-01", cb.gotReq.GetBuyerAccountNumber())
+	}
+	if resp.GetContractId() != 910 {
+		t.Errorf("resp contract id = %d, want 910", resp.GetContractId())
+	}
+}
+
+// A client caller may NOT exercise a BANK-hosted (employee-<N>) buyer contract,
+// even if their client id collides with the employee number → NotFound, no
+// dispatch.
+func TestExerciseContract_Remote_ClientCannotExerciseBankContract(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	h, fx, cb := newRemoteExerciseFixture(t, ownRouting)
+	seedPeerContract(t, fx, &peerContractSeed{
+		ID:                 911,
+		CrossbankTxID:      "tx-911",
+		PostingIndex:       0,
+		NegotiationID:      "neg-911",
+		BuyerRoutingNumber: ownRouting, BuyerID: "employee-42", // BANK buyer
+		SellerRoutingNumber: peerSellerRouting, SellerID: "client-3",
+		Ticker:         "ACME",
+		Quantity:       5,
+		StrikePrice:    decimal.NewFromInt(200),
+		Currency:       "USD",
+		SettlementDate: "2030-01-01",
+		Direction:      "CREDIT",
+		Status:         "active",
+		CreatedAt:      time.Now(),
+	})
+
+	_, err := h.ExerciseContract(context.Background(), &stockpb.ExerciseContractRequest{
+		ContractId:         911,
+		ActorUserId:        42, // a client whose id collides with the employee number
+		ActorSystemType:    "client",
+		BuyerAccountNumber: "265-12-13",
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("client on a bank contract: expected NotFound, got %v", err)
+	}
+	if cb.called {
+		t.Fatalf("cross-bank exercise must NOT dispatch for a client on a bank-buyer contract")
+	}
+}
+
+// An employee acting ON BEHALF OF A CLIENT (on_behalf_of_client_id != 0) is NOT
+// acting as the bank → may not exercise a bank-hosted contract → NotFound.
+func TestExerciseContract_Remote_OnBehalfOfClientNotBank(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	h, fx, cb := newRemoteExerciseFixture(t, ownRouting)
+	seedPeerContract(t, fx, &peerContractSeed{
+		ID:                 912,
+		CrossbankTxID:      "tx-912",
+		PostingIndex:       0,
+		NegotiationID:      "neg-912",
+		BuyerRoutingNumber: ownRouting, BuyerID: "employee-42",
+		SellerRoutingNumber: peerSellerRouting, SellerID: "client-3",
+		Ticker:         "ACME",
+		Quantity:       5,
+		StrikePrice:    decimal.NewFromInt(200),
+		Currency:       "USD",
+		SettlementDate: "2030-01-01",
+		Direction:      "CREDIT",
+		Status:         "active",
+		CreatedAt:      time.Now(),
+	})
+
+	_, err := h.ExerciseContract(context.Background(), &stockpb.ExerciseContractRequest{
+		ContractId:         912,
+		ActorUserId:        0,
+		ActorSystemType:    "bank",
+		OnBehalfOfClientId: 77, // acting on behalf of a client, NOT as the bank
+		BuyerAccountNumber: "111-BANK-USD-01",
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("on-behalf-of-client on a bank contract: expected NotFound, got %v", err)
+	}
+	if cb.called {
+		t.Fatalf("cross-bank exercise must NOT dispatch when acting on behalf of a client")
 	}
 }
 
@@ -342,5 +485,135 @@ func TestExerciseContract_Remote_MissingIdFallsThrough(t *testing.T) {
 	}
 	if cb.called {
 		t.Fatalf("cross-bank exercise must NOT dispatch for a non-existent contract")
+	}
+}
+
+// SP-3 Task 5 security re-assert: a BANK-buyer contract whose caller (acting as
+// the bank) binds a NON-bank (client-owned) strike account must be REJECTED at
+// the stock-service defense-in-depth layer — NotFound, no dispatch. Without
+// this, a bank exercise could pay the strike obligation from a client's account
+// of the matching currency. This is the gateway-bypass guard.
+func TestExerciseContract_Remote_BankBindingNonBankAccountRejected(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	// The bound strike account is a CLIENT account (owner 7), NOT a bank account.
+	h, fx, cb := newRemoteExerciseFixtureAcct(t, ownRouting, &fakeOTCAccountClient{acct: usdAccount(7)})
+	seedPeerContract(t, fx, &peerContractSeed{
+		ID:                 920,
+		CrossbankTxID:      "tx-920",
+		PostingIndex:       0,
+		NegotiationID:      "neg-920",
+		BuyerRoutingNumber: ownRouting, BuyerID: "employee-42", // BANK buyer
+		SellerRoutingNumber: peerSellerRouting, SellerID: "client-3",
+		Ticker:         "ACME",
+		Quantity:       5,
+		StrikePrice:    decimal.NewFromInt(200),
+		Currency:       "USD",
+		SettlementDate: "2030-01-01",
+		Direction:      "CREDIT",
+		Status:         "active",
+		CreatedAt:      time.Now(),
+	})
+
+	_, err := h.ExerciseContract(context.Background(), &stockpb.ExerciseContractRequest{
+		ContractId:         920,
+		ActorUserId:        0,
+		ActorSystemType:    "bank",
+		OnBehalfOfClientId: 0,
+		BuyerAccountNumber: "111-0000000001-22", // a client's account, matching currency
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("bank binding a client account: expected NotFound, got %v", err)
+	}
+	if cb.called {
+		t.Fatalf("THEFT VECTOR: cross-bank exercise dispatched the strike against a NON-bank account")
+	}
+}
+
+// SP-3 Task 5 security re-assert: a CLIENT-buyer contract whose caller binds
+// ANOTHER client's account must be REJECTED at the stock-service layer —
+// NotFound, no dispatch (belt-and-suspenders to the gateway gate). The bound
+// account owner (99) is NOT the buyer client (7).
+func TestExerciseContract_Remote_ClientBindingOtherClientAccountRejected(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	// The bound account is owned by client 99, but the contract buyer is client-7.
+	h, fx, cb := newRemoteExerciseFixtureAcct(t, ownRouting, &fakeOTCAccountClient{acct: usdAccount(99)})
+	seedPeerContract(t, fx, &peerContractSeed{
+		ID:                 921,
+		CrossbankTxID:      "tx-921",
+		PostingIndex:       0,
+		NegotiationID:      "neg-921",
+		BuyerRoutingNumber: ownRouting, BuyerID: "client-7", // CLIENT buyer (we host)
+		SellerRoutingNumber: peerSellerRouting, SellerID: "client-3",
+		Ticker:         "ACME",
+		Quantity:       5,
+		StrikePrice:    decimal.NewFromInt(200),
+		Currency:       "USD",
+		SettlementDate: "2030-01-01",
+		Direction:      "CREDIT",
+		Status:         "active",
+		CreatedAt:      time.Now(),
+	})
+
+	_, err := h.ExerciseContract(context.Background(), &stockpb.ExerciseContractRequest{
+		ContractId:         921,
+		ActorUserId:        7, // the legit buyer principal...
+		ActorSystemType:    "client",
+		BuyerAccountNumber: "111-0000000001-22", // ...but binding client-99's account
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("client binding another client's account: expected NotFound, got %v", err)
+	}
+	if cb.called {
+		t.Fatalf("THEFT VECTOR: cross-bank exercise dispatched the strike against another client's account")
+	}
+}
+
+// SP-3 Task 5 security re-assert: a buyer (here the bank) binding a bank account
+// of a MISMATCHED currency must be REJECTED (cross-bank SI-TX has no FX) —
+// InvalidArgument, no dispatch.
+func TestExerciseContract_Remote_StrikeCurrencyMismatchRejected(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	// Bank account, but EUR while the contract strike is USD.
+	eurBank := &accountpb.AccountResponse{
+		Id:            5002,
+		OwnerId:       1_000_000_000,
+		AccountNumber: "111-BANK-EUR-01",
+		CurrencyCode:  "EUR",
+		Status:        "active",
+		AccountKind:   "bank",
+	}
+	h, fx, cb := newRemoteExerciseFixtureAcct(t, ownRouting, &fakeOTCAccountClient{acct: eurBank})
+	seedPeerContract(t, fx, &peerContractSeed{
+		ID:                 922,
+		CrossbankTxID:      "tx-922",
+		PostingIndex:       0,
+		NegotiationID:      "neg-922",
+		BuyerRoutingNumber: ownRouting, BuyerID: "employee-42",
+		SellerRoutingNumber: peerSellerRouting, SellerID: "client-3",
+		Ticker:         "ACME",
+		Quantity:       5,
+		StrikePrice:    decimal.NewFromInt(200),
+		Currency:       "USD", // contract strike is USD
+		SettlementDate: "2030-01-01",
+		Direction:      "CREDIT",
+		Status:         "active",
+		CreatedAt:      time.Now(),
+	})
+
+	_, err := h.ExerciseContract(context.Background(), &stockpb.ExerciseContractRequest{
+		ContractId:         922,
+		ActorUserId:        0,
+		ActorSystemType:    "bank",
+		OnBehalfOfClientId: 0,
+		BuyerAccountNumber: "111-BANK-EUR-01",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("currency mismatch: expected InvalidArgument, got %v", err)
+	}
+	if cb.called {
+		t.Fatalf("cross-bank exercise must NOT dispatch on a currency mismatch")
 	}
 }

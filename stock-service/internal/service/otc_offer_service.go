@@ -250,8 +250,15 @@ func (s *OTCOfferService) notifyOTCParty(ctx context.Context, party kafkamsg.OTC
 
 // CreateOfferInput captures the fields a new offer needs.
 type CreateOfferInput struct {
-	ActorUserID            int64
-	ActorSystemType        string
+	ActorUserID     int64
+	ActorSystemType string
+	// ActingEmployeeID is the employee principal who originated this action,
+	// threaded from the gateway (identity.ActingEmployeeID). It is captured
+	// onto the persisted OTCOffer ONLY when the resolved owner is the bank —
+	// it is the stable SI-TX wire-identity source ("employee-<N>") for a bank
+	// acting as a cross-bank OTC principal. nil for client-owned offers and
+	// for bank offers created by a non-employee/system path.
+	ActingEmployeeID       *uint64
 	Direction              string
 	StockID                uint64
 	Ticker                 string
@@ -306,6 +313,17 @@ func (s *OTCOfferService) Create(ctx context.Context, in CreateOfferInput) (*mod
 		cpOwnerID = id
 	}
 
+	// Capture the originating employee onto bank-owned offers only. This is the
+	// stable SI-TX wire-identity source: the bank party publishes as
+	// "employee-<ActingEmployeeID>" on every later wire action, regardless of
+	// which employee performs it. nil for client-owned offers and for bank
+	// offers created by a non-employee/system path (no acting employee).
+	var actingEmployeeID *uint64
+	if initOwnerType == model.OwnerBank && in.ActingEmployeeID != nil && *in.ActingEmployeeID > 0 {
+		emp := *in.ActingEmployeeID
+		actingEmployeeID = &emp
+	}
+
 	o := &model.OTCOffer{
 		InitiatorOwnerType:          initOwnerType,
 		InitiatorOwnerID:            initOwnerID,
@@ -322,6 +340,7 @@ func (s *OTCOfferService) Create(ctx context.Context, in CreateOfferInput) (*mod
 		LastModifiedByPrincipalType: in.ActorSystemType,
 		LastModifiedByPrincipalID:   uint64(in.ActorUserID),
 		InitiatorAccountID:          in.InitiatorAccountID,
+		ActingEmployeeID:            actingEmployeeID,
 	}
 	if err := s.offers.Create(o); err != nil {
 		return nil, err
