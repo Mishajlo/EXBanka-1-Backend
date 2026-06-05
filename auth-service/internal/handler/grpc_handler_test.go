@@ -268,7 +268,7 @@ func TestHandler_Login_Success(t *testing.T) {
 func TestHandler_RefreshToken_Invalid(t *testing.T) {
 	auth := &stubAuthService{
 		refreshTokenFn: func(context.Context, string, string, string) (string, string, error) {
-			return "", "", errors.New("invalid refresh token")
+			return "", "", fmt.Errorf("refresh: %w", service.ErrInvalidToken)
 		},
 	}
 	h := newHandlerForTest(auth, &stubMobileService{})
@@ -476,7 +476,7 @@ func TestHandler_GetAccountStatus_Found(t *testing.T) {
 func TestHandler_GetAccountStatus_NotFound(t *testing.T) {
 	auth := &stubAuthService{
 		getAccountStatusFn: func(context.Context, string, int64) (string, bool, error) {
-			return "", false, errors.New("not found")
+			return "", false, fmt.Errorf("lookup: %w", service.ErrAccountNotFound)
 		},
 	}
 	h := newHandlerForTest(auth, &stubMobileService{})

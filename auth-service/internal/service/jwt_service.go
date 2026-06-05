@@ -3,7 +3,7 @@ package service
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
+	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -103,16 +103,16 @@ func (s *JWTService) GenerateMobileAccessToken(principalID int64, email string, 
 func (s *JWTService) ValidateToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errors.New("unexpected signing method")
+			return nil, fmt.Errorf("unexpected signing method: %w", ErrInvalidToken)
 		}
 		return s.secret, nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse token: %w", ErrInvalidToken)
 	}
 	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {
-		return nil, errors.New("invalid token")
+		return nil, fmt.Errorf("invalid claims: %w", ErrInvalidToken)
 	}
 	return claims, nil
 }

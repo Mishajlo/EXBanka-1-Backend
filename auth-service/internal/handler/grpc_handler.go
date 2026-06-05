@@ -106,7 +106,11 @@ func (h *AuthGRPCHandler) RefreshToken(ctx context.Context, req *pb.RefreshToken
 	meta := extractRequestMeta(ctx)
 	access, refresh, err := h.authService.RefreshToken(ctx, req.RefreshToken, meta.IPAddress, meta.UserAgent)
 	if err != nil {
-		return nil, status.Errorf(codes.Unauthenticated, "invalid refresh token")
+		// Service returns wrapped sentinels (ErrTokenExpired, ErrAccountDisabled,
+		// ErrAccountNotFound, ErrInvalidToken…) that resolve to the right gRPC
+		// status via the GRPCStatus interface — pass them through unchanged so a
+		// disabled account is not indistinguishable from a bad token.
+		return nil, err
 	}
 	return &pb.RefreshTokenResponse{
 		AccessToken:  access,
@@ -147,7 +151,7 @@ func (h *AuthGRPCHandler) Logout(ctx context.Context, req *pb.LogoutRequest) (*p
 
 func (h *AuthGRPCHandler) SetAccountStatus(ctx context.Context, req *pb.SetAccountStatusRequest) (*pb.SetAccountStatusResponse, error) {
 	if err := h.authService.SetAccountStatus(ctx, req.PrincipalType, req.PrincipalId, req.Active); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to set account status: %v", err)
+		return nil, err // wrapped sentinel → correct gRPC status (see service/errors.go)
 	}
 	return &pb.SetAccountStatusResponse{Success: true}, nil
 }
@@ -155,7 +159,7 @@ func (h *AuthGRPCHandler) SetAccountStatus(ctx context.Context, req *pb.SetAccou
 func (h *AuthGRPCHandler) GetAccountStatus(ctx context.Context, req *pb.GetAccountStatusRequest) (*pb.GetAccountStatusResponse, error) {
 	st, active, err := h.authService.GetAccountStatus(ctx, req.PrincipalType, req.PrincipalId)
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "account not found")
+		return nil, err // wrapped sentinel → correct gRPC status (see service/errors.go)
 	}
 	return &pb.GetAccountStatusResponse{Status: st, Active: active}, nil
 }

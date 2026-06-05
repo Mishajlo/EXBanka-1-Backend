@@ -46,7 +46,7 @@ func TestAuthRefreshToken_GetEmployeeFails(t *testing.T) {
 
 	_, _, err := f.svc.RefreshToken(context.Background(), "rt-employee", "ip", "ua")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "user not found")
+	assert.ErrorIs(t, err, ErrEmployeeRPCFailed)
 }
 
 // TestAuthRefreshToken_AccountNotFound: the refresh token's AccountID
