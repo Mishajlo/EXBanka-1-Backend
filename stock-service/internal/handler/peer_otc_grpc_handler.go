@@ -474,17 +474,18 @@ func isWellFormedLocalSellerID(sellerID string) bool {
 	return false
 }
 
-// peerMayBeLastModifier reports whether an offer's lastModifiedBy is consistent
-// with the authenticated peer acting as itself. The authenticated peer may ONLY
-// ever mark ITSELF as the last actor; a forged lastModifiedBy claiming any other
-// routing (e.g. OUR routing) is rejected. A zero-value lastModifiedBy (absent,
-// routing 0) is tolerated — peers that omit the field can't be forging an
-// identity, and the authoritative accept guard never matches routing 0 anyway.
-func peerMayBeLastModifier(lm *stockpb.PeerForeignBankId, peerRouting int64) bool {
-	if lm == nil || lm.GetRoutingNumber() == 0 {
-		return true
-	}
-	return lm.GetRoutingNumber() == peerRouting
+// deriveLastModifiedBy stamps an inbound offer's lastModifiedBy.routingNumber
+// from the AUTHENTICATED sender (HOLE 1). An inbound CreateNegotiation (bid) or
+// UpdateNegotiation (counter) was, by definition, last-modified by the peer that
+// sent it — so the routing the receiving bank persists is the authenticated
+// peerRouting, OVERRIDING whatever the payload claimed (a forged {ownRouting}
+// is simply ignored, not rejected). The opaque participant id is kept VERBATIM
+// (§2.3 — a bank MUST NOT interpret another bank's opaque id). The derived value
+// is what the authoritative accept guard reads from the persisted row, so a peer
+// can never make itself look like our local side proposed the current terms.
+func deriveLastModifiedBy(lm contractsitx.ForeignBankId, peerRouting int64) contractsitx.ForeignBankId {
+	lm.RoutingNumber = peerRouting
+	return lm
 }
 
 func (h *PeerOTCGRPCHandler) GetPublicStocks(ctx context.Context, req *stockpb.GetPublicStocksRequest) (*stockpb.GetPublicStocksResponse, error) {
@@ -604,18 +605,16 @@ func (h *PeerOTCGRPCHandler) CreateNegotiation(ctx context.Context, req *stockpb
 			}
 		}
 	}
-	// Forge-proof lastModifiedBy (HOLE 1, fix #1): the authenticated peer may
-	// only ever mark ITSELF as the last actor. A forged lastModifiedBy claiming
-	// our routing would later let the peer's /accept slip past the authoritative
-	// accept guard (which trusts lastModifiedBy to decide who last proposed).
-	// Reject any lastModifiedBy whose routing is not the peer's (zero-value is
-	// tolerated). This makes the stored lastModifiedBy trustworthy.
-	if !peerMayBeLastModifier(req.GetOffer().GetLastModifiedBy(), peerRouting) {
-		return nil, status.Errorf(codes.PermissionDenied,
-			"offer.lastModifiedBy.routingNumber (%d) must be the authenticated peer's routing (%d) — a peer may only mark itself as the last actor",
-			req.GetOffer().GetLastModifiedBy().GetRoutingNumber(), peerRouting)
-	}
 	offer := protoToOffer(req.GetOffer())
+	// Derive lastModifiedBy from the AUTHENTICATED sender (HOLE 1). An inbound
+	// bid was, by definition, last-modified by the peer that POSTed it — so the
+	// stored lastModifiedBy.routingNumber is the authenticated peer's routing,
+	// NOT whatever the payload claimed. Override it here so the authoritative
+	// accept guard (which reads the persisted lastModifiedBy to decide who last
+	// proposed) is trustworthy by construction: a peer that forges {ownRouting}
+	// has it overridden to its own routing and can never self-accept. The opaque
+	// participant id is kept VERBATIM (§2.3 — never interpreted by us).
+	offer.LastModifiedBy = deriveLastModifiedBy(offer.LastModifiedBy, peerRouting)
 	offerJSON, err := json.Marshal(offer)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "marshal offer: %v", err)
@@ -660,30 +659,30 @@ func (h *PeerOTCGRPCHandler) UpdateNegotiation(ctx context.Context, req *stockpb
 		return nil, status.Error(codes.InvalidArgument, "offer and negotiation_id required")
 	}
 	peerRouting := peerRoutingForCode(req.GetPeerBankCode())
-	// Forge-proof lastModifiedBy (HOLE 1, fix #1): the authenticated peer that
-	// posts a counter may only ever mark ITSELF as the last actor. A forged
-	// lastModifiedBy claiming our routing would let the peer later /accept its own
-	// (forged) proposal past the authoritative accept guard. Reject before
-	// persisting so the stored lastModifiedBy stays trustworthy.
-	if !peerMayBeLastModifier(req.GetOffer().GetLastModifiedBy(), peerRouting) {
-		return nil, status.Errorf(codes.PermissionDenied,
-			"offer.lastModifiedBy.routingNumber (%d) must be the authenticated peer's routing (%d) — a peer may only mark itself as the last actor",
-			req.GetOffer().GetLastModifiedBy().GetRoutingNumber(), peerRouting)
-	}
-	offerJSON, err := json.Marshal(protoToOffer(req.GetOffer()))
+	offer := protoToOffer(req.GetOffer())
+	// Derive lastModifiedBy from the AUTHENTICATED sender (HOLE 1). An inbound
+	// counter was, by definition, last-modified by the peer that PUT it — so the
+	// stored lastModifiedBy.routingNumber is the authenticated peer's routing,
+	// NOT whatever the payload claimed. Override it before persisting so a forged
+	// {ownRouting} counter cannot later slip its own /accept past the
+	// authoritative accept guard. The opaque participant id is kept VERBATIM
+	// (§2.3 — never interpreted by us).
+	offer.LastModifiedBy = deriveLastModifiedBy(offer.LastModifiedBy, peerRouting)
+	offerJSON, err := json.Marshal(offer)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "marshal offer: %v", err)
 	}
 	if err := h.negRepo.UpdateRemoteNegOffer(peerRouting, req.GetNegotiationId().GetId(), string(offerJSON)); err != nil {
 		return nil, status.Errorf(codes.Internal, "update: %v", err)
 	}
-	// Inbound counter — the peer that posted carries lastModifiedBy
-	// on the offer. The OTHER party in our local row is the recipient.
+	// Inbound counter — the authenticated peer is the actor. The OTHER party in
+	// our local row is the recipient. Use the DERIVED lastModifiedBy (routing =
+	// peerRouting) as the actor identity, consistent with what was persisted.
 	if h.notifier != nil {
 		row, gerr := h.negRepo.GetRemoteNegByRoutingAndNative(peerRouting, req.GetNegotiationId().GetId())
 		if gerr == nil {
-			actorRouting := req.GetOffer().GetLastModifiedBy().GetRoutingNumber()
-			actorID := req.GetOffer().GetLastModifiedBy().GetId()
+			actorRouting := offer.LastModifiedBy.RoutingNumber
+			actorID := offer.LastModifiedBy.ID
 			buyerRouting, buyerID := remoteBuyer(row)
 			sellerRouting, sellerID := remoteSeller(row)
 			// Identify the local party that is NOT the actor.
@@ -702,7 +701,7 @@ func (h *PeerOTCGRPCHandler) UpdateNegotiation(ctx context.Context, req *stockpb
 			}
 			if localUID != 0 {
 				h.publishPeerNotif(ctx, localUID, "OTC_OFFER_COUNTERED",
-					notifDataFromOffer(protoToOffer(req.GetOffer())),
+					notifDataFromOffer(offer),
 					"otc_negotiation", row.ID,
 				)
 			}

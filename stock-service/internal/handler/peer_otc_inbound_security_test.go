@@ -12,6 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"gorm.io/gorm"
 )
 
 // fakeParentChecker is the LocalParentChecker stub for inbound orphan-accept
@@ -39,52 +40,80 @@ func peerLastModifiedOffer(lmRouting int64, lmID string) *stockpb.PeerOtcOffer {
 	}
 }
 
-// --- HOLE 1: forge-proof lastModifiedBy + authoritative accept guard ---
+// storedLastModifiedBy decodes the persisted RemoteOfferJSON for a remote
+// negotiation row and returns its lastModifiedBy routing + opaque id — the
+// DERIVED value the accept guard later reads.
+func storedLastModifiedBy(t *testing.T, db *gorm.DB, peerRouting int64, nativeID string) (int64, string) {
+	t.Helper()
+	row, err := repository.NewOTCNegotiationRepository(db).GetRemoteNegByRoutingAndNative(peerRouting, nativeID)
+	if err != nil {
+		t.Fatalf("read stored neg: %v", err)
+	}
+	var offer contractsitx.OtcOffer
+	if row.RemoteOfferJSON == nil {
+		t.Fatalf("stored neg has nil RemoteOfferJSON")
+	}
+	if err := json.Unmarshal([]byte(*row.RemoteOfferJSON), &offer); err != nil {
+		t.Fatalf("decode stored offer: %v", err)
+	}
+	return offer.LastModifiedBy.RoutingNumber, offer.LastModifiedBy.ID
+}
 
-// TestInbound_CreateNegotiation_ForgedLastModifiedBy_Rejected: the inbound
-// CreateNegotiation must reject an offer whose lastModifiedBy.routingNumber is
-// not the authenticated peer's. A peer may only ever mark ITSELF as the last
-// actor — otherwise it could forge lastModifiedBy={ownRouting,...} so the later
-// accept guard treats the forged proposal as if WE proposed it.
-func TestInbound_CreateNegotiation_ForgedLastModifiedBy_Rejected(t *testing.T) {
+// --- HOLE 1: derive lastModifiedBy from the authenticated sender ---
+
+// TestInbound_CreateNegotiation_ForgedLastModifiedBy_RoutingOverridden: a peer
+// (222) that POSTs a bid forging lastModifiedBy={111,...} (claiming WE last
+// proposed) now SUCCEEDS (the payload routing is irrelevant), but the receiving
+// bank DERIVES the stored lastModifiedBy.routingNumber from the AUTHENTICATED
+// sender (222), overriding the forged 111. The opaque id is kept verbatim (the
+// peer's participant — §2.3, never interpreted).
+func TestInbound_CreateNegotiation_ForgedLastModifiedBy_RoutingOverridden(t *testing.T) {
 	h, db, _, _ := newPeerOtcHandler(t) // ownRouting 111
 
-	_, err := h.CreateNegotiation(context.Background(), &stockpb.CreateNegotiationRequest{
+	resp, err := h.CreateNegotiation(context.Background(), &stockpb.CreateNegotiationRequest{
 		PeerBankCode: "222",
 		BuyerId:      &stockpb.PeerForeignBankId{RoutingNumber: 222, Id: "client-7"},
 		SellerId:     &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-9"},
 		// FORGED: claims WE (111) last modified, though the peer (222) is posting.
-		Offer: peerLastModifiedOffer(111, "client-9"),
+		Offer: peerLastModifiedOffer(111, "client-7"),
 	})
-	if err == nil {
-		t.Fatal("expected forged lastModifiedBy to be rejected on create, got nil")
-	}
-	if c := status.Code(err); c != codes.PermissionDenied && c != codes.InvalidArgument {
-		t.Errorf("expected PermissionDenied/InvalidArgument, got %v", err)
+	if err != nil {
+		t.Fatalf("inbound bid must succeed (forged routing is overridden, not rejected): %v", err)
 	}
 	var n int64
 	db.Table("otc_negotiations").Count(&n)
-	if n != 0 {
-		t.Errorf("forged create must persist no row, got %d", n)
+	if n != 1 {
+		t.Errorf("expected 1 persisted row, got %d", n)
+	}
+	// The forged routing (111) is OVERRIDDEN to the authenticated sender (222).
+	gotRouting, gotID := storedLastModifiedBy(t, db, 222, resp.GetNegotiationId().GetId())
+	if gotRouting != 222 {
+		t.Errorf("stored lastModifiedBy.routingNumber: got %d, want 222 (authenticated sender)", gotRouting)
+	}
+	// The opaque id is kept verbatim — not interpreted (§2.3).
+	if gotID != "client-7" {
+		t.Errorf("stored lastModifiedBy.id: got %q, want %q (verbatim)", gotID, "client-7")
 	}
 }
 
 // TestInbound_CreateNegotiation_HonestLastModifiedBy_Accepted: lastModifiedBy
-// pointing at the authenticated peer (or absent — zero value) is accepted.
+// pointing at the authenticated peer (or absent — zero value) is accepted, and
+// the stored routing is always the authenticated sender's.
 func TestInbound_CreateNegotiation_HonestLastModifiedBy_Accepted(t *testing.T) {
 	h, db, _, _ := newPeerOtcHandler(t)
 
 	// peer marks itself as last actor
-	if _, err := h.CreateNegotiation(context.Background(), &stockpb.CreateNegotiationRequest{
+	r1, err := h.CreateNegotiation(context.Background(), &stockpb.CreateNegotiationRequest{
 		PeerBankCode: "222",
 		BuyerId:      &stockpb.PeerForeignBankId{RoutingNumber: 222, Id: "client-7"},
 		SellerId:     &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-9"},
 		Offer:        peerLastModifiedOffer(222, "client-7"),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("honest peer lastModifiedBy: %v", err)
 	}
-	// absent lastModifiedBy (zero value) is tolerated
-	if _, err := h.CreateNegotiation(context.Background(), &stockpb.CreateNegotiationRequest{
+	// absent lastModifiedBy (zero value) is tolerated — routing still derived.
+	r2, err := h.CreateNegotiation(context.Background(), &stockpb.CreateNegotiationRequest{
 		PeerBankCode: "222",
 		BuyerId:      &stockpb.PeerForeignBankId{RoutingNumber: 222, Id: "client-7"},
 		SellerId:     &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-9"},
@@ -92,7 +121,8 @@ func TestInbound_CreateNegotiation_HonestLastModifiedBy_Accepted(t *testing.T) {
 			Ticker: "AAPL", Amount: 10, PricePerStock: "150", Currency: "USD",
 			Premium: "20", PremiumCurrency: "USD", SettlementDate: "2026-12-31",
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("absent lastModifiedBy: %v", err)
 	}
 	var n int64
@@ -100,12 +130,20 @@ func TestInbound_CreateNegotiation_HonestLastModifiedBy_Accepted(t *testing.T) {
 	if n != 2 {
 		t.Errorf("expected 2 persisted rows, got %d", n)
 	}
+	if gotR, _ := storedLastModifiedBy(t, db, 222, r1.GetNegotiationId().GetId()); gotR != 222 {
+		t.Errorf("honest bid stored routing: got %d, want 222", gotR)
+	}
+	if gotR, _ := storedLastModifiedBy(t, db, 222, r2.GetNegotiationId().GetId()); gotR != 222 {
+		t.Errorf("absent-lm bid stored routing: got %d, want 222 (derived)", gotR)
+	}
 }
 
-// TestInbound_UpdateNegotiation_ForgedLastModifiedBy_Rejected: the inbound
-// counter (UpdateNegotiation) must likewise reject a forged lastModifiedBy.
-func TestInbound_UpdateNegotiation_ForgedLastModifiedBy_Rejected(t *testing.T) {
-	h, _, _, _ := newPeerOtcHandler(t)
+// TestInbound_UpdateNegotiation_ForgedLastModifiedBy_RoutingOverridden: the
+// inbound counter (UpdateNegotiation) likewise SUCCEEDS with a forged
+// lastModifiedBy={111,...} but the PERSISTED routing is DERIVED from the
+// authenticated sender (222), and the opaque id is kept verbatim.
+func TestInbound_UpdateNegotiation_ForgedLastModifiedBy_RoutingOverridden(t *testing.T) {
+	h, db, _, _ := newPeerOtcHandler(t)
 	ctx := context.Background()
 
 	createResp, err := h.CreateNegotiation(ctx, &stockpb.CreateNegotiationRequest{
@@ -118,17 +156,74 @@ func TestInbound_UpdateNegotiation_ForgedLastModifiedBy_Rejected(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	_, err = h.UpdateNegotiation(ctx, &stockpb.UpdateNegotiationRequest{
+	if _, err = h.UpdateNegotiation(ctx, &stockpb.UpdateNegotiationRequest{
 		PeerBankCode:  "222",
 		NegotiationId: createResp.GetNegotiationId(),
 		// FORGED counter: claims WE (111) last modified.
-		Offer: peerLastModifiedOffer(111, "client-9"),
+		Offer: peerLastModifiedOffer(111, "client-7"),
+	}); err != nil {
+		t.Fatalf("inbound counter must succeed (forged routing overridden, not rejected): %v", err)
+	}
+	gotRouting, gotID := storedLastModifiedBy(t, db, 222, createResp.GetNegotiationId().GetId())
+	if gotRouting != 222 {
+		t.Errorf("counter stored lastModifiedBy.routingNumber: got %d, want 222 (authenticated sender)", gotRouting)
+	}
+	if gotID != "client-7" {
+		t.Errorf("counter stored lastModifiedBy.id: got %q, want %q (verbatim)", gotID, "client-7")
+	}
+}
+
+// TestInbound_ForgedCounter_ThenSelfAccept_Blocked is the end-to-end attack:
+// peer 222 POSTs a bid then PUTs a forged counter claiming lastModifiedBy={111}
+// (trying to look like WE proposed), then GET /accepts its own forged terms.
+// Because the stored routing is DERIVED to 222, the accept guard sees
+// 222 != ownRouting(111) → 403, NO settlement SI-TX dispatched, NO contract.
+func TestInbound_ForgedCounter_ThenSelfAccept_Blocked(t *testing.T) {
+	h, db, peerTx, _ := newPeerOtcHandler(t) // ownRouting 111
+	ctx := context.Background()
+
+	createResp, err := h.CreateNegotiation(ctx, &stockpb.CreateNegotiationRequest{
+		PeerBankCode: "222",
+		BuyerId:      &stockpb.PeerForeignBankId{RoutingNumber: 222, Id: "client-7"},
+		SellerId:     &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-9"},
+		Offer:        peerLastModifiedOffer(222, "client-7"),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Forged counter — claims WE (111) last proposed.
+	if _, err = h.UpdateNegotiation(ctx, &stockpb.UpdateNegotiationRequest{
+		PeerBankCode:  "222",
+		NegotiationId: createResp.GetNegotiationId(),
+		Offer:         peerLastModifiedOffer(111, "client-9"),
+	}); err != nil {
+		t.Fatalf("forged counter (should 200): %v", err)
+	}
+
+	// Self-accept attempt by the same peer.
+	_, err = h.AcceptNegotiation(ctx, &stockpb.AcceptNegotiationRequest{
+		PeerBankCode:  "222",
+		NegotiationId: createResp.GetNegotiationId(),
 	})
 	if err == nil {
-		t.Fatal("expected forged lastModifiedBy to be rejected on counter, got nil")
+		t.Fatal("expected forged-counter self-accept to be rejected, got nil (self-accept loophole)")
 	}
-	if c := status.Code(err); c != codes.PermissionDenied && c != codes.InvalidArgument {
-		t.Errorf("expected PermissionDenied/InvalidArgument, got %v", err)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected PermissionDenied, got %v", err)
+	}
+	if peerTx.gotReq != nil {
+		t.Errorf("forged self-accept must NOT dispatch a settlement SI-TX; got %+v", peerTx.gotReq)
+	}
+	// No contract row formed.
+	var contracts int64
+	db.Table("option_contracts").Count(&contracts)
+	if contracts != 0 {
+		t.Errorf("forged self-accept must form NO contract, got %d", contracts)
+	}
+	after, _ := repository.NewOTCNegotiationRepository(db).GetRemoteNegByRoutingAndNative(222, createResp.GetNegotiationId().GetId())
+	if after.Status != "ongoing" {
+		t.Errorf("status after blocked self-accept: got %q, want ongoing", after.Status)
 	}
 }
 

@@ -294,7 +294,7 @@ peer's **buyer** opaque id is still accepted verbatim ≤ 64 bytes per §2.3.
 
 | Hole | Endpoint | New rule (2.8.0) | Reject |
 |---|---|---|---|
-| 1 — forged `lastModifiedBy` self-accept | `POST` + `PUT /negotiations[/:rid/:id]` | `lastModifiedBy.routingNumber` MUST be the authenticated peer's (zero/absent tolerated). A peer may only mark **itself** as the last actor. | `403 forbidden` (no row on POST) |
+| 1 — forged `lastModifiedBy` self-accept | `POST` + `PUT /negotiations[/:rid/:id]` | `lastModifiedBy.routingNumber` MUST be the authenticated peer's (zero/absent tolerated). A peer may only mark **itself** as the last actor. *(Refined in 2.8.1 — see §6.1: now DERIVED/overridden, not rejected.)* | `403 forbidden` (no row on POST) |
 | 1 — authoritative accept guard | `GET /negotiations/:rid/:id/accept` | The stored `lastModifiedBy.routingNumber` MUST equal **this** bank's routing (the local side last proposed; §3.6: the counterparty accepts). | `403 forbidden`; **no settlement SI-TX, no contract** |
 | 2 — orphan accept | `GET /negotiations/:rid/:id/accept` | When this bank hosts the parent listing, an accept against a child of a **cancelled/consumed** listing is rejected authoritatively (independent of cascade timing). | `409 business_rule_violation` |
 | 3 — non-well-formed local seller | `POST /negotiations` | `sellerId.id` (OURS) MUST be `bank`, `employee-<digits>`, or `client-<digits>`. A malformed id (`employee-abc`, `employee-`, …) is rejected — no junk row. | `400 validation_error` (no row) |
@@ -310,3 +310,33 @@ person whose negotiation term it is can choose to accept the other party's offer
 stamps `lastModifiedBy` as itself, addresses a real local seller, and accepts only
 as the counterparty. The change rejects malicious/malformed inbound traffic only.
 Version bumped MINOR (2.7.6 → 2.8.0).
+
+## 6.1 Refined HOLE-1 fix: DERIVE `lastModifiedBy` from the authenticated sender (2.8.1)
+
+Replaces the 2.8.0 *reject-forged-lastModifiedBy* approach (Hole 1, row 1 above)
+with a cleaner, more robust one. The receiving bank already KNOWS who sent each
+inbound message — the authenticated peer (its routing = `peerRouting`, from the
+peer-auth context). So instead of rejecting an inbound `POST`/`PUT` whose
+`lastModifiedBy.routingNumber` disagrees with the sender, the bank now **DERIVES**
+that routing from the authenticated identity and **overrides** the payload value:
+
+| Endpoint | 2.8.0 behavior | 2.8.1 behavior |
+|---|---|---|
+| `POST /negotiations` (bid) | forged `lastModifiedBy.routingNumber != peerRouting` → `403` | succeeds `201`; persisted `lastModifiedBy.routingNumber` is **overridden** to `peerRouting` |
+| `PUT /negotiations/:rid/:id` (counter) | forged value → `403` | succeeds `200`; persisted routing **overridden** to `peerRouting` |
+| `GET /negotiations/:rid/:id/accept` | reads stored `lastModifiedBy`, requires `== ownRouting` | **unchanged** — still reads the persisted row; the stored routing is now derived, so it is trustworthy by construction |
+
+The opaque `lastModifiedBy.id` is still kept **verbatim** (§2.3 — a bank MUST NOT
+interpret another bank's opaque id). Our **outbound** counter
+(`acceptRemoteNegotiation` / `counterRemoteNegotiation`) already stamps the local
+mirror's `lastModifiedBy.routingNumber = ownRouting` — unchanged.
+
+**Net effect on the attack:** a forged counter `lastModifiedBy={thisBank, …}` from
+peer `222` now persists with routing **overridden to 222**, so the unchanged accept
+guard sees `222 != ownRouting(111)` → `403 forbidden`, no settlement SI-TX, no
+contract. The peer's claimed routing is **irrelevant to authorization**; only the
+authenticated sender + this bank's persisted state decide who may accept.
+
+**Why this is better:** it no longer rejects an honest peer that happens to fill
+`lastModifiedBy` differently — a forged/odd payload routing is simply ignored, not
+fatal. Wire shapes are unchanged. Version bumped PATCH (2.8.0 → 2.8.1).
