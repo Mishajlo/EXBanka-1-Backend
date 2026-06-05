@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"log"
 	"strconv"
 	"time"
 
@@ -65,6 +66,11 @@ type OTCOptionsHandler struct {
 	// accept). Optional; when unset a remote :nid on those actions falls
 	// through to the local NotFound.
 	remoteNegOps RemoteNegotiationOps
+	// myNegs is optional; when wired, GetOffer stamps my_negotiation_id /
+	// my_negotiation_status on the resolved offer when the authenticated caller
+	// has an own (bidder) chain against it (SP-2b). Same source/keying as the
+	// unified-list path; reuses h.ownRouting for the remote-chain match.
+	myNegs MyNegotiationLister
 	// crossBankExerciser backs the SP-2b Task-5 remote branch of
 	// ExerciseContract: when the contract :id resolves to a REMOTE row (a
 	// peer-hosted contract this bank holds the buyer side of), the unified
@@ -189,6 +195,16 @@ func (h *OTCOptionsHandler) WithPeerNegotiations(p PeerNegotiationLister) *OTCOp
 
 func NewOTCOptionsHandler(svc *service.OTCOfferService, contracts *repository.OptionContractRepository) *OTCOptionsHandler {
 	return &OTCOptionsHandler{svc: svc, contracts: contracts}
+}
+
+// WithMyNegotiations wires the caller's own (bidder) negotiation source so
+// GetOffer can stamp my_negotiation_id / my_negotiation_status on the resolved
+// offer (SP-2b). The remote-chain match keys on h.ownRouting (set via
+// WithPeerContracts / WithRemoteOffers).
+func (h *OTCOptionsHandler) WithMyNegotiations(l MyNegotiationLister) *OTCOptionsHandler {
+	cp := *h
+	cp.myNegs = l
+	return &cp
 }
 
 // WithRatings wires the OTC trader-rating service. When unset the
@@ -516,11 +532,20 @@ func (h *OTCOptionsHandler) computeUnread(o *model.OTCOffer, callerID int64, cal
 // hosted by a peer). NotFound only when neither a local nor a remote row
 // exists.
 func (h *OTCOptionsHandler) GetOffer(ctx context.Context, in *stockpb.GetOTCOfferRequest) (*stockpb.OTCOfferDetailResponse, error) {
+	// SP-2b — the caller's own (bidder) chains, built once and reused for both
+	// the local and the remote-resolution branch. Best-effort: an index error
+	// logs and falls back to no stamp rather than failing the read.
+	myNegIdx, idxErr := buildMyNegotiationIndex(h.myNegs, in.GetActingOwnerType(), in.GetActingOwnerId(), h.ownRouting)
+	if idxErr != nil {
+		log.Printf("WARN GetOffer: my-negotiation index failed (continuing without my_negotiation_id): %v", idxErr)
+		myNegIdx = myNegotiationIndex{}
+	}
+
 	o, revs, err := h.svc.GetOffer(in.OfferId, in.ActorUserId, in.ActorSystemType)
 	if err != nil {
 		// Local offer doesn't exist — try the cross-bank mirror before 404.
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			remote, rerr := h.resolveRemoteOffer(in.OfferId)
+			remote, rerr := h.resolveRemoteOffer(in.OfferId, myNegIdx)
 			if rerr == nil {
 				return remote, nil
 			}
@@ -541,6 +566,13 @@ func (h *OTCOptionsHandler) GetOffer(ctx context.Context, in *stockpb.GetOTCOffe
 		in.GetActingOwnerType(), in.GetActingOwnerId(),
 		offer.Kind, sellerIDForOwner(o.InitiatorOwnerType, o.InitiatorOwnerID),
 	)
+	// SP-2b — caller's own (bidder) chain on this LOCAL offer. Keyed by the
+	// offer's surrogate id (== parent_offer_id of a local chain). Absent for a
+	// poster who never bid on their own listing (me_owner true, my_nid empty).
+	if s, ok := myNegIdx.localFor(offer.GetId()); ok {
+		offer.MyNegotiationId = s.id
+		offer.MyNegotiationStatus = s.status
+	}
 	out := &stockpb.OTCOfferDetailResponse{
 		Offer:     offer,
 		Revisions: make([]*stockpb.OTCOfferRevisionItem, 0, len(revs)),
@@ -605,7 +637,7 @@ func remoteOfferToProto(m *model.OTCOffer) *stockpb.OTCOfferResponse {
 // when the mirror is unwired or has no such row (or the id is a local offer),
 // so the caller can surface a plain 404. Remote offers carry no local revision
 // chain.
-func (h *OTCOptionsHandler) resolveRemoteOffer(id uint64) (*stockpb.OTCOfferDetailResponse, error) {
+func (h *OTCOptionsHandler) resolveRemoteOffer(id uint64, myNegIdx myNegotiationIndex) (*stockpb.OTCOfferDetailResponse, error) {
 	if h.remoteOffers == nil {
 		return nil, gorm.ErrRecordNotFound
 	}
@@ -613,8 +645,18 @@ func (h *OTCOptionsHandler) resolveRemoteOffer(id uint64) (*stockpb.OTCOfferDeta
 	if err != nil {
 		return nil, err
 	}
+	offer := remoteOfferToProto(m)
+	// SP-2b — caller's own (bidder) chain on this REMOTE offer. The chain keys
+	// on the peer-hosted parent (routing, native); the remote offer row carries
+	// that as (RoutingNumber, NativeID).
+	if m.NativeID != nil {
+		if s, ok := myNegIdx.remoteFor(m.RoutingNumber, *m.NativeID); ok {
+			offer.MyNegotiationId = s.id
+			offer.MyNegotiationStatus = s.status
+		}
+	}
 	return &stockpb.OTCOfferDetailResponse{
-		Offer:     remoteOfferToProto(m),
+		Offer:     offer,
 		Revisions: nil,
 	}, nil
 }

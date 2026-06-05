@@ -875,6 +875,14 @@ message UnifiedOptionOffer {
   // request) owns this listing. Always false for remote rows. Computed in
   // the stock-service from the caller identity. (SP-1)
   bool me_owner = 20;
+  // my_negotiation_id is the surrogate id of the AUTHENTICATED caller's own
+  // negotiation chain (as BIDDER) against THIS offer, so the FE can jump
+  // straight to its chain without a separate lookup. 0 when the caller has no
+  // chain on this offer (e.g. an offer they posted but never bid on — me_owner
+  // does NOT imply a bidder chain). Works for local and remote offers.
+  // my_negotiation_status carries that chain's status. (SP-2b)
+  uint64 my_negotiation_id     = 21;
+  string my_negotiation_status = 22;
 }
 
 message ListUnifiedOptionOffersRequest {
@@ -1720,6 +1728,14 @@ message OTCOfferResponse {
   int64  routing_number = 19;
   string bank_code = 20;
   bool   me_owner = 21;
+  // my_negotiation_id / my_negotiation_status — the AUTHENTICATED caller's own
+  // negotiation chain (as BIDDER) against this offer, so the FE can jump
+  // straight to its chain from the offer-detail view. 0 / "" when the caller
+  // has no bidder chain on this offer (the poster of an offer typically has no
+  // bidder chain of their own — me_owner does NOT imply my_negotiation_id).
+  // Works for local and remote offers. (SP-2b)
+  uint64 my_negotiation_id     = 22;
+  string my_negotiation_status = 23;
 }
 
 message OTCOfferRevisionItem {

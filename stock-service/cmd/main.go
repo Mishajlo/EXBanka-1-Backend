@@ -1069,9 +1069,10 @@ func main() {
 		WithRatings(ratingSvc).
 		WithNegotiations(otcNegotiationSvc).
 		WithRemoteOffers(otcOfferRepo, cfg.OwnBankCode).
-		WithPeerNegotiations(otcNegRepo). // SP-1 Task 7 + SP-2a: unified local+remote negotiation list (REMOTE rows in otc_negotiations)
+		WithPeerNegotiations(otcNegRepo).                                  // SP-1 Task 7 + SP-2a: unified local+remote negotiation list (REMOTE rows in otc_negotiations)
+		WithMyNegotiations(otcNegRepo).                                    // SP-2b: stamp my_negotiation_id on GetOffer (caller's own bidder chain)
 		WithPeerOTCDispatch(peerNegDispatcher, otcNegRepo, accountClient). // SP-2b: bid route dispatches cross-bank for remote listings
-		WithCrossBankExerciser(peerOtcHandler) // SP-2b Task 5: exercise route dispatches cross-bank for remote contracts
+		WithCrossBankExerciser(peerOtcHandler)                             // SP-2b Task 5: exercise route dispatches cross-bank for remote contracts
 
 	// Phase 3: OTC stocks marketplace (sell + buy direction). The
 	// service uses narrow OTCStockListingResolver + OTCStockAccountClient
@@ -1109,7 +1110,9 @@ func main() {
 			unifiedPortfolioSvc := service.NewUnifiedPortfolioService(holdingRepo, fundPositionRepo, fundRepo, fundHoldingRepo, listingRepo, fundAccountAdapter).
 				WithDividendService(dividendSvc)
 			pb.RegisterPortfolioGRPCServiceServer(s, handler.NewPortfolioHandler(portfolioSvc, taxSvc).WithUnifiedPortfolioService(unifiedPortfolioSvc))
-			pb.RegisterOTCGRPCServiceServer(s, handler.NewOTCHandlerWithCache(otcSvc, otcOfferCache).WithOptionCache(optionOfferCache))
+			pb.RegisterOTCGRPCServiceServer(s, handler.NewOTCHandlerWithCache(otcSvc, otcOfferCache).
+				WithOptionCache(optionOfferCache).
+				WithMyNegotiations(otcNegRepo, ownRouting)) // SP-2b: stamp my_negotiation_id on the unified offer list
 			pb.RegisterTaxGRPCServiceServer(s, handler.NewTaxHandler(taxSvc))
 			pb.RegisterInvestmentFundServiceServer(s, fundHandler)
 			pb.RegisterOTCOptionsServiceServer(s, otcOptionsHandler)

@@ -49,6 +49,14 @@ func newOTCOptionsHandlerFixture(t *testing.T) *otcOptionsHandlerFixture {
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	return newOTCOptionsHandlerFixtureFromDB(t, db)
+}
+
+// newOTCOptionsHandlerFixtureFromDB wires the fixture against a caller-supplied
+// (already-migrated) DB so tests that need extra tables (e.g. OTCNegotiation
+// for the SP-2b my_negotiation_id stamping) can pre-migrate them.
+func newOTCOptionsHandlerFixtureFromDB(t *testing.T, db *gorm.DB) *otcOptionsHandlerFixture {
+	t.Helper()
 	offerRepo := repository.NewOTCOfferRepository(db)
 	revRepo := repository.NewOTCOfferRevisionRepository(db)
 	contractRepo := repository.NewOptionContractRepository(db)

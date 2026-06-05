@@ -233,7 +233,7 @@ func (h *OTCOptionsHandler) ListMyPostedOffers(c *gin.Context) {
 
 // GetOffer godoc
 // @Summary      Get an OTC option offer by surrogate id (local or remote)
-// @Description  Resolves an OTC option offer by its stable surrogate id (the local_id from the discovery feed). Local offers return the {offer,revisions} body decorated with kind="local" + me_owner. If the id is not a local offer it is resolved from the remote (cross-bank) mirror and returned as a flat body with kind="remote" + me_owner=false.
+// @Description  Resolves an OTC option offer by its stable surrogate id (the local_id from the discovery feed). Local offers return the {offer,revisions} body decorated with kind="local" + me_owner. If the id is not a local offer it is resolved from the remote (cross-bank) mirror and returned as a flat body with kind="remote" + me_owner=false. When the authenticated caller has an own (bidder) negotiation chain against the offer, the offer object also carries my_negotiation_id + my_negotiation_status so the FE can jump straight to its chain (absent/0 otherwise; a poster who never bid has no chain).
 // @Tags         OTCOptions
 // @Security     BearerAuth
 // @Produce      json

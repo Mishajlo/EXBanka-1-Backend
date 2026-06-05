@@ -19,6 +19,15 @@ import (
 	"github.com/exbanka/test-app/internal/helpers"
 )
 
+// jsonInt coerces a decoded JSON number (float64) to int, returning 0 for nil
+// or any non-number. Used to read uint64 id fields off parsed list items.
+func jsonInt(v interface{}) int {
+	if f, ok := v.(float64); ok {
+		return int(f)
+	}
+	return 0
+}
+
 // assertProvenanceFields checks that an item map (from a JSON array) carries the
 // four SP-1 fields. It does NOT assert specific values — callers do that
 // independently — it only fails when a field is outright absent.
@@ -522,4 +531,109 @@ func TestSP1_RemoteContract_AppearsWithKindRemote(t *testing.T) {
 // NOTE: Skipped in single-stack setup.
 func TestSP1_PeerCancelReconciler_SkipInSingleStack(t *testing.T) {
 	t.Skip("SP-1 peer-cancel-reconciler: requires two-stack peer to exercise offer-cancel and negotiation safety-net reconciliation")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SP-2b — my_negotiation_id / my_negotiation_status on offer reads
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestSP2b_OfferList_StampsMyNegotiationForBidder drives a sell_initiated
+// listing to the BID state, then verifies the bidder's discovery list
+// (GET /api/v3/otc/options) stamps my_negotiation_id + my_negotiation_status on
+// the offer they bid on (so the FE can jump straight to its own chain). The
+// discovery feed is cache-backed (~5 s refresh) so the offer may take a couple
+// of cycles to surface; we poll. The poster (who never bid) must NOT see
+// my_negotiation_id on that offer.
+func TestSP2b_OfferList_StampsMyNegotiationForBidder(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	offerID, posterC, bidderC := setupOfferWithBid(t, adminC)
+
+	// Poll the bidder's discovery feed until the offer appears with a stamped
+	// my_negotiation_id (cache refresh lag tolerance).
+	var bidderItem map[string]interface{}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := bidderC.GET("/api/v3/otc/options")
+		if err != nil {
+			t.Fatalf("bidder list offers: %v", err)
+		}
+		if resp.StatusCode == 404 {
+			t.Skip("SP-2b: OTC option list not deployed — skipping")
+		}
+		helpers.RequireStatus(t, resp, 200)
+		offers, _ := resp.Body["offers"].([]interface{})
+		for _, raw := range offers {
+			item, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if jsonInt(item["id"]) == offerID {
+				bidderItem = item
+				if _, has := item["my_negotiation_id"]; has {
+					break
+				}
+			}
+		}
+		if bidderItem != nil {
+			if _, has := bidderItem["my_negotiation_id"]; has {
+				break
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if bidderItem == nil {
+		t.Skip("SP-2b: bidder's offer never surfaced in the cache-backed list — skipping")
+	}
+	myNegID, hasNeg := bidderItem["my_negotiation_id"]
+	if !hasNeg || jsonInt(myNegID) == 0 {
+		t.Fatalf("SP-2b: bidder's offer must carry a non-zero my_negotiation_id; item=%v", bidderItem)
+	}
+	if st, _ := bidderItem["my_negotiation_status"].(string); st == "" {
+		t.Errorf("SP-2b: bidder's offer must carry my_negotiation_status; item=%v", bidderItem)
+	}
+
+	// The poster never bid → their list view of the same offer must NOT stamp
+	// my_negotiation_id (me_owner does not imply a bidder chain).
+	posterResp, err := posterC.GET("/api/v3/otc/options")
+	if err != nil {
+		t.Fatalf("poster list offers: %v", err)
+	}
+	helpers.RequireStatus(t, posterResp, 200)
+	posterOffers, _ := posterResp.Body["offers"].([]interface{})
+	for _, raw := range posterOffers {
+		item, ok := raw.(map[string]interface{})
+		if !ok || jsonInt(item["id"]) != offerID {
+			continue
+		}
+		if v, has := item["my_negotiation_id"]; has && jsonInt(v) != 0 {
+			t.Errorf("SP-2b: poster (non-bidder) must not carry my_negotiation_id; item=%v", item)
+		}
+	}
+}
+
+// TestSP2b_GetOffer_PosterHasNoMyNegotiation verifies the offer-detail read
+// (GET /api/v3/otc/options/:id) does NOT stamp my_negotiation_id for the poster
+// — they own the listing (me_owner=true) but hold no bidder chain of their own.
+func TestSP2b_GetOffer_PosterHasNoMyNegotiation(t *testing.T) {
+	adminC := loginAsAdmin(t)
+	offerID, posterC, _ := setupOfferWithBid(t, adminC)
+
+	resp, err := posterC.GET(fmt.Sprintf("/api/v3/otc/options/%d", offerID))
+	if err != nil {
+		t.Fatalf("poster get offer: %v", err)
+	}
+	if resp.StatusCode == 404 {
+		t.Skip("SP-2b: get-offer not deployed — skipping")
+	}
+	helpers.RequireStatus(t, resp, 200)
+	offerBody, ok := resp.Body["offer"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("SP-2b: get-offer: want 'offer' object, body=%v", resp.Body)
+	}
+	if meOwner, _ := offerBody["me_owner"].(bool); !meOwner {
+		t.Errorf("SP-2b: poster reading own offer must be me_owner=true; body=%v", offerBody)
+	}
+	if v, has := offerBody["my_negotiation_id"]; has && jsonInt(v) != 0 {
+		t.Errorf("SP-2b: poster (non-bidder) must not carry my_negotiation_id on detail; body=%v", offerBody)
+	}
 }

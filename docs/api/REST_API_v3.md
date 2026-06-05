@@ -8602,17 +8602,17 @@ Resolve a single OTC option offer by its **stable surrogate id** — the `local_
 |---|---|---|
 | `id` | uint64 | The surrogate id from the discovery feed (`local_id`) |
 
-**Response 200 — local offer** (backward-compatible: the existing `offer` / `revisions` body is preserved, with two decoration fields added):
+**Response 200 — local offer** (backward-compatible: the existing `offer` / `revisions` body is preserved, with decoration fields added):
 ```json
 {
-  "offer":    { "...": "OTCOfferResponse" },
-  "revisions": [ "..." ],
-  "kind":     "local",
-  "me_owner": true
+  "offer":    { "...": "OTCOfferResponse", "kind": "local", "me_owner": true,
+                "my_negotiation_id": 88, "my_negotiation_status": "open" },
+  "revisions": [ "..." ]
 }
 ```
 - `kind` is always `"local"` here.
 - `me_owner` is `true` when the acting identity owns the listing (client whose `seller_id` is `client-<their owner id>`, or an employee acting as the bank on a `bank`-owned listing), else `false`.
+- **`my_negotiation_id` / `my_negotiation_status` (SP-2b, 2026-06-05):** when the authenticated caller has an own (bidder) negotiation chain against this offer, these carry that chain's surrogate id + status so the FE can jump straight to its chain. **Omitted/0 / "" when the caller has no bidder chain** — note a poster who never bid on their own listing is `me_owner=true` but has NO `my_negotiation_id` (the two are independent). When several chains exist on one offer the **active** one wins: an accepted chain beats a live (`open`/`countered`/`ongoing`) one beats a terminal one; ties break to the most recently created. Works for local and remote offers.
 
 **Response 200 — remote (cross-bank) offer** (resolved from the mirror; flat shape):
 ```json
@@ -8638,6 +8638,7 @@ Resolve a single OTC option offer by its **stable surrogate id** — the `local_
 ```
 - `kind` is always `"remote"` and `me_owner` is always `false` (a peer hosts the listing — it is never ours).
 - `status` is `open` or `cancelled` (cancelled mirror rows are still returned so the FE can render a terminal state rather than a 404).
+- `my_negotiation_id` / `my_negotiation_status` (SP-2b) are present here too when the caller has bid on this remote offer cross-bank (matched on the chain's remote parent routing+native id); omitted/0/"" otherwise.
 
 **Response 400:** `{ "error": { "code": "validation_error", "message": "invalid id" } }`
 **Response 404:** `{ "error": { "code": "not_found", "message": "OTC offer not found" } }` — neither a local offer nor a remote mirror row exists for `id`.
@@ -8681,7 +8682,9 @@ Unified cross-bank discovery view: every open OTC option listing on this bank + 
       "settlement_date":     "2026-12-31T00:00:00Z",
       "created_at":          "2026-05-10T14:00:00Z",
       "best_bid":            "850",
-      "active_chains_count": 3
+      "active_chains_count": 3,
+      "my_negotiation_id":     88,
+      "my_negotiation_status": "open"
     }
   ],
   "total_count":   1,
@@ -8701,6 +8704,13 @@ Unified cross-bank discovery view: every open OTC option listing on this bank + 
 | `bank_code` | string | 3-digit bank code. |
 | `local_id` | uint64 | Stable local surrogate id — the folded-in remote `OTCOffer.id` for remote rows (SP-2a); the numeric offer id for local rows. Use this as `:id` in `GET /api/v3/otc/options/:id`. |
 | `me_owner` | bool | `true` when the acting caller is the listing's poster/seller. Always `false` for remote rows. Omitted (falsy) when not owned. |
+
+**SP-2b caller's-own-chain fields (2026-06-05):** Each item the authenticated caller has an own (bidder) negotiation chain against also carries:
+
+| Field | Type | Notes |
+|---|---|---|
+| `my_negotiation_id` | uint64 | Surrogate id of the caller's own (as **bidder**) negotiation chain on this offer, so the FE can jump straight to its chain. **Omitted when the caller has no chain here** (0). A poster who never bid is `me_owner=true` but has no `my_negotiation_id` — the two are independent. Works for local and remote offers (remote chains match on the chain's remote parent routing+native id). When multiple chains exist, the **active** one wins (accepted > live `open`/`countered`/`ongoing` > terminal; ties → most recently created). |
+| `my_negotiation_status` | string | That chain's status. Omitted when `my_negotiation_id` is absent. |
 
 **Best-bid / best-ask surface (Part A 2026-05-16).** Three optional fields surface aggregated active-chain pricing so a prospective bidder sees that competition is live before placing an offer at the seller's static ask:
 
