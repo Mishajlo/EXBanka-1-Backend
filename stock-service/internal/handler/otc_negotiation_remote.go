@@ -84,6 +84,22 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 		return nil, false, status.Errorf(codes.Internal, "remote listing lookup failed: %v", err)
 	}
 
+	// buy_initiated cross-bank is NOT supported. This bid flow hardcodes the
+	// bidder as the BUYER and the listing's poster as the SELLER — correct for a
+	// sell_initiated listing only. On a buy_initiated listing the poster is the
+	// BUYER and the bidder is the SELLER, so proceeding would SILENTLY INVERT the
+	// economic roles: the bidder (who offered to sell) would end up holding the
+	// option and the poster (who wanted to buy) would be booked as the seller, and
+	// on exercise the wrong party receives the shares (verified live 2026-06-05).
+	// Supporting it correctly needs the seller's shares reserved on the BIDDER's
+	// bank and the inbound seller-locality assumption flipped — a frozen-wire
+	// change. Until then, fail closed rather than invert. (LOCAL buy_initiated is
+	// unaffected; this branch is only reached for a folded-in REMOTE listing.)
+	if remoteOffer.Direction == model.OTCDirectionBuyInitiated {
+		return nil, false, status.Error(codes.FailedPrecondition,
+			"cross-bank bidding on a buy_initiated listing is not supported (would invert buyer/seller roles)")
+	}
+
 	// Build the SI-TX wire buyer identity per owner type (SP-3 Task 4).
 	//   - client bid → "client-<ownerID>"
 	//   - bank bid   → "employee-<actingEmployeeID>" (the stable wire identity
