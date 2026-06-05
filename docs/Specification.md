@@ -2761,8 +2761,7 @@ The full endpoint reference is in `docs/api/REST_API_v1.md` (kept under that fil
 | GET | `/api/v3/otc/offers/:id` | AnyAuthMiddleware | OTCOptionsHandler.GetOffer | Offer detail with revisions |
 | GET | `/api/v3/otc/contracts/:id` | AnyAuthMiddleware | OTCOptionsHandler.GetContract | Contract detail |
 | GET | `/api/v3/me/otc/offers` | AnyAuthMiddleware | OTCOptionsHandler.ListMyOffers | Caller's OTC offers |
-| GET | `/api/v3/me/otc/contracts` | AnyAuthMiddleware | OTCOptionsHandler.ListMyContracts | Caller's OTC contracts (intra-bank in `contracts`, cross-bank in `peer_contracts`) |
-| POST | `/api/v3/me/otc/contracts/peer/:id/exercise` | AnyAuthMiddleware | OTCOptionsHandler.ExercisePeerContract | Cross-bank option exercise (buyer-only). See §27. |
+| GET | `/api/v3/me/otc/contracts` | AnyAuthMiddleware | OTCOptionsHandler.ListMyContracts | Caller's OTC contracts, LOCAL + REMOTE merged into one `contracts[]` array (each row carries `kind`/`routing_number`/`bank_code`/`me_owner`). **SP-2b (2026-06-05):** the legacy `peer_contracts`/`peer_total` response fields were removed — remote contracts now appear in `contracts[]` with `kind=remote`. |
 | GET | `/api/v3/me/otc/options/negotiations` | AnyAuthMiddleware + ResolveIdentity | OTCOptionsHandler.ListMyNegotiations | Caller's LOCAL (intra-bank bidder) + REMOTE (cross-bank peer) negotiation chains, merged into one list (SP-1 Task 7). All statuses (open/countered/accepted/rejected/cancelled/expired) with optional `?statuses=` filter applied to both sets. Each item carries `kind` (`local`\|`remote`), `routing_number`/`bank_code` provenance, and `me_owner` (true only when the caller is the parent listing's poster/seller — never for a bidder; for remote, true iff we host the seller side). Remote `id` is the local peer-negotiation surrogate key; remote terms are projected from the mirrored offer. Local response also includes `minted_contract_id` (non-zero on `status=accepted` rows). Paging applies to the local set; remote chains are appended in full; `total` is the local total. The gateway is a uniform pass-through. |
 | GET | `/api/v3/me/otc/options/negotiations/:nid/revisions` | AnyAuthMiddleware + ResolveIdentity | OTCOptionsHandler.ListMyNegotiationRevisions | Full revision chain (BID/COUNTER/ACCEPT/REJECT) for a negotiation. Caller must be the bidder or the listing's poster; returns 403 otherwise. |
 
@@ -3002,7 +3001,17 @@ Same-currency flows skip the conversion call entirely.
 
 ## 27. Cross-Bank OTC Options (Celina 5 / SI-TX)
 
-Full cross-bank OTC option lifecycle: discovery → initiation → counter-offer → accept → exercise → expiry. The negotiation surface (`/api/v3/negotiations/...`) and the option-formation / exercise transactions ride on the §25 SI-TX wire (`POST /api/v3/interbank` + `Message<Type>` envelopes); only the `/me/peer-otc/...` and `/me/otc/contracts/peer/...` user-facing endpoints sit on top of normal client JWT auth.
+Full cross-bank OTC option lifecycle: discovery → initiation → counter-offer → accept → exercise → expiry. The negotiation surface (`/api/v3/cross-bank-protocol/negotiations/...`) and the option-formation / exercise transactions ride on the §25 SI-TX wire (`POST /api/v3/cross-bank-protocol/interbank` + `Message<Type>` envelopes).
+
+**SP-2b clean-cut (2026-06-05) — unified client write surface.** There is **no separate `/me/peer-otc/*` client surface** any more, and `POST /me/otc/contracts/peer/:id/exercise` is gone. Cross-bank negotiation initiation/counter/accept/cancel and cross-bank exercise are now dispatched **inside stock-service** behind the **same unified client routes** used for local OTC, selected by the listing's routing (`routing_number == OwnRouting()` ⇒ local, else remote):
+
+- initiate (bid): `POST /api/v3/otc/options/:id/bid`
+- counter / accept / reject: `POST /api/v3/me/otc/options/:id/negotiations/:nid/{counter,accept,reject}`
+- cancel: `DELETE /api/v3/me/otc/options/:id/negotiations/:nid`
+- list own chains (local + remote merged): `GET /api/v3/me/otc/options/negotiations`
+- exercise: `POST /api/v3/otc/contracts/:id/exercise`
+
+The api-gateway is a uniform pass-through for these; stock-service composes/forwards the SI-TX envelopes when the target is remote.
 
 ### Peer-facing routes (api-gateway, behind `PeerAuth`)
 
@@ -3018,28 +3027,39 @@ Full cross-bank OTC option lifecycle: discovery → initiation → counter-offer
 
 ### Client-facing routes (api-gateway, behind `AnyAuthMiddleware`)
 
-| Method | Path | Notes |
-|---|---|---|
-| POST | `/api/v3/me/peer-otc/negotiations` | Initiate. Buyer-side entry. Reads `buyerId` from the JWT, resolves the seller's bank via `PeerBankAdminService.ResolvePeerByBankCode`, HTTP-POSTs an `OtcOffer` to the peer's `/api/v3/negotiations`. Returns the seller-bank-assigned `ForeignBankId`. **Body REQUIRES `bidder_account_id`** (Fix #1, 2026-05-16): gateway validates ownership + active status + currency match (account.currency_code must equal premium.currency; no cross-bank FX). Account number is pinned into the SI-TX `OtcOffer.BuyerAccountNumber` so the seller's bank's posting executor uses this exact account on accept instead of resolving `client-<id>` to "first active account in this currency". |
-| GET | `/api/v3/me/otc/contracts` | Existing endpoint, now also returns `peer_contracts` and `peer_total` for cross-bank rows where the caller is a participant (CREDIT side = this bank holds the buyer; DEBIT side = this bank holds the seller). |
-| POST | `/api/v3/me/otc/contracts/peer/:id/exercise` | Exercise. Buyer-only (rejects when this bank's row is `direction=DEBIT`). Body is `{buyer_account_number}`. Dispatches the 4-posting exercise SI-TX using the OPTION-pseudo-account form (see Exercise lifecycle below). |
+**SP-2b clean-cut (2026-06-05):** the dedicated client-facing `/me/peer-otc/*` routes
+(`POST`/`GET`/`PUT`/`POST …/accept`/`DELETE` `…/me/peer-otc/negotiations[/:rid/:id]`)
+and `POST /me/otc/contracts/peer/:id/exercise` were **DELETED**. The behaviours they
+provided are now dispatched inside stock-service behind the unified client routes
+listed at the top of this section. The behavioural notes below (account-ownership
+pre-check on initiate, the buyer-side remote mirror, the `seller_id` prefixed-form
+requirement, and the inbound cross-bank routing assertions) still apply — they now
+fire on the unified routes' remote-dispatch path:
 
-### Client-facing peer-OTC negotiation routes (implemented 2026-05-15)
-
-Both sides of a cross-bank negotiation now have full visibility + control through their own bank's JWT:
-
-| Method | Path | Notes |
-|---|---|---|
-| GET | `/api/v3/me/peer-otc/negotiations` | Lists REMOTE rows from the unified `otc_negotiations` table (via `OTCNegotiationRepository.ListRemoteNegByClient`) where the caller's `client-<principal_id>` matches `RemoteBuyerID` (when this bank hosts the buyer) or `RemoteSellerID` (when this bank hosts the seller). Optional `?role=buyer|seller` filter. Each item carries a `role` field so the UI knows which side the caller is on. Returns ALL status values including terminal (`cancelled`, `accepted`). For `status=accepted` rows, a `local_contract_id` field links to the remote `option_contracts.id` on this bank (CREDIT direction for buyers, DEBIT direction for sellers). |
-| PUT | `/api/v3/me/peer-otc/negotiations/:rid/:id` | Counter-offer. Resolves the counterparty's bank from the caller's row, proxies a PUT to `{peer.base_url}/negotiations/{rid}/{id}`, and mirrors the new offer onto the caller's local row so both UIs reflect the change immediately. |
-| POST | `/api/v3/me/peer-otc/negotiations/:rid/:id/accept` | Accept. Calls the counterparty's `GET .../accept`, which begins the option-formation SI-TX. |
-| DELETE | `/api/v3/me/peer-otc/negotiations/:rid/:id` | Cancel. Proxies DELETE to counterparty + flips local mirror status to `cancelled` (matches peer-protocol soft-cancel semantics). |
+- **Initiate (bid) on a remote listing.** `POST /api/v3/otc/options/:id/bid` with the
+  listing's remote surrogate `:id`. **Body REQUIRES `bidder_account_id`**: gateway
+  validates ownership + active status + currency match (account currency must equal the
+  premium currency; no cross-bank FX). The account number is pinned into the SI-TX
+  `OtcOffer.BuyerAccountNumber` so the seller's bank's posting executor uses this exact
+  account on accept. stock-service resolves the seller's bank, composes the SI-TX
+  `OtcOffer`, and POSTs it to the peer's `/cross-bank-protocol/negotiations`.
+- **Contracts list.** `GET /api/v3/me/otc/contracts` returns LOCAL + REMOTE rows merged
+  into one `contracts[]` array (`kind=remote` for cross-bank rows); the legacy
+  `peer_contracts`/`peer_total` fields were removed.
+- **Exercise a remote contract.** `POST /api/v3/otc/contracts/:id/exercise`. Buyer-only
+  (rejects when this bank's row is `direction=DEBIT`); strike-account ownership is
+  enforced gateway-side. Dispatches the 4-posting exercise SI-TX using the
+  OPTION-pseudo-account form (see Exercise lifecycle below).
+- **Own-chain list / counter / accept / cancel on a remote chain.** Use the unified
+  `GET /api/v3/me/otc/options/negotiations` (remote rows carry `kind="remote"` and a
+  `role`) and the per-chain `…/:nid/{counter,accept}` + `DELETE …/:nid`; stock-service
+  forwards to the counterparty over SI-TX and mirrors the local row.
 
 The buyer-side mirror is persisted by stock-service's unified outbound-negotiation flow (`OTCOptionsHandler`'s bid path) right after the outbound POST to the seller's bank succeeds — it calls `OTCNegotiationRepository.UpsertRemoteNeg` directly. Without that mirror the buyer-side list would be empty (only the seller's bank receives the inbound POST and persists the remote row). The mirror is stored as a REMOTE row in the unified `otc_negotiations` table. On natural-key `(routing_number, native_id)` conflicts the upsert overwrites, so retried inits are idempotent. (SP-2b clean-cut, 2026-06-05: the former `PeerOTCService.RecordOutboundNegotiation` / `ListMyPeerNegotiations` / `MarkNegotiationAccepted` / `CascadeCancelSiblings` gRPC RPCs were deleted — the unified `OTCOptionsHandler` + `otc_negotiation_remote_action.go` flow re-implements accept/cascade via repos directly.)
 
 The auto-mirroring of counter/cancel onto the caller's local row is best-effort: failure logs but does not roll back the authoritative state on the counterparty's bank. If a mirror update fails the caller can re-pull via `GET /api/v3/negotiations/:rid/:id` on the counterparty later.
 
-**Important — `seller_id` / `buyer_id` format.** The SI-TX wire spec requires `ForeignBankId.id` to be the prefixed form `client-<N>` or `employee-<N>`. The `POST /me/peer-otc/negotiations` body's `seller_id` is passed through verbatim into that wire field, so clients must send `"seller_id": "client-1"`, not `"seller_id": "1"`. Otherwise the seller's bank persists a row with `seller_id="1"` which doesn't match any of its clients' principal ids — the negotiation will be invisible to the seller-side `GET /me/peer-otc/negotiations` list. The gateway should ideally normalise this; that remains a follow-up.
+**Important — `seller_id` / `buyer_id` format.** The SI-TX wire spec requires `ForeignBankId.id` to be the prefixed form `client-<N>` or `employee-<N>`. When the unified bid route (`POST /api/v3/otc/options/:id/bid`) dispatches to a remote listing, stock-service composes the SI-TX `OtcOffer` from the resolved remote listing's seller id (already in prefixed form on the discovered row), so a malformed `"1"` seller id can't be smuggled through the client request. Otherwise the seller's bank would persist a row whose `seller_id` doesn't match any of its clients' principal ids and the chain would be invisible to the seller side's unified `GET /api/v3/me/otc/options/negotiations` list (remote rows).
 
 **Cross-bank routing assertions (Fix #7/#8/#9, 2026-05-16).** The inbound `PeerOTCGRPCHandler.CreateNegotiation` rejects:
 - buyer-routing spoofing: `buyer_id.routing_number` must equal the authenticated peer's routing (security — without this, peer A could submit a bid claiming peer C as buyer, causing the cross-bank accept to debit a third bank's user)
@@ -3051,8 +3071,10 @@ The auto-mirroring of counter/cancel onto the caller's local row is best-effort:
 
 ### gRPC services
 
-- **`PeerOTCService`** (stock-service): 9 RPCs.
-  - Negotiation lifecycle: `GetPublicStocks`, `CreateNegotiation`, `UpdateNegotiation`, `GetNegotiation`, `DeleteNegotiation`, `AcceptNegotiation`.
+- **`PeerOTCService`** (stock-service): 14 RPCs. (SP-2b clean-cut, 2026-06-05: the 4 dead `RecordOutboundNegotiation` / `ListMyPeerNegotiations` / `MarkNegotiationAccepted` / `CascadeCancelSiblings` RPCs were removed — they are NOT in this list.)
+  - Discovery + negotiation lifecycle: `GetPublicStocks`, `GetPublicOptionOffers`, `CreateNegotiation`, `UpdateNegotiation`, `GetNegotiation`, `DeleteNegotiation`, `AcceptNegotiation`.
+  - Seller-share reservation hooks (NEW_TX/rollback): `ReserveSellerSharesForNewTx`, `ReleaseSellerSharesForNewTx`.
+  - Money-leg validation / contract lookup: `ValidatePeerOptionMoneyLeg`, `LookupPeerOptionContract`.
   - SI-TX option leg materialisation (called by transaction-service): `RecordOptionContract` — dispatches on transaction SHAPE (OPTION-as-asset → accept; OPTION-as-pseudo-account with STOCK legs → exercise), creates a remote `option_contracts` row (routing_number != own) + locks seller's holdings on accept, transitions to `exercised` + runs role-specific stock ops on exercise. Idempotent on `(crossbank_tx_id, posting_index)`.
   - SI-TX validation hooks (called by transaction-service): `CheckSellerCanDeliver` — NEW_TX-time pre-check that the seller has enough unreserved shares, drives `INSUFFICIENT_ASSET` `NoVote` so money never moves on a contract the seller can't fulfil.
   - Exercise dispatch (called by gateway): `InitiateOptionExercise` — composes the 4-posting exercise TX from a contract row and dispatches via `transaction-service.PeerTxService.InitiateOutboundTxWithPostings`.
@@ -3078,13 +3100,13 @@ The unified OTC offer view (local + cross-bank) is served by `stock-service`'s `
 
 > **Concurrency & ownership guards (2026-05-30, found by adversarial testing).**
 > - **Accept and exercise are claimed atomically.** `AcceptNegotiation` does a compare-and-set `ongoing → accepted` on the negotiation, and `InitiateOptionExercise` does `active → exercising` on the contract, BEFORE dispatching the SI-TX; a concurrent second call loses the CAS and is rejected (409). Without this, two simultaneous accepts/exercises each charged the buyer (premium / strike) and reserved shares / minted contracts twice — the share legs are row-locked-idempotent but the money legs were not. On a synchronous dispatch failure the claim reverts (so the action stays retryable); the commit-side `recordOptionExercise`/`ExerciseBuyerCreditForPeerOption` accept the transient `exercising` state.
-> - **Sender/strike account ownership is enforced gateway-side.** `/me/payments` (cross-bank branch) and `/me/otc/contracts/peer/:id/exercise` resolve the caller-supplied account and call `enforceOwnership` before dispatch — a client cannot debit another client's account via a cross-bank payment or an exercise strike. (Negotiation bidder_account_id was already checked.)
+> - **Sender/strike account ownership is enforced gateway-side.** `/me/payments` (cross-bank branch) and the unified exercise route `POST /api/v3/otc/contracts/:id/exercise` (remote-dispatch branch) resolve the caller-supplied account and call `enforceOwnership` before dispatch — a client cannot debit another client's account via a cross-bank payment or an exercise strike. (Negotiation bidder_account_id was already checked.)
 > - Business rejections from the dispatch (insufficient seller shares / insufficient buyer funds) preserve their gRPC code → the gateway returns 409, not 500.
 > - **The receiver validates an OTC exercise's MONEY legs against its own stored contract (forged-money defense, found 2026-05-30 round 3).** The interbank `/interbank` endpoint is peer-authenticated by a shared API key only, so a buggy/malicious peer can post arbitrary amounts. Previously the share quantity was trusted-from-the-stored-contract (`ConsumeForPeerOptionContract` uses `contract.Quantity`) but the strike money was trusted-from-the-posting — decoupled, enabling three thefts: **(a) forged-low strike** (seller delivers full shares for ~0 money), **(b) buyer-overcharge** (a forged-high strike DEBIT sent to the buyer's bank), **(c) replay** (a second exercise of an already-`exercised` contract debits the buyer the strike again while COMMIT no-ops on delivery). Fix: a new internal gRPC `PeerOTCService.ValidatePeerOptionMoneyLeg(negotiation_routing, negotiation_id, direction, tx_shape, ticker, quantity, strike_price, money_amount, currency) → (ok, reason)` loads the stored `peer_option_contract` by `(negotiation, direction)` and for an exercise-shape TX requires: contract status ∈ {active, exercising} (closes replay), `quantity`/`ticker`/`strike_price` match the stored contract, and `money_amount == StrikePrice × Quantity`. `posting_executor.Reserve` calls it in a **pre-pass before any reservation** for EVERY option leg on this bank's routing (DEBIT = we hold the seller, paired with the money CREDIT; CREDIT = we hold the buyer, paired with the money DEBIT — `pairedMoney` pairs by leg direction on own routing and reports the money leg's actual currency, robust to the participant-id-vs-account-number asymmetry between the two money legs); any mismatch / validator error → `UNACCEPTABLE_ASSET` NO vote with no hold placed. Receiver-side only — NO SI-TX wire-protocol change. **Accept-shape legs** (OPTION-as-asset) are validated too: the contract doesn't exist on the receiver yet, so the validator loads the stored **negotiation** by `foreign_id` (the UUID — unique per bank, identical on both; looked up without `peer_bank_code` because the validator runs on both the coordinator [own-routing peer code] and the receiver [counterparty code]) and requires terms (ticker/quantity/strike) to match the offer + premium == `offer.Premium` when the money leg is in the premium currency. **Residual (low severity):** a cross-currency BUYER premium is FX-converted at the live rate (not recomputable at vote time) so it is only checked > 0 — the SELLER always receives `offer.Premium` in its own currency, so the underpayment-victim side is always exact.
 
-#### Exercise (`/me/otc/contracts/peer/:id/exercise`)
+#### Exercise (remote branch of `POST /api/v3/otc/contracts/:id/exercise`)
 
-`PeerOTCGRPCHandler.InitiateOptionExercise` →
+When the unified exercise route resolves a remote (`kind=remote`) contract, stock-service dispatches the cross-bank exercise. `PeerOTCGRPCHandler.InitiateOptionExercise` →
 1. Validate this bank holds the buyer side (`direction=CREDIT`) and contract is `active`.
 2. Compose 4 postings using the OPTION-pseudo-account form from the original contract terms:
 
@@ -3163,6 +3185,6 @@ Per Celina 5 §"Plaćanja" (*"u celosti, ili ne uopšte"*):
 
 ### Out of scope
 
-- Bank-side OTC participation across banks — employees acting as bank can already participate intra-bank, but the user-facing `/me/peer-otc/negotiations` initiator forces `client-<n>` from the JWT principal.
+- Bank-side OTC participation across banks — employees acting as bank can already participate intra-bank, but the unified remote-bid path (`POST /api/v3/otc/options/:id/bid` against a remote listing) forces `client-<n>` from the JWT principal (a bank/employee-acting-as-bank remote bidder is rejected with 409, SP-3 deferral).
 - Cross-bank currency conversion at exercise — buyer must hold the strike currency directly; cross-currency strikes would need exchange-service plumbing through the SI-TX path.
 - HMAC outbound auth has been wired but not exercised end-to-end with another team's bank.

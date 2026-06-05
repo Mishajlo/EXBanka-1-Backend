@@ -8271,9 +8271,18 @@ Open a new negotiation chain by placing the initial bid on an open listing. `:id
 
 ---
 
+> **Unified local + cross-bank dispatch (SP-2b).** The four per-chain mutation
+> routes below — `counter`, `accept`, `reject`, and the `DELETE …/:nid` cancel —
+> each handle a **LOCAL** chain (this bank hosts the listing) and a **REMOTE**
+> chain (a peer bank hosts the listing) on the **same** route. stock-service
+> dispatches on the chain's parent listing routing: a local chain runs the
+> intra-bank path, a remote chain is forwarded to the peer over SI-TX and the
+> local mirror row is updated to match. There is no separate `/me/peer-otc/*`
+> client surface — it was removed in the SP-2b clean-cut.
+
 #### POST /api/v3/me/otc/options/:id/negotiations/:nid/counter
 
-Counter the current terms on one of the caller's chains. Either party (the chain's bidder OR the listing's poster) may counter.
+Counter the current terms on one of the caller's chains. Either party (the chain's bidder OR the listing's poster) may counter. Handles local and remote chains uniformly (see the dispatch note above).
 
 **Request Body:** new `{ quantity, strike_price, premium, settlement_date }`.
 
