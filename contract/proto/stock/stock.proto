@@ -1406,6 +1406,12 @@ message OTCAcceptNegotiationResponse {
   string                  parent_status     = 3;
   repeated OTCNegotiationResponse cancelled_siblings = 4;
   OTCMintedContract       contract          = 5;
+  // cross_bank_transaction_id — for a REMOTE accept, the peer's SI-TX
+  // transaction/correlation id returned by GET .../accept (the peer body's
+  // `transactionId` field). The FE polls cross-bank settlement with it via
+  // GET /me/otc/transactions/:txid/status during the accept→contract-mirror
+  // window. Empty for a LOCAL accept (no cross-bank transaction).
+  string                  cross_bank_transaction_id = 6;
 }
 
 // OTCMintedContract is a thin projection of model.OptionContract for

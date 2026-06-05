@@ -27,6 +27,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"strconv"
 	"time"
 
@@ -109,8 +110,12 @@ func (h *OTCOptionsHandler) resolveRemoteNegAction(
 
 	var offer contractsitx.OtcOffer
 	if jerr := json.Unmarshal([]byte(remoteOfferJSONOf(row)), &offer); jerr != nil {
-		// best-effort: terms left zero; the counter path re-supplies them from
-		// the request, accept/reject/cancel don't need the offer body.
+		// best-effort: terms left zero; the counter path re-supplies the
+		// strike/premium from the request but reuses this offer's ticker +
+		// currencies, so a malformed mirror silently composes a zero-value
+		// (empty ticker/currency) counter — log it so it's diagnosable.
+		// accept/reject/cancel don't need the offer body.
+		log.Printf("WARN resolveRemoteNegAction: row %d RemoteOfferJSON decode failed: %v", row.ID, jerr)
 		offer = contractsitx.OtcOffer{}
 	}
 
@@ -211,6 +216,23 @@ func (h *OTCOptionsHandler) acceptRemoteNegotiation(
 		return nil, status.Errorf(codes.FailedPrecondition, "peer rejected accept (%d): %s", code, string(resp))
 	}
 
+	// Parse the peer's SI-TX accept body ({ transactionId, status }) for the
+	// cross-bank transaction id. The FE uses this to poll cross-bank settlement
+	// (GET /me/otc/transactions/:txid/status) during the accept→contract-mirror
+	// window. Best-effort: a non-JSON / field-absent body leaves it empty —
+	// never fail the accept (the contract already formed on the peer).
+	var crossBankTxID string
+	if len(resp) > 0 {
+		var peerBody struct {
+			TransactionID string `json:"transactionId"`
+		}
+		if jerr := json.Unmarshal(resp, &peerBody); jerr != nil {
+			log.Printf("WARN acceptRemoteNegotiation: row %d peer /accept body decode failed: %v", rc.row.ID, jerr)
+		} else {
+			crossBankTxID = peerBody.TransactionID
+		}
+	}
+
 	// Flip the local mirror to accepted (ongoing → accepted). The CAS serialises
 	// concurrent accepts so only one wins; a no-match is tolerated (the row may
 	// already be accepted via a peer-driven webhook).
@@ -233,9 +255,10 @@ func (h *OTCOptionsHandler) acceptRemoteNegotiation(
 	winning, _ := peerNegToProto(winningRow, h.ownRouting)
 
 	return &stockpb.OTCAcceptNegotiationResponse{
-		Winning:           winning,
-		ParentStatus:      "accepted",
-		CancelledSiblings: cancelled,
+		Winning:                winning,
+		ParentStatus:           "accepted",
+		CancelledSiblings:      cancelled,
+		CrossBankTransactionId: crossBankTxID,
 	}, nil
 }
 

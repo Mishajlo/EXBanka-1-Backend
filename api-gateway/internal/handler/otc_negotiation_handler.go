@@ -220,11 +220,12 @@ func (h *OTCOptionsHandler) AcceptMyNegotiation(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"winning":            resp.GetWinning(),
-		"parent_offer_id":    resp.GetParentOfferId(),
-		"parent_status":      resp.GetParentStatus(),
-		"cancelled_siblings": resp.GetCancelledSiblings(),
-		"contract":           resp.GetContract(),
+		"winning":                   resp.GetWinning(),
+		"parent_offer_id":           resp.GetParentOfferId(),
+		"parent_status":             resp.GetParentStatus(),
+		"cancelled_siblings":        resp.GetCancelledSiblings(),
+		"contract":                  resp.GetContract(),
+		"cross_bank_transaction_id": resp.GetCrossBankTransactionId(),
 	})
 }
 

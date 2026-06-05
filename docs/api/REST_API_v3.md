@@ -8289,11 +8289,14 @@ Accept the current terms on a chain. Caller must be the party **opposite** to wh
     "seller_account_id": 99,
     "status":            "ACTIVE",
     "premium_paid_at":   "2026-05-16T03:20:00Z"
-  }
+  },
+  "cross_bank_transaction_id": ""
 }
 ```
 
 `contract` is `null` when the formation saga failed; in that case the negotiation status is `failed`, the parent stays `consumed`, and the front-end can surface a "contract not formed" warning + suggest re-listing.
+
+`cross_bank_transaction_id` (optional, added 2026-06-05) is populated **only when the accepted `:nid` resolves to a folded-in cross-bank (REMOTE) negotiation chain**: it carries the peer bank's SI-TX `transactionId` returned by the peer's `GET .../accept`, so the FE can poll cross-bank settlement via `GET /me/otc/transactions/:txid/status` during the accept→contract-mirror window. It is an empty string for a LOCAL accept (no cross-bank transaction) and for a remote accept whose peer body did not include a decodable `transactionId`.
 
 **Exercise:** the minted `OptionContract` row is consumable by `POST /api/v3/otc/contracts/:id/exercise` (see existing exercise route) — strike money moves buyer→seller, the reserved seller shares are consumed and credited to the buyer's holding. When the contract has `on_behalf_of_fund_id` set, the `exercise` endpoint also accepts `on_behalf_of_fund_id` in the request body (same fund-manager validation applies) and shares land in `fund_holdings`.
 

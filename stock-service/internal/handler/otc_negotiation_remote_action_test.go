@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"google.golang.org/grpc/codes"
@@ -27,6 +28,7 @@ import (
 	stockpb "github.com/exbanka/contract/stockpb"
 	"github.com/exbanka/stock-service/internal/model"
 	"github.com/exbanka/stock-service/internal/repository"
+	"github.com/exbanka/stock-service/internal/service"
 )
 
 // seedRemoteNeg inserts a folded-in REMOTE OTCNegotiation chain into the unified
@@ -211,6 +213,142 @@ func TestAcceptNegotiation_RemoteChain_AcceptsFlipsAndCascades(t *testing.T) {
 	}
 	if got := resp.GetCancelledSiblings()[0].GetId(); got != sibNID {
 		t.Errorf("cancelled sibling id: got %d, want %d", got, sibNID)
+	}
+	// SP-2b T4 review fix #1 — the peer's transactionId is surfaced so the FE
+	// can poll cross-bank settlement during the accept→contract-mirror window.
+	if resp.GetCrossBankTransactionId() != "tx-1" {
+		t.Errorf("cross_bank_transaction_id: got %q, want tx-1", resp.GetCrossBankTransactionId())
+	}
+}
+
+// TestAcceptNegotiation_RemoteChain_CrossBankTxId asserts the peer's
+// transactionId is parsed out of the /accept body and surfaced on the response
+// (review fix #1). Uses a distinct id from the cascade test to keep them
+// independent.
+func TestAcceptNegotiation_RemoteChain_CrossBankTxId(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{
+		proxyByKey: map[string]proxyResult{
+			"GET /accept": {resp: []byte(`{"transactionId":"TX-CB-123","status":"accepted"}`), status: 200},
+		},
+	}
+	accounts := &fakeOTCAccountClient{acct: usdAccount(9)}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	nid := seedRemoteNeg(t, db, "neg-cbtx", "client-9", "client-77", "")
+
+	resp, err := h.AcceptNegotiationChain(context.Background(), &stockpb.OTCAcceptNegotiationRequest{
+		NegotiationId:       nid,
+		CallerOwnerType:     "client",
+		CallerOwnerId:       9,
+		ActingPrincipalType: "client",
+		ActingPrincipalId:   9,
+		AcceptorAccountId:   5001,
+	})
+	if err != nil {
+		t.Fatalf("AcceptNegotiationChain: %v", err)
+	}
+	if resp.GetCrossBankTransactionId() != "TX-CB-123" {
+		t.Errorf("cross_bank_transaction_id: got %q, want TX-CB-123", resp.GetCrossBankTransactionId())
+	}
+}
+
+// TestAcceptNegotiation_RemoteChain_NonJSONPeerBody — a non-JSON peer /accept
+// body must NOT fail the accept (the contract already formed on the peer); the
+// cross_bank_transaction_id is simply left empty (review fix #1, defensive).
+func TestAcceptNegotiation_RemoteChain_NonJSONPeerBody(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{
+		proxyByKey: map[string]proxyResult{
+			"GET /accept": {resp: []byte(`not-json`), status: 200},
+		},
+	}
+	accounts := &fakeOTCAccountClient{acct: usdAccount(9)}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	nid := seedRemoteNeg(t, db, "neg-badbody", "client-9", "client-77", "")
+
+	resp, err := h.AcceptNegotiationChain(context.Background(), &stockpb.OTCAcceptNegotiationRequest{
+		NegotiationId:       nid,
+		CallerOwnerType:     "client",
+		CallerOwnerId:       9,
+		ActingPrincipalType: "client",
+		ActingPrincipalId:   9,
+		AcceptorAccountId:   5001,
+	})
+	if err != nil {
+		t.Fatalf("accept must succeed despite a malformed peer body: %v", err)
+	}
+	if resp.GetCrossBankTransactionId() != "" {
+		t.Errorf("cross_bank_transaction_id: got %q, want empty for a non-JSON peer body", resp.GetCrossBankTransactionId())
+	}
+	// The mirror still flipped to accepted.
+	win, _ := repository.NewOTCNegotiationRepository(db).GetRemoteNegByRoutingAndNative(222, "neg-badbody")
+	if win.Status != "accepted" {
+		t.Errorf("mirror status: got %q, want accepted", win.Status)
+	}
+}
+
+// TestAcceptNegotiation_LocalChain_NoCrossBankTxId — a LOCAL accept has no
+// cross-bank transaction, so cross_bank_transaction_id is empty (review fix #1).
+func TestAcceptNegotiation_LocalChain_NoCrossBankTxId(t *testing.T) {
+	// No peer dispatch needed for the local path.
+	dispatcher := &fakePeerDispatcher{proxyStatus: 204}
+	accounts := &fakeOTCAccountClient{acct: usdAccount(9)}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+
+	// Seed a LOCAL listing (poster client-1) and open a negotiation (bidder
+	// client-7) through the wired service, then the poster accepts the bidder's
+	// terms — the canonical "poster accepts last-mover bidder" local flow.
+	negRepo := repository.NewOTCNegotiationRepository(db)
+	offerRepo := repository.NewOTCOfferRepository(db)
+	posterID := uint64(1)
+	listing := &model.OTCOffer{
+		InitiatorOwnerType:          model.OwnerClient,
+		InitiatorOwnerID:            &posterID,
+		Direction:                   model.OTCDirectionSellInitiated,
+		StockID:                     1,
+		Ticker:                      "AAPL",
+		Quantity:                    decimal.NewFromInt(10),
+		StrikePrice:                 decimal.NewFromFloat(150.0),
+		Premium:                     decimal.NewFromFloat(5.0),
+		SettlementDate:              time.Now().UTC().AddDate(0, 1, 0),
+		Status:                      model.OTCOfferStatusOpen,
+		LastModifiedByPrincipalType: "client",
+		LastModifiedByPrincipalID:   posterID,
+		InitiatorAccountID:          100,
+		Public:                      true,
+	}
+	if err := offerRepo.Create(listing); err != nil {
+		t.Fatalf("seed local listing: %v", err)
+	}
+	bidderID := uint64(7)
+	neg, err := h.negotiations.OpenNegotiation(context.Background(), service.OpenNegotiationInput{
+		ParentOfferID:       listing.ID,
+		BidderOwnerType:     model.OwnerClient,
+		BidderOwnerID:       &bidderID,
+		BidderAccountID:     200,
+		Quantity:            decimal.NewFromInt(10),
+		StrikePrice:         decimal.NewFromFloat(150.0),
+		Premium:             decimal.NewFromFloat(5.0),
+		SettlementDate:      time.Now().UTC().AddDate(0, 1, 0),
+		ActingPrincipalType: "client",
+		ActingPrincipalID:   bidderID,
+	})
+	if err != nil {
+		t.Fatalf("open local negotiation: %v", err)
+	}
+	_ = negRepo // repo handle kept for symmetry with the remote tests
+
+	// Poster (client-1) accepts the bidder's last-mover terms via the handler.
+	resp, err := h.AcceptNegotiationChain(context.Background(), &stockpb.OTCAcceptNegotiationRequest{
+		NegotiationId:       neg.ID,
+		CallerOwnerType:     "client",
+		CallerOwnerId:       posterID,
+		ActingPrincipalType: "client",
+		ActingPrincipalId:   posterID,
+	})
+	if err != nil {
+		t.Fatalf("local AcceptNegotiationChain: %v", err)
+	}
+	if resp.GetCrossBankTransactionId() != "" {
+		t.Errorf("cross_bank_transaction_id: got %q, want empty for a local accept", resp.GetCrossBankTransactionId())
 	}
 }
 

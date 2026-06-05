@@ -9969,8 +9969,14 @@ type OTCAcceptNegotiationResponse struct {
 	ParentStatus      string                    `protobuf:"bytes,3,opt,name=parent_status,json=parentStatus,proto3" json:"parent_status,omitempty"`
 	CancelledSiblings []*OTCNegotiationResponse `protobuf:"bytes,4,rep,name=cancelled_siblings,json=cancelledSiblings,proto3" json:"cancelled_siblings,omitempty"`
 	Contract          *OTCMintedContract        `protobuf:"bytes,5,opt,name=contract,proto3" json:"contract,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// cross_bank_transaction_id — for a REMOTE accept, the peer's SI-TX
+	// transaction/correlation id returned by GET .../accept (the peer body's
+	// `transactionId` field). The FE polls cross-bank settlement with it via
+	// GET /me/otc/transactions/:txid/status during the accept→contract-mirror
+	// window. Empty for a LOCAL accept (no cross-bank transaction).
+	CrossBankTransactionId string `protobuf:"bytes,6,opt,name=cross_bank_transaction_id,json=crossBankTransactionId,proto3" json:"cross_bank_transaction_id,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *OTCAcceptNegotiationResponse) Reset() {
@@ -10036,6 +10042,13 @@ func (x *OTCAcceptNegotiationResponse) GetContract() *OTCMintedContract {
 		return x.Contract
 	}
 	return nil
+}
+
+func (x *OTCAcceptNegotiationResponse) GetCrossBankTransactionId() string {
+	if x != nil {
+		return x.CrossBankTransactionId
+	}
+	return ""
 }
 
 // OTCMintedContract is a thin projection of model.OptionContract for
@@ -20527,13 +20540,14 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x13acting_principal_id\x18\x05 \x01(\x04R\x11actingPrincipalId\x12,\n" +
 	"\x12acting_employee_id\x18\x06 \x01(\x04R\x10actingEmployeeId\x12.\n" +
 	"\x13acceptor_account_id\x18\a \x01(\x04R\x11acceptorAccountId\x12.\n" +
-	"\x14on_behalf_of_fund_id\x18\b \x01(\x04R\x10onBehalfOfFundId\"\xa8\x02\n" +
+	"\x14on_behalf_of_fund_id\x18\b \x01(\x04R\x10onBehalfOfFundId\"\xe3\x02\n" +
 	"\x1cOTCAcceptNegotiationResponse\x127\n" +
 	"\awinning\x18\x01 \x01(\v2\x1d.stock.OTCNegotiationResponseR\awinning\x12&\n" +
 	"\x0fparent_offer_id\x18\x02 \x01(\x04R\rparentOfferId\x12#\n" +
 	"\rparent_status\x18\x03 \x01(\tR\fparentStatus\x12L\n" +
 	"\x12cancelled_siblings\x18\x04 \x03(\v2\x1d.stock.OTCNegotiationResponseR\x11cancelledSiblings\x124\n" +
-	"\bcontract\x18\x05 \x01(\v2\x18.stock.OTCMintedContractR\bcontract\"\xef\x04\n" +
+	"\bcontract\x18\x05 \x01(\v2\x18.stock.OTCMintedContractR\bcontract\x129\n" +
+	"\x19cross_bank_transaction_id\x18\x06 \x01(\tR\x16crossBankTransactionId\"\xef\x04\n" +
 	"\x11OTCMintedContract\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x19\n" +
 	"\boffer_id\x18\x02 \x01(\x04R\aofferId\x12(\n" +
