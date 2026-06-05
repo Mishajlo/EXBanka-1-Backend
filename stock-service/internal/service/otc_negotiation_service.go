@@ -287,7 +287,10 @@ func (s *OTCNegotiationService) OpenNegotiation(ctx context.Context, in OpenNego
 			LastActionByOwnerType:     string(in.BidderOwnerType),
 			LastActionByOwnerID:       in.BidderOwnerID,
 			LastActionAt:              now,
-			ActingEmployeeID:          in.ActingEmployeeID,
+			// acting_employee_id is valid only on a bank-owned row (bank bidder);
+			// an employee-on-behalf-of-client bid leaves the client-owned chain's
+			// acting_employee_id nil per the ActingEmployee invariant.
+			ActingEmployeeID: actingEmpForOwner(in.BidderOwnerType, in.ActingEmployeeID),
 		}
 		if err := s.negRepo.CreateTx(tx, neg); err != nil {
 			return err
@@ -372,7 +375,7 @@ func (s *OTCNegotiationService) CounterNegotiation(ctx context.Context, in Count
 		neg.LastActionByOwnerType = string(in.CallerOwnerType)
 		neg.LastActionByOwnerID = in.CallerOwnerID
 		neg.LastActionAt = now
-		neg.ActingEmployeeID = in.ActingEmployeeID
+		neg.ActingEmployeeID = actingEmpForOwner(neg.BidderOwnerType, in.ActingEmployeeID)
 		if err := s.negRepo.SaveTx(tx, neg); err != nil {
 			return err
 		}
@@ -480,7 +483,7 @@ func (s *OTCNegotiationService) AcceptNegotiation(ctx context.Context, in Accept
 		neg.LastActionByOwnerType = string(in.CallerOwnerType)
 		neg.LastActionByOwnerID = in.CallerOwnerID
 		neg.LastActionAt = now
-		neg.ActingEmployeeID = in.ActingEmployeeID
+		neg.ActingEmployeeID = actingEmpForOwner(neg.BidderOwnerType, in.ActingEmployeeID)
 		if err := s.negRepo.SaveTx(tx, neg); err != nil {
 			return err
 		}
@@ -696,7 +699,7 @@ func (s *OTCNegotiationService) RejectNegotiation(ctx context.Context, in Reject
 		neg.LastActionByOwnerType = string(in.CallerOwnerType)
 		neg.LastActionByOwnerID = in.CallerOwnerID
 		neg.LastActionAt = now
-		neg.ActingEmployeeID = in.ActingEmployeeID
+		neg.ActingEmployeeID = actingEmpForOwner(neg.BidderOwnerType, in.ActingEmployeeID)
 		if err := s.negRepo.SaveTx(tx, neg); err != nil {
 			return err
 		}
@@ -768,7 +771,7 @@ func (s *OTCNegotiationService) CancelNegotiation(ctx context.Context, in Cancel
 		neg.LastActionByOwnerType = string(in.CallerOwnerType)
 		neg.LastActionByOwnerID = in.CallerOwnerID
 		neg.LastActionAt = now
-		neg.ActingEmployeeID = in.ActingEmployeeID
+		neg.ActingEmployeeID = actingEmpForOwner(neg.BidderOwnerType, in.ActingEmployeeID)
 		if err := s.negRepo.SaveTx(tx, neg); err != nil {
 			return err
 		}
@@ -855,7 +858,7 @@ func (s *OTCNegotiationService) CancelListing(ctx context.Context, in CancelList
 			sib.LastActionByOwnerType = string(in.CallerOwnerType)
 			sib.LastActionByOwnerID = in.CallerOwnerID
 			sib.LastActionAt = now
-			sib.ActingEmployeeID = in.ActingEmployeeID
+			sib.ActingEmployeeID = actingEmpForOwner(sib.BidderOwnerType, in.ActingEmployeeID)
 			if err := s.negRepo.SaveTx(tx, sib); err != nil {
 				return err
 			}
@@ -1030,6 +1033,23 @@ func (s *OTCNegotiationService) ListRevisions(
 }
 
 // ---------- helpers ----------
+
+// actingEmpForOwner returns the acting-employee id ONLY when the resource
+// being written is bank-owned. The ActingEmployee invariant (see
+// model.ValidateActingEmployee) forbids stamping acting_employee_id on a
+// client-owned row. A bank principal acting on a CLIENT-owned negotiation
+// chain (e.g. the bank poster accepting/countering/rejecting a client
+// bidder's chain) must therefore leave the negotiation's acting_employee_id
+// nil — the bank's wire identity is recorded on the bank-owned OTCOffer, not
+// on the counterparty's chain. Returns nil for client-owned rows regardless
+// of the caller, preventing the save-time invariant violation that otherwise
+// aborts the whole action with a 500.
+func actingEmpForOwner(rowOwnerType model.OwnerType, actingEmployeeID *uint64) *uint64 {
+	if rowOwnerType == model.OwnerBank {
+		return actingEmployeeID
+	}
+	return nil
+}
 
 // ownerMatches reports whether two (owner_type, owner_id) tuples refer
 // to the same principal. Handles nil owner_id for OwnerBank correctly:

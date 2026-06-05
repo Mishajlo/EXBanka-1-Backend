@@ -233,6 +233,64 @@ func TestAcceptNegotiation_PosterAcceptsBidderTerms(t *testing.T) {
 	}
 }
 
+// TestAcceptNegotiation_BankAcceptsClientBid guards the regression where a
+// BANK poster (sell_initiated) accepting a CLIENT bidder's chain failed with
+// "acting_employee_id may only be set on a bank-owned resource". The accept
+// path stamped neg.ActingEmployeeID from the (bank) caller onto the
+// CLIENT-owned negotiation row, violating the ActingEmployee invariant in
+// OTCNegotiation.BeforeSave and aborting the whole accept (500 to the client).
+// The acting-employee id must only be written when the negotiation row itself
+// is bank-owned (bidder is the bank); a bank action on a client-owned chain
+// leaves it nil (the bank's wire identity lives on the bank-owned OTCOffer).
+func TestAcceptNegotiation_BankAcceptsClientBid(t *testing.T) {
+	env := newNegTestEnv(t)
+	// Bank-owned listing (sell_initiated): poster is the bank.
+	o := &model.OTCOffer{
+		InitiatorOwnerType:          model.OwnerBank,
+		InitiatorOwnerID:            nil,
+		Direction:                   model.OTCDirectionSellInitiated,
+		StockID:                     1,
+		Ticker:                      "AAPL",
+		Quantity:                    decimal.NewFromInt(10),
+		StrikePrice:                 decimal.NewFromFloat(150.0),
+		Premium:                     decimal.NewFromFloat(5.0),
+		SettlementDate:              time.Now().UTC().AddDate(0, 1, 0),
+		Status:                      model.OTCOfferStatusOpen,
+		LastModifiedByPrincipalType: "employee",
+		LastModifiedByPrincipalID:   42,
+		InitiatorAccountID:          100,
+		ActingEmployeeID:            u64p(42),
+		Public:                      true,
+	}
+	if err := env.offerRepo.Create(o); err != nil {
+		t.Fatalf("seed bank listing: %v", err)
+	}
+	// Client bidder opens a chain.
+	neg, err := env.svc.OpenNegotiation(context.Background(), sampleOpenInput(o.ID, 7))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// Bank (employee acting as bank) accepts the client's bid.
+	result, err := env.svc.AcceptNegotiation(context.Background(), AcceptNegotiationInput{
+		NegotiationID:       neg.ID,
+		CallerOwnerType:     model.OwnerBank,
+		CallerOwnerID:       nil,
+		ActingPrincipalType: "employee",
+		ActingPrincipalID:   42,
+		ActingEmployeeID:    u64p(42),
+	})
+	if err != nil {
+		t.Fatalf("bank accept of client bid failed: %v", err)
+	}
+	if result.WinningNegotiation.Status != model.OTCNegotiationStatusAccepted {
+		t.Errorf("winning neg status=%s want accepted", result.WinningNegotiation.Status)
+	}
+	// The client-owned negotiation must NOT carry the bank's acting_employee_id.
+	if result.WinningNegotiation.ActingEmployeeID != nil {
+		t.Errorf("client-owned negotiation got acting_employee_id=%v, want nil", *result.WinningNegotiation.ActingEmployeeID)
+	}
+}
+
 func TestAcceptNegotiation_RejectsSameSideAccept(t *testing.T) {
 	env := newNegTestEnv(t)
 	listing := seedListing(t, env, 1, model.OTCDirectionSellInitiated, model.OTCOfferStatusOpen)
