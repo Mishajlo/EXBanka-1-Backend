@@ -318,7 +318,7 @@ func (r *OTCNegotiationRepository) UpsertRemoteNeg(n *model.OTCNegotiation) erro
 		"remote_buyer_routing", "remote_buyer_id",
 		"remote_seller_routing", "remote_seller_id",
 		"remote_offer_json", "remote_parent_routing", "remote_parent_native_id",
-		"updated_at",
+		"acting_employee_id", "updated_at",
 	}
 	if n.Status != "" {
 		updates = append(updates, "status")

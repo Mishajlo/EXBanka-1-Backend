@@ -30,6 +30,18 @@ import (
 	"github.com/exbanka/stock-service/internal/model"
 )
 
+// bankOwnerSentinel is the legacy owner_id stamped on bank-owned accounts that
+// pre-date the account_kind="bank" flag. Mirrors the gateway's bankSentinelOwnerID
+// (api-gateway/internal/handler/validation.go) and account-service's check.
+const bankOwnerSentinel uint64 = 1_000_000_000
+
+// isBankAccount reports whether an account-service AccountResponse is a
+// bank-owned account, using the same predicate the gateway and account-service
+// use: the account_kind == "bank" flag OR the legacy owner sentinel.
+func isBankAccount(acct *accountpb.AccountResponse) bool {
+	return acct.GetAccountKind() == "bank" || acct.GetOwnerId() == bankOwnerSentinel
+}
+
 // openRemoteNegotiation places a cross-bank bid against a REMOTE (peer-hosted)
 // OTC option listing (SP-2b). It is invoked by OpenNegotiation when the local
 // path reports the parent :id is not a local offer.
@@ -37,15 +49,17 @@ import (
 // The bool reports whether the :id was a remote listing this handler could
 // dispatch to. false (with nil error) means "not a remote listing either" —
 // the caller surfaces the original local NotFound. A non-nil error is a real
-// failure (bad account, bank bidder, peer rejected, persistence) to surface.
+// failure (bad account, peer rejected, persistence) to surface.
 //
-//   - SP-2b supports CLIENT bidders only. A bank bidder (acting_owner_type ==
-//     "bank") returns FailedPrecondition — cross-bank bidding as the bank is
-//     SP-3. We never silently mis-bid as the bank.
-//   - The bidder account is validated against account-service (owner ==
-//     bidder, status active, currency == the listing's premium currency — no
-//     cross-bank FX in SI-TX), and its account number is threaded to the
-//     seller's bank as buyerAccountNumber.
+//   - Both CLIENT and BANK bidders are supported (SP-3 Task 4). The wire buyer
+//     id is "client-<ownerID>" for a client bid, or the stable
+//     "employee-<actingEmployeeID>" for an employee acting AS the bank.
+//   - The bidder account is validated against account-service (status active,
+//     currency == the listing's premium currency — no cross-bank FX in SI-TX),
+//     and its account number is threaded to the seller's bank as
+//     buyerAccountNumber. The OWNERSHIP assertion branches on owner type: a
+//     client bid requires owner_id == the client principal; a bank bid requires
+//     a BANK account (account_kind == "bank" or the bank owner sentinel).
 //   - The composed SI-TX OtcOffer mirrors CreatePeerNegotiation's wire shape;
 //     parentOfferId carries the remote listing's (routing, native_id) lot key
 //     so the seller's bank can cascade-cancel siblings on accept.
@@ -54,6 +68,7 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 	in *stockpb.OpenNegotiationRequest,
 	bidderOwnerType model.OwnerType,
 	bidderOwnerID *uint64,
+	actingEmployeeID uint64,
 	qty, strike, premium decimal.Decimal,
 	settle time.Time,
 ) (*stockpb.OTCNegotiationResponse, bool, error) {
@@ -69,12 +84,25 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 		return nil, false, status.Errorf(codes.Internal, "remote listing lookup failed: %v", err)
 	}
 
-	// SP-2b: client bidders only. A bank bidder needs SP-3.
-	if bidderOwnerType != model.OwnerClient || bidderOwnerID == nil {
-		return nil, false, status.Error(codes.FailedPrecondition,
-			"cross-bank bidding as the bank is not yet supported (SP-3)")
+	// Build the SI-TX wire buyer identity per owner type (SP-3 Task 4).
+	//   - client bid → "client-<ownerID>"
+	//   - bank bid   → "employee-<actingEmployeeID>" (the stable wire identity
+	//     for the bank party; independent of which employee acts later).
+	var buyerID string
+	switch bidderOwnerType {
+	case model.OwnerClient:
+		if bidderOwnerID == nil {
+			return nil, false, status.Error(codes.InvalidArgument, "client bidder requires an owner id")
+		}
+		buyerID = "client-" + strconv.FormatUint(*bidderOwnerID, 10)
+	case model.OwnerBank:
+		if actingEmployeeID == 0 {
+			return nil, false, status.Error(codes.InvalidArgument, "bank bidder requires an acting employee id")
+		}
+		buyerID = "employee-" + strconv.FormatUint(actingEmployeeID, 10)
+	default:
+		return nil, false, status.Error(codes.InvalidArgument, "unsupported bidder owner type")
 	}
-	buyerID := "client-" + strconv.FormatUint(*bidderOwnerID, 10)
 
 	// The bid's premium currency is the listing's published premium currency
 	// (the gateway sends premium as a bare decimal; the currency is the peer's).
@@ -101,8 +129,18 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 	if gerr != nil {
 		return nil, false, status.Errorf(codes.NotFound, "bidder account not found: %v", gerr)
 	}
-	if acct.GetOwnerId() != *bidderOwnerID {
-		return nil, false, status.Error(codes.PermissionDenied, "bidder account does not belong to caller")
+	// Ownership assertion branches on owner type. A client bid must bind an
+	// account the client owns; a bank bid must bind a BANK account (the gateway
+	// already forces this via ResolveAndCheckAccount, but re-assert defensively).
+	switch bidderOwnerType {
+	case model.OwnerClient:
+		if acct.GetOwnerId() != *bidderOwnerID {
+			return nil, false, status.Error(codes.PermissionDenied, "bidder account does not belong to caller")
+		}
+	case model.OwnerBank:
+		if !isBankAccount(acct) {
+			return nil, false, status.Error(codes.PermissionDenied, "bank bidder must bind a bank account")
+		}
 	}
 	if acct.GetStatus() != "active" {
 		return nil, false, status.Error(codes.FailedPrecondition, "bidder account is not active")
@@ -195,6 +233,15 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 		peerRouting, sellerID,
 		parentRoutingPtr, parentNativePtr, "ongoing",
 	)
+	// SP-3 Task 4: a bank bid stamps the stable acting-employee wire identity.
+	// buildRemoteNeg already sets BidderOwnerType=bank for every remote mirror
+	// (the real parties live in the Remote* columns), so the ActingEmployeeID
+	// nil-unless-bank invariant (model BeforeSave) holds in both cases. A client
+	// bid leaves it nil — the bank wire identity is meaningless there.
+	if bidderOwnerType == model.OwnerBank {
+		emp := actingEmployeeID
+		mirror.ActingEmployeeID = &emp
+	}
 	if err := h.remoteNegWriter.UpsertRemoteNeg(mirror); err != nil {
 		return nil, false, status.Errorf(codes.Internal, "record remote negotiation mirror: %v", err)
 	}
