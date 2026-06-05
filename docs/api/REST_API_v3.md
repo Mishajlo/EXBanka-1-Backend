@@ -7365,7 +7365,7 @@ Peer-facing OTC discovery — returns stock holdings on this bank flagged for OT
 | Field | Type | Notes |
 |---|---|---|
 | `stock.ticker` | string | The security symbol. |
-| `sellers[].seller` | `{ "routingNumber": int, "id": string }` | The seller's `ForeignBankId`. |
+| `sellers[].seller` | `{ "routingNumber": int, "id": string }` | The seller's `ForeignBankId`. `routingNumber` is this bank; `id` is the **standard opaque participant id** — `client-<N>` for a client-held holding, `bank` for a bank-held one. This is the SAME value a discovering bank echoes back verbatim as `sellerId` in `POST /negotiations` and it resolves to a local seller. The bank never advertises a bare numeric owner id here (a peer could not address it back). |
 | `sellers[].amount` | int | Quantity this seller has flagged public for that ticker. |
 
 ---
@@ -7384,12 +7384,17 @@ Peer initiates a cross-bank OTC negotiation against a publicly-listed holding on
   "settlementDate": "2026-12-31T00:00:00Z",
   "pricePerUnit":   { "amount": 180.50, "currency": "USD" },
   "premium":        { "amount": 700,    "currency": "USD" },
-  "buyerId":        { "routingNumber": 222, "id": "client-1" },
+  "buyerId":        { "routingNumber": 222, "id": "550e8400-e29b-41d4-a716-446655440000" },
   "sellerId":       { "routingNumber": 111, "id": "client-1" },
   "amount":         50,
-  "lastModifiedBy": { "routingNumber": 222, "id": "client-1" }
+  "lastModifiedBy": { "routingNumber": 222, "id": "550e8400-e29b-41d4-a716-446655440000" }
 }
 ```
+
+**Participant-id validation (SI-TX §2.3):** `buyerId.id`, `sellerId.id`, and `lastModifiedBy.id` are **opaque `ForeignBankId.id` strings**. The gateway enforces ONLY the §2.3 bound — non-empty and ≤ 64 bytes — and does **NOT** format-check them:
+
+- `buyerId.id` belongs to the PEER (`routingNumber` = the authenticated peer). Per §2.3 a bank MUST NOT interpret another bank's opaque id, so **any** scheme is accepted (a UUID like `550e8400-…`, `acc-42`, etc.) and stored verbatim. *(Prior to 2.7.0 the gateway wrongly required `client-<N>`/`employee-<N>` here, which rejected spec-conformant peers — fixed.)*
+- `sellerId.id` is OURS (`sellerId.routingNumber` MUST equal this bank). It is resolved downstream to a local seller, accepting the standard forms `client-<N>`, `employee-<N>`, and `bank` (the same value advertised by `GET /public-stock`). A non-resolvable seller surfaces as a clean 4xx, not a gateway format reject.
 
 **Response 201:** `ForeignBankId` directly (the new negotiation's id, owned by this bank).
 

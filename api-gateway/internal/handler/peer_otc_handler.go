@@ -3,14 +3,13 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"regexp"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 
-	stockpb "github.com/exbanka/contract/stockpb"
 	"github.com/exbanka/contract/sitx"
+	stockpb "github.com/exbanka/contract/stockpb"
 )
 
 // PeerOTCHandler serves the peer-facing OTC routes under /api/v3/cross-bank-protocol:
@@ -184,19 +183,32 @@ type peerOtcOfferReq struct {
 	BuyerAccountNumber string `json:"buyerAccountNumber,omitempty"`
 }
 
-// sitxPrincipalIDPattern matches the SI-TX wire form for participant
-// ids — "client-<digits>" or "employee-<digits>". Used by the inbound
-// peer-OTC handlers (Fix R6, 2026-05-16) so a peer can't submit
-// "client-abc" or "client--1" and have it persisted as a row that
-// then breaks downstream lookups.
-var sitxPrincipalIDPattern = regexp.MustCompile(`^(client|employee)-\d+$`)
+// sitxForeignIDMaxBytes is the SI-TX §2.3 maximum length of a
+// ForeignBankId.id field (and §2.2 IdempotenceKey.locallyGeneratedKey).
+const sitxForeignIDMaxBytes = 64
 
-// validateInboundOtcOffer enforces the format invariants on an inbound
-// SI-TX OtcOffer: currency codes must be 3-letter ISO codes the bank
-// supports, participant ids must match the SI-TX wire form, and core
-// numeric fields must be non-zero. Returns a non-empty string with a
-// human-readable reason on failure; the caller wraps it in apiError.
-// (Fix R6, 2026-05-16.)
+// validateInboundOtcOffer enforces the SI-TX OtcOffer invariants that are
+// the receiving bank's to enforce: currency codes must be ISO 4217 codes the
+// bank supports, participant ids must respect the §2.3 ForeignBankId.id bound
+// (non-empty, ≤ 64 bytes), and amount must be > 0. Returns a non-empty string
+// with a human-readable reason on failure; the caller wraps it in apiError.
+//
+// We deliberately do NOT format-check the participant ids against a
+// "client-<N>"/"employee-<N>" regex. Per SI-TX §2.3 a ForeignBankId.id is an
+// OPAQUE string and "Banks (other than those whose routing numbers equal
+// routingNumber) MUST NOT interpret the id string":
+//   - buyerId.id belongs to the PEER (routingNumber = the authenticated peer).
+//     It may be any opaque scheme (UUID, "acc-42", …); we store it verbatim
+//     and round-trip it untouched, so the only valid checks are the §2.3
+//     length bound (the prior regex was a spec violation that broke interop).
+//   - sellerId.id is OURS (routingNumber must equal this bank — checked
+//     downstream). Its real validation is that it RESOLVES to a local seller,
+//     which the stock-service resolver (parseSellerOwner) already performs,
+//     accepting "client-<N>"/"employee-<N>"/"bank". A non-resolvable seller id
+//     surfaces as a clean 4xx from downstream — not a gateway format reject.
+//
+// (Supersedes Fix R6, 2026-05-16, which added the regex to protect downstream
+// lookups; downstream now resolves/echoes safely, so the regex is dropped.)
 func validateInboundOtcOffer(off peerOtcOfferReq) string {
 	if !knownCurrency(off.PricePerUnit.Currency) {
 		return "pricePerUnit.currency must be one of the bank's supported ISO 4217 codes"
@@ -204,17 +216,27 @@ func validateInboundOtcOffer(off peerOtcOfferReq) string {
 	if !knownCurrency(off.Premium.Currency) {
 		return "premium.currency must be one of the bank's supported ISO 4217 codes"
 	}
-	if off.BuyerID.ID == "" || off.SellerID.ID == "" {
-		return "buyerId.id and sellerId.id are required"
+	if reason := validateForeignID("buyerId.id", off.BuyerID.ID); reason != "" {
+		return reason
 	}
-	if !sitxPrincipalIDPattern.MatchString(off.BuyerID.ID) {
-		return `buyerId.id must match "client-<N>" or "employee-<N>"`
-	}
-	if !sitxPrincipalIDPattern.MatchString(off.SellerID.ID) {
-		return `sellerId.id must match "client-<N>" or "employee-<N>"`
+	if reason := validateForeignID("sellerId.id", off.SellerID.ID); reason != "" {
+		return reason
 	}
 	if off.Amount <= 0 {
 		return "amount must be > 0"
+	}
+	return ""
+}
+
+// validateForeignID enforces the SI-TX §2.3 ForeignBankId.id bound on an
+// opaque participant id: non-empty and at most 64 bytes. It does NOT
+// interpret the id's internal structure (spec §2.3). Returns "" when valid.
+func validateForeignID(field, id string) string {
+	if id == "" {
+		return field + " is required"
+	}
+	if len(id) > sitxForeignIDMaxBytes {
+		return field + " must be at most 64 bytes (SI-TX §2.3)"
 	}
 	return ""
 }

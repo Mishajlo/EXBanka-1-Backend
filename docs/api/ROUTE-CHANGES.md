@@ -238,3 +238,48 @@ field is always present — `metrics_available` (`false`) and `item_count` (`0`)
 longer drop out when they hold default values (raw proto-JSON omits `false`/`0`).
 Field names and types are unchanged (numeric ids stay JSON numbers); only the
 previously-omitted default fields are now always included.
+
+---
+
+## 5. SI-TX cross-bank OTC: standard seller id + opaque participant ids (2.7.0)
+
+Fixes a partner-reported interop bug where two cross-bank endpoints were
+inconsistent and one violated SI-TX §2.3 (`ForeignBankId.id` is opaque; banks
+other than the issuing bank **MUST NOT interpret** it; max 64 bytes). The wire
+shapes are unchanged — `seller` in `/public-stock` and `buyerId`/`sellerId`/
+`lastModifiedBy` in the `OtcOffer` are still spec-mandated `ForeignBankId`
+objects — only the **published id value** and the **inbound validation** changed.
+
+### 5.1 `GET /api/v3/cross-bank-protocol/public-stock` — seller id value
+
+| Field | Before (≤ 2.6.6) | After (2.7.0) |
+|---|---|---|
+| `sellers[].seller.id` | **bare numeric** owner id (e.g. `"7"`; bank-held → `"0"`) | **standard opaque participant id**: `client-<N>` (client-held) or `bank` (bank-held) |
+
+The old bare-numeric form could not be addressed back by a peer — echoing it as
+`sellerId` in `POST /negotiations` failed the local seller resolver. The new
+value is the SAME form `parseSellerOwner` accepts, so a discovering bank can
+return our catalog's seller id verbatim and have it resolve. This is the same
+composer (`sellerIDForOwner`) already used by `/public-option-offers`,
+negotiation reads, and the local OTC views — one standard value everywhere.
+
+### 5.2 `POST` / `PUT /api/v3/cross-bank-protocol/negotiations[/:rid/:id]` — participant-id validation relaxed to spec
+
+The inbound validator previously format-checked **both** `buyerId.id` and
+`sellerId.id` against `^(client|employee)-\d+$`. That was a §2.3 violation: it
+rejected spec-conformant peers whose opaque ids use a different scheme (UUID,
+`acc-42`, …). New rules:
+
+- `buyerId.id` (the PEER's, `routingNumber` = peer): validated ONLY as non-empty
+  and ≤ 64 bytes; stored verbatim, never interpreted.
+- `sellerId.id` (OURS, `routingNumber` MUST equal this bank): validated non-empty
+  + ≤ 64 bytes at the gateway; the real check is downstream resolution to a local
+  seller (`client-<N>` / `employee-<N>` / `bank`). A non-resolvable seller → clean
+  4xx, not a gateway format reject.
+- Currency / amount>0 / routing checks are unchanged (real spec/business invariants).
+
+**Compatibility:** strictly **widening** for inbound peers (more offers accepted,
+none newly rejected within the §2.3 bound). For OUR published catalog the seller
+id string changes value — any cohort bank that *parsed* our old bare-numeric id
+must accept the standard `ForeignBankId.id` opaque form (which the spec already
+requires them to treat as opaque). Version bumped MINOR (2.6.6 → 2.7.0).

@@ -91,6 +91,12 @@ func (f *fakeReserver) ExerciseBuyerCreditForPeerOption(_ context.Context, _ uin
 // GetPublicStocks
 // ---------------------------------------------------------------------------
 
+// TestPeerOTC_GetPublicStocks_HappyPath asserts the /public-stock catalog
+// publishes the STANDARD SI-TX participant id form (sellerIDForOwner): a
+// client-held holding surfaces as "client-<ownerId>" and a bank-held holding
+// as "bank" — the SAME opaque form parseSellerOwner accepts inbound on
+// /negotiations. The legacy bare-numeric owner id ("7"/"0") must NEVER appear
+// on the wire (it could not be addressed back; spec §2.3 ForeignBankId.id).
 func TestPeerOTC_GetPublicStocks_HappyPath(t *testing.T) {
 	h, _, _, holdings := newPeerOtcHandler(t)
 	uid := uint64(7)
@@ -106,12 +112,19 @@ func TestPeerOTC_GetPublicStocks_HappyPath(t *testing.T) {
 		t.Fatalf("expected 2 stocks, got %d", len(resp.GetStocks()))
 	}
 	first := resp.GetStocks()[0]
-	if first.GetOwnerId().GetId() != "7" {
-		t.Errorf("first owner id = %q want 7", first.GetOwnerId().GetId())
+	if first.GetOwnerId().GetId() != "client-7" {
+		t.Errorf("first owner id = %q want client-7", first.GetOwnerId().GetId())
 	}
 	second := resp.GetStocks()[1]
-	if second.GetOwnerId().GetId() != "0" {
-		t.Errorf("bank-owned should map to 0, got %q", second.GetOwnerId().GetId())
+	if second.GetOwnerId().GetId() != "bank" {
+		t.Errorf("bank-owned should map to \"bank\", got %q", second.GetOwnerId().GetId())
+	}
+	// Hard invariant: a bare numeric owner id must never reach the wire — it
+	// cannot be addressed back via /negotiations (parseSellerOwner rejects it).
+	for _, s := range resp.GetStocks() {
+		if id := s.GetOwnerId().GetId(); id == "7" || id == "0" {
+			t.Errorf("bare numeric owner id %q leaked onto the SI-TX wire", id)
+		}
 	}
 }
 

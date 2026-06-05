@@ -407,13 +407,20 @@ func (h *PeerOTCGRPCHandler) GetPublicStocks(ctx context.Context, req *stockpb.G
 	out := make([]*stockpb.PeerPublicStock, 0, len(rows))
 	for i := range rows {
 		hd := rows[i]
-		// Owner ID maps to (h.ownRouting, owner_id-as-string). Bank-owned
-		// holdings (OwnerID == nil) are surfaced as id "0".
-		var ownerID string
-		if hd.OwnerID != nil {
-			ownerID = strconv.FormatUint(*hd.OwnerID, 10)
-		} else {
-			ownerID = "0"
+		// Publish the STANDARD SI-TX participant id (sellerIDForOwner):
+		// "client-<ownerId>" for a client-held holding, "bank" for a
+		// bank-held one. This is the SAME opaque form parseSellerOwner
+		// accepts inbound on POST /negotiations, so a discovering bank can
+		// echo our catalog's seller id back verbatim and have it resolve.
+		// We MUST NOT emit the bare numeric owner id (the prior "7"/"0"
+		// form): per SI-TX §2.3 the id is opaque and other banks return it
+		// verbatim, but the bare numeric could not be addressed back here.
+		ownerID := sellerIDForOwner(hd.OwnerType, hd.OwnerID)
+		if ownerID == "" {
+			// Defensive: a malformed row (client owner with nil id) has no
+			// addressable seller id; skip rather than publish an empty one.
+			log.Printf("WARN: public stock holding %d skipped: no conformant seller id (owner_type=%q)", hd.ID, hd.OwnerType)
+			continue
 		}
 		// Phase 11 — surface the seller's set ask price + the listing's
 		// real currency. Fallbacks: AveragePrice (weighted-avg cost)
