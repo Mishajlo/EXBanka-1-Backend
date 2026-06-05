@@ -393,6 +393,19 @@ func (r *OptionRefresher) buildAndMirrorRemoteOffers(peerBankCode string, peerRo
 				peerBankCode, o.OfferID.ID, model.OwnRouting())
 			continue
 		}
+		// Seller-centric discovery guard (SI-TX §3 / §3.1 / §3.2): the OTC
+		// cross-bank model only conveys SELLER-side listings. A buy_initiated
+		// offer's poster is a BUYER, which has no spec wire representation. We
+		// never publish our own buy_initiated offers, but a non-conformant peer
+		// could still emit one with our proprietary `direction` field set.
+		// Ingesting it would create a remote listing a local user could "bid" on
+		// — only to hit the role-inversion fail-closed at openRemoteNegotiation.
+		// Drop it at the ingest boundary so it never becomes a biddable row.
+		if o.Direction == model.OTCDirectionBuyInitiated {
+			log.Printf("WARN otccache(options): peer=%s offer %s is buy_initiated — skipping (seller-centric cross-bank discovery)",
+				peerBankCode, o.OfferID.ID)
+			continue
+		}
 		row := OptionOffer{
 			Kind:              "remote",
 			BankCode:          peerBankCode,

@@ -8898,6 +8898,8 @@ Population rule: `bestBid` is set for `sell_initiated` parents (buyers compete o
 
 Each entry corresponds to one `OTCOffer` row on this bank with `status IN ('open','PENDING','COUNTERED')` AND `counterparty_owner_id IS NULL`. `Private=true` rows are dropped unless `PrivateToBankCode` equals the calling peer's bank code.
 
+**Seller-centric discovery — `buy_initiated` offers are NEVER published.** The SI-TX bank-to-bank protocol's OTC discovery model is strictly seller-centric: §3.1 `PublicStock` lists only `sellers`; §3.2 a negotiation is created by a request "sent from a Buyer's bank to a Seller's bank"; §3.6.1 "the option pseudo-account is always in the bank of the seller". A `buy_initiated` listing's poster is a **BUYER** wanting to acquire shares — it has no conformant cross-bank representation (publishing it would mislabel the buyer-poster as a `sellerId` and invert the economic roles on accept/exercise). Therefore **only `sell_initiated` listings are exposed cross-bank**; `buy_initiated` listings are intra-bank only and are filtered out of this endpoint. Symmetrically, on ingest a peer's `buy_initiated` offer (should a non-conformant peer emit one with the proprietary `direction` field set) is dropped at the discovery-poll boundary, so it never becomes a biddable remote listing, and a cross-bank bid against a `buy_initiated` remote listing fails closed with HTTP 409 `business_rule_violation`.
+
 ---
 
 ## 53. System Version

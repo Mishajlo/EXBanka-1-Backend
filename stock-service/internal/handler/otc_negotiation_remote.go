@@ -84,20 +84,26 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 		return nil, false, status.Errorf(codes.Internal, "remote listing lookup failed: %v", err)
 	}
 
-	// buy_initiated cross-bank is NOT supported. This bid flow hardcodes the
-	// bidder as the BUYER and the listing's poster as the SELLER — correct for a
-	// sell_initiated listing only. On a buy_initiated listing the poster is the
-	// BUYER and the bidder is the SELLER, so proceeding would SILENTLY INVERT the
-	// economic roles: the bidder (who offered to sell) would end up holding the
-	// option and the poster (who wanted to buy) would be booked as the seller, and
-	// on exercise the wrong party receives the shares (verified live 2026-06-05).
-	// Supporting it correctly needs the seller's shares reserved on the BIDDER's
-	// bank and the inbound seller-locality assumption flipped — a frozen-wire
-	// change. Until then, fail closed rather than invert. (LOCAL buy_initiated is
-	// unaffected; this branch is only reached for a folded-in REMOTE listing.)
+	// buy_initiated cross-bank is OUT OF SCOPE of the SI-TX protocol, by design.
+	// The protocol's OTC discovery + negotiation model is strictly SELLER-CENTRIC:
+	//   - §3 / §3.1: a bank publishes only its SELLERS' public stock (PublicStock
+	//     lists `sellers`); there is no "buyer wants to acquire" listing on the wire.
+	//   - §3.2: a negotiation is created by POST /negotiations sent "from a Buyer's
+	//     bank to a Seller's bank" — the receiver is always the SELLER's bank.
+	//   - §3.6.1: "the option pseudo-account is always in the bank of the seller".
+	// So a buy_initiated offer (poster = BUYER, bidder = SELLER) has NO conformant
+	// cross-bank representation: the OtcOffer wire is symmetric {buyerId, sellerId}
+	// but the discovery + locality rules pin the seller to the listing-hosting bank.
+	// We therefore (a) never PUBLISH buy_initiated offers to peers, and (b) drop
+	// any buy_initiated offer a non-conformant peer sends at the ingest boundary
+	// (otccache.buildAndMirrorRemoteOffers) — so this branch should be unreachable
+	// for a folded-in remote listing. It remains as defense-in-depth: failing closed
+	// is correct because this bid flow hardcodes the bidder as the BUYER, which on a
+	// buy_initiated listing would invert the economic roles (verified live 2026-06-05).
+	// LOCAL buy_initiated is fully supported and unaffected — it never reaches here.
 	if remoteOffer.Direction == model.OTCDirectionBuyInitiated {
 		return nil, false, status.Error(codes.FailedPrecondition,
-			"cross-bank bidding on a buy_initiated listing is not supported (would invert buyer/seller roles)")
+			"cross-bank bidding on a buy_initiated listing is not supported: the SI-TX OTC discovery model is seller-centric (spec §3.1/§3.2/§3.6.1), so buy_initiated offers are intra-bank only")
 	}
 
 	// Build the SI-TX wire buyer identity per owner type (SP-3 Task 4).

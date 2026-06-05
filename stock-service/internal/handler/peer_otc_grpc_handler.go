@@ -407,6 +407,16 @@ func (h *PeerOTCGRPCHandler) GetPublicOptionOffers(ctx context.Context, req *sto
 	out := make([]*stockpb.PeerPublicOptionOffer, 0, len(rows))
 	for i := range rows {
 		o := &rows[i]
+		// Seller-centric discovery (SI-TX §3 / §3.1 / §3.2): only SELLER-side
+		// listings are published cross-bank. A buy_initiated listing's poster is
+		// a BUYER wanting to acquire shares — the protocol has no wire shape for
+		// it (PublicStock lists only `sellers`; POST /negotiations goes "from a
+		// Buyer's bank to a Seller's bank"). Publishing one would mislabel the
+		// buyer-poster as a `sellerId`, inviting peers to bid and inverting roles
+		// on accept/exercise. buy_initiated offers are intra-bank only.
+		if o.Direction == model.OTCDirectionBuyInitiated {
+			continue
+		}
 		// Honor per-listing privacy. Private listings only surface to
 		// the named bank in PrivateToBankCode.
 		if o.Private {

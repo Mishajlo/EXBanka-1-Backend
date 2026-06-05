@@ -368,3 +368,35 @@ wrong-currency account) the legs fall back to the prior first-active resolution 
 documented, conservation-preserving behavior. Verified live two-stack (premium and
 strike land in the nominated account with a 2-account seller; conservation holds,
 no stuck reservations). Version bumped MINOR (2.8.1 → 2.9.0).
+
+---
+
+## 8. Cross-bank OTC discovery is seller-centric — `buy_initiated` offers stay intra-bank (2.9.1)
+
+Spec-conformance hardening, **no REST request/response shape changed**. The SI-TX
+bank-to-bank protocol's OTC discovery + negotiation model is strictly
+**seller-centric** — there is no wire representation for a buy-side ("I want to
+acquire shares") listing:
+
+- §3 / §3.1: a bank publishes only its **sellers'** public stock (`PublicStock`
+  lists `sellers`); a buyer "is interested in publicly-listed stocks a Holder owns".
+- §3.2: a negotiation is created by `POST /negotiations` sent "**from a Buyer's bank
+  to a Seller's bank**" — the receiver is always the seller's bank.
+- §3.6.1: "the option pseudo-account is always **in the bank of the seller**".
+
+Our local OTC options marketplace supports both `sell_initiated` and `buy_initiated`
+listings, but a `buy_initiated` listing's poster is a **BUYER**, which cannot be
+conveyed cross-bank without mislabeling them as a `sellerId` and inverting the
+economic roles on accept/exercise. The investigation concluded cross-bank
+`buy_initiated` bidding is **out of scope of the spec**, and the correct outcome is
+a clean, spec-grounded fail-closed. Three behavior changes enforce this end-to-end:
+
+| Boundary | Before (≤ 2.9.0) | After (2.9.1) |
+|---|---|---|
+| **Publish** — `GET /api/v3/cross-bank-protocol/public-option-offers` | published BOTH directions (a `buy_initiated` row leaked out with its poster mislabeled as `sellerId`) | skips `buy_initiated` rows — only `sell_initiated` listings are exposed cross-bank |
+| **Ingest** — discovery poll of a peer's `/public-option-offers` | mirrored any direction into a biddable remote listing | drops a peer's `buy_initiated` offer at the poll boundary (defense vs a non-conformant peer) |
+| **Bid** — `POST /api/v3/otc/options/:id/bid` against a remote `buy_initiated` listing | already failed closed (`77269c2`); generic message | fails closed with a precise spec-grounded reason (HTTP 409 `business_rule_violation`) — now effectively unreachable since ingest drops such offers |
+
+`LOCAL` `buy_initiated` offers/bids are **fully supported and unaffected**. Version
+bumped PATCH (2.9.0 → 2.9.1) — no API contract change, peers simply see the correct
+(seller-only) discovery set.
