@@ -67,9 +67,6 @@ func (m *mobileAuthClientStub) GetAccountStatus(_ context.Context, _ *authpb.Get
 func (m *mobileAuthClientStub) GetAccountStatusBatch(_ context.Context, _ *authpb.GetAccountStatusBatchRequest, _ ...grpc.CallOption) (*authpb.GetAccountStatusBatchResponse, error) {
 	panic("not implemented")
 }
-func (m *mobileAuthClientStub) CreateAccount(_ context.Context, _ *authpb.CreateAccountRequest, _ ...grpc.CallOption) (*authpb.CreateAccountResponse, error) {
-	panic("not implemented")
-}
 func (m *mobileAuthClientStub) RequestMobileActivation(_ context.Context, _ *authpb.MobileActivationRequest, _ ...grpc.CallOption) (*authpb.MobileActivationResponse, error) {
 	panic("not implemented")
 }

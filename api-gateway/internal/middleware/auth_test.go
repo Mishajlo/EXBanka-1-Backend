@@ -58,9 +58,6 @@ func (m *mockAuthClient) GetAccountStatus(_ context.Context, _ *authpb.GetAccoun
 func (m *mockAuthClient) GetAccountStatusBatch(_ context.Context, _ *authpb.GetAccountStatusBatchRequest, _ ...grpc.CallOption) (*authpb.GetAccountStatusBatchResponse, error) {
 	panic("not implemented")
 }
-func (m *mockAuthClient) CreateAccount(_ context.Context, _ *authpb.CreateAccountRequest, _ ...grpc.CallOption) (*authpb.CreateAccountResponse, error) {
-	panic("not implemented")
-}
 func (m *mockAuthClient) RequestMobileActivation(_ context.Context, _ *authpb.MobileActivationRequest, _ ...grpc.CallOption) (*authpb.MobileActivationResponse, error) {
 	panic("not implemented")
 }

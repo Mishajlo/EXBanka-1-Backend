@@ -166,9 +166,6 @@ func (s *stubAuthClient) GetAccountStatusBatch(_ context.Context, in *authpb.Get
 	}
 	return &authpb.GetAccountStatusBatchResponse{}, nil
 }
-func (s *stubAuthClient) CreateAccount(_ context.Context, _ *authpb.CreateAccountRequest, _ ...grpc.CallOption) (*authpb.CreateAccountResponse, error) {
-	return &authpb.CreateAccountResponse{}, nil
-}
 func (s *stubAuthClient) ResendActivationEmail(_ context.Context, in *authpb.ResendActivationEmailRequest, _ ...grpc.CallOption) (*authpb.ResendActivationEmailResponse, error) {
 	if s.resendActivationFn != nil {
 		return s.resendActivationFn(in)

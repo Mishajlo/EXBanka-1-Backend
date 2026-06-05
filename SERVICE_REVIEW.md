@@ -210,19 +210,108 @@ Nothing to do here.
 ---
 
 ## 2. auth-service
-_Full review pending — but these land here from the gateway decisions:_
-- **AUTH-A (from 1.2):** switch access-token signing to **asymmetric** (ES256/EdDSA);
-  generate/store a keypair; sign with `kid` + `jti` (+ `sid`) + reliable `iat`. Expose
-  a **gRPC `GetSigningKeys`** returning the JWKS-style set (current + previous during
-  rotation). Add a key-rotation routine with overlap (serve old public key ≤ token life).
-- **AUTH-B (from 1.3a):** on logout / RevokeSession / RevokeAllSessions / password
-  change, write the revoked `jti`/`sid` to the Redis **revocation** set (TTL = token life).
-- **AUTH-C (from 1.3b):** define the per-principal **`stale_after`** Redis key schema
-  (shared helper in `contract/`). Any service that mutates token-relevant data writes it
-  **directly to Redis** (decided channel): auth (account active/lock), user-service
-  (permissions/roles), client-service (client active). No Kafka hop.
-- **AUTH-D (from OWN-1):** `ValidateToken` gRPC stops being the per-request hot path
-  (gateway verifies locally); keep it only where still genuinely needed, or retire it.
+
+**Responsibilities:** JWT token lifecycle (sign/validate/refresh), password & activation
+workflows, mobile device activation/biometrics, sessions + login history, account status.
+Backed by its own Postgres + Redis (token-validation cache + revocation).
+
+### Findings (Claude's opinion)
+
+#### 🔴 2.1 / Phase B — Asymmetric ES256 + local verify, REUSING the denylists auth already has
+**Big discovery:** auth-service already implements *both* denylists Phase B needs:
+- `blacklist:<jti>` — hard revocation, checked in `ValidateToken`
+  (`auth_service.go:337,356`), written by `RevokeAccessToken` (`:378`).
+- `user_revoked_at:<userID>` — per-user **epoch**; `checkRevokedByEpoch` rejects a token
+  whose `iat < revokedAt` (`auth_service.go:394`, `cache/redis.go:79`). **This is exactly
+  the `stale_after` force-refresh epoch from §1.3b** — already wired, bumped by the
+  `role_perm_change_consumer` on role/permission change (`:43`).
+
+So Phase B is mostly *relocation + key change*, not greenfield:
+- **AUTH-A:** switch signing HS256 → **ES256** (`jwt_service.go` currently HS256 at
+  `:76,99`). Hold an `*ecdsa.PrivateKey` + `kid`; add a `sid` claim (session id, links
+  access tokens to `active_session` rows for targeted revoke). `jti`+`iat` already exist.
+  Expose **gRPC `GetSigningKeys`** (JWKS-style, current + previous during rotation).
+- **AUTH-B (gateway):** the gateway verifies ES256 locally (by `kid`) and reads the SAME
+  two Redis keys directly — `blacklist:<jti|sid>` and `user_revoked_at:<id>`. The key
+  schema becomes a shared `contract/authredis` package (writer=auth, reader=gateway).
+- **Outcome distinction (§1.3):** blacklist hit → **401 `unauthorized`** (logout); epoch
+  hit (`iat < revokedAt`) → **401 `token_expired`** (silent refresh). Today both return
+  the same "please log in again" — Phase B splits them.
+- **AUTH-D:** `ValidateToken` gRPC stops being the per-request hot path. Keep it only for
+  the non-gateway caller (verification-service `CheckBiometricsEnabled` is separate) or retire.
+- **Reconcile the claims-invalidation channel:** §1.3 decided "direct Redis write", but auth
+  ALREADY bumps the epoch via a **Kafka consumer** (`role_perm_change_consumer`). Two clean
+  options: (a) keep the consumer (auth owns its Redis; user/client-service just publish the
+  event they already publish), or (b) switch those services to write `user_revoked_at`
+  directly. Option (a) reuses working code — lean that way unless you want zero Kafka hop.
+
+#### 🔴 2.2 — Revocation wiring is half-dead (HIGH, security-staleness)
+- **`RevokeAccessToken` is never called in production** (only a test). So Logout /
+  RevokeSession / RevokeAllSessions **do not blacklist the access token** — a logged-out
+  user's access token keeps validating (cache hit) until it expires (≤15 min)
+  (`auth_service.go:610-658`).
+- **Account-disable** (`SetAccountStatus`, `:883`) revokes refresh tokens but neither
+  blacklists nor bumps the epoch → a disabled account's access token still works ≤15 min.
+- **Fix (folds into Phase B):** wire hard revocation by **`sid`** (logout/revoke-session →
+  `blacklist:sid:<sid>`; revoke-all / account-disable → bump `user_revoked_at` as a hard
+  cut, or blacklist all the user's sids). Then logout/disable take effect immediately at
+  the gateway. This is the change that makes the denylists actually load-bearing.
+
+#### 🟡 2.3 — Unused RPC: `CreateAccount` → remove
+`AuthService.CreateAccount` (`grpc_handler.go:175`) has **zero callers** anywhere — account
+creation goes through account-service. Dead RPC + handler + service method. Remove from
+proto + handler + service (regen authpb). (All other 25 RPCs are used.)
+
+#### 🔴 2.4 — Error handling is not standardized (CRITICAL + MED)
+The gateway maps gRPC codes → HTTP; auth-service frequently returns **bare errors** →
+everything collapses to **500**, and several handlers **overwrite** the service's intent:
+- **Bare/uncoded errors → 500:** `RefreshToken` (`auth_service.go:408,411,417,420,449`),
+  `ValidateToken` (`:339,343,358,363`), `jwt_service.go:106,111,115` (`invalid token` should
+  be `Unauthenticated`/401, not 500).
+- **Handler overwrites the real code:** `RefreshToken` handler hardcodes `Unauthenticated`
+  for ALL failures (`grpc_handler.go:110`) — a disabled account looks like a bad token;
+  `SetAccountStatus`/`GetAccountStatus`/`...Batch`/`ListSessions`/`GetLoginHistory` hardcode
+  `Internal`/`NotFound` (`:151,159,185,307,344`), masking the real cause (DB error reads as
+  404 → account enumeration).
+- **PII in error chains:** `Login` wraps the **email** into `%w` error chains
+  (`auth_service.go:180,183,195,224,…`) — leaks to server logs / error introspection.
+- **Fix:** one consistent pattern — services return sentinel errors (`errors.go`), a single
+  handler-level `mapErr(err) → status.Error(code, cleanMsg)` translates sentinel→code, no
+  per-method hardcoding, no PII in messages. Invalid credentials → `Unauthenticated`;
+  locked/disabled → `FailedPrecondition`; not-found → don't leak (same response as bad
+  password, anti-enumeration).
+
+#### 🟢 2.5 — Layering is clean (minor nits)
+Handler is a thin translator (no DB/Redis), repos are query-only, business logic sits in
+service. Fine. Nits: `auth_service.go` is **1091 lines** — cohesive but a candidate to split
+into TokenService / SessionService / AccountService later (not urgent); `detectDeviceType`
+is duplicated (`handler/metadata.go:49` & `service/auth_service.go:968`) — DRY it.
+
+#### 🟢 2.6 — Caching: degradation good, staleness is 2.2
+Redis-down degrades gracefully (nil-checks, fail-open) — good. The only correctness issues
+are the eviction/blacklist gaps in 2.2. TTLs (= token lifetime) are right.
+
+### Decision / agreed action items (DECIDED 2026-06-06)
+- [x] **2.1/Phase B** — ES256; gateway verifies locally and reads the EXISTING
+  `blacklist:*` + `user_revoked_at:*` Redis keys via a shared `contract/authredis`;
+  retire the per-request `ValidateToken` hop.
+- [x] **2.1 claims channel — KEEP the existing Kafka consumer** (`role_perm_change_consumer`
+  bumps the epoch). user/client-service publish events; auth owns its Redis. No direct writes.
+  (Supersedes the earlier §1.3 "direct Redis write" default.)
+- [x] **2.2 hard-revoke by `sid`** — add a `sid` claim (= `active_session` id); logout /
+  revoke-session → `blacklist:sid:<sid>` (gateway → 401 `unauthorized`); revoke-all /
+  account-disable → bump `user_revoked_at` as a hard cut. Wire `RevokeAccessToken`-equivalent.
+- [x] **2.3 remove `CreateAccount`** RPC + handler + service method (0 callers).
+- [x] **2.4 error standardization — NOW, with Phase B** (sentinel→code mapping, no handler
+  overwrites, strip email/PII, anti-enumeration).
+- [x] **2.5 cleanups — ALL:** DRY `detectDeviceType`; **split `auth_service.go`** →
+  TokenService / SessionService / AccountService.
+
+**Implementation order (each a logical commit):** (1) remove CreateAccount, (2) DRY
+detectDeviceType, (3) split auth_service.go [no behavior change, tests green], (4) error
+standardization, (5) ES256 signing + `sid` + `GetSigningKeys` + rotation, (6) sid-based
+revocation wiring, (7) gateway: `contract/authredis` + JWKS cache + local verify + denylist
+reads + `token_expired`/`unauthorized` split, (8) docs + VERSION + lint + tests.
 
 ## 3. user-service
 _pending_

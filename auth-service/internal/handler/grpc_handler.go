@@ -28,7 +28,6 @@ type authServiceFacade interface {
 	SetAccountStatus(ctx context.Context, principalType string, principalID int64, active bool) error
 	GetAccountStatus(ctx context.Context, principalType string, principalID int64) (string, bool, error)
 	ResendActivationEmail(ctx context.Context, email string) error
-	CreateAccountAndActivationToken(ctx context.Context, principalID int64, email, firstName, principalType string) error
 	GetAccountStatusBatch(ctx context.Context, principalType string, principalIDs []int64) (map[int64]model.Account, error)
 	RefreshTokenForMobile(ctx context.Context, oldRefreshToken, deviceID string, mobileSvc service.MobileDeviceLookup) (string, string, error)
 	ListSessions(ctx context.Context, userID int64) ([]model.ActiveSession, error)
@@ -170,13 +169,6 @@ func (h *AuthGRPCHandler) ResendActivationEmail(ctx context.Context, req *pb.Res
 		Success: true,
 		Message: "if the email is registered and pending activation, a new activation email has been sent",
 	}, nil
-}
-
-func (h *AuthGRPCHandler) CreateAccount(ctx context.Context, req *pb.CreateAccountRequest) (*pb.CreateAccountResponse, error) {
-	if err := h.authService.CreateAccountAndActivationToken(ctx, req.PrincipalId, req.Email, req.FirstName, req.PrincipalType); err != nil {
-		return nil, err
-	}
-	return &pb.CreateAccountResponse{Success: true}, nil
 }
 
 func (h *AuthGRPCHandler) GetAccountStatusBatch(ctx context.Context, req *pb.GetAccountStatusBatchRequest) (*pb.GetAccountStatusBatchResponse, error) {
