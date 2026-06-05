@@ -116,6 +116,7 @@ type RemoteNegotiationOps interface {
 	UpdateRemoteNegStatus(routing int64, native, status string) error
 	CompareAndSetRemoteNegStatus(routing int64, native, from, to string) (bool, error)
 	ListRemoteNegBySellerAndParent(sellerRouting int64, sellerID string, parentRouting int64, parentNative string) ([]model.OTCNegotiation, error)
+	ListRemoteNegByParent(parentRouting int64, parentNative string) ([]model.OTCNegotiation, error)
 }
 
 // RemoteNegotiationWriter persists a REMOTE OTCNegotiation mirror row (the

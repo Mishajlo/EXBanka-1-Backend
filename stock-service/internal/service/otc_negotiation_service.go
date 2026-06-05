@@ -883,6 +883,26 @@ func (s *OTCNegotiationService) CancelListing(ctx context.Context, in CancelList
 	return result, nil
 }
 
+// LocalParentIsOpen reports whether the LOCAL OTCOffer with id offerID exists
+// and is still an open listing. Used by the cross-bank (remote) accept path to
+// reject an orphan accept against a listing the poster has CANCELLED/CONSUMED:
+// a cross-bank child chain references its parent by (remote_parent_routing,
+// remote_parent_native_id); when the routing is ours the native id is the local
+// offer id, so the seller's bank (which hosts the accept + the listing) can
+// authoritatively gate on the live parent status — mirroring the LOCAL accept
+// path's ErrOTCParentNotOpen check. found=false (offer missing) is treated as
+// NOT open. An offerID of 0 means "no resolvable local parent" → not open.
+func (s *OTCNegotiationService) LocalParentIsOpen(offerID uint64) bool {
+	if offerID == 0 {
+		return false
+	}
+	parent, err := s.offerRepo.GetByID(offerID)
+	if err != nil || parent == nil {
+		return false
+	}
+	return parent.IsOpenListing()
+}
+
 // ListMyNegotiations returns negotiation chains where the caller is the
 // bidder. The listing-poster sees their chains via a different code path
 // (list all chains on offers they posted), surfaced from the handler.

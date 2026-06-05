@@ -272,6 +272,26 @@ func (h *OTCOptionsHandler) acceptRemoteNegotiation(
 		return nil, status.Error(codes.PermissionDenied,
 			"cannot accept the terms you last proposed — the counterparty must accept")
 	}
+
+	// Orphan-accept guard: when the parent listing is LOCAL to this bank
+	// (remote_parent_routing == ownRouting), the listing's native id is our local
+	// offer id. The accept happens on the seller's bank (the listing's host), so
+	// we can authoritatively reject an accept against a listing the poster has
+	// CANCELLED/CONSUMED — mirroring the LOCAL accept path's ErrOTCParentNotOpen.
+	// Without this a child chain of a cancelled cross-bank listing could still be
+	// accepted, forming a contract + settling money on a withdrawn offer
+	// (verified live 2026-06-05). Skipped when the parent is on a peer bank
+	// (we can't read its status) or when the negotiations service isn't wired.
+	if h.negotiations != nil && rc.row.RemoteParentRouting != nil &&
+		*rc.row.RemoteParentRouting == h.ownRouting && rc.row.RemoteParentNativeID != nil {
+		if parentID, perr := strconv.ParseUint(*rc.row.RemoteParentNativeID, 10, 64); perr == nil {
+			if !h.negotiations.LocalParentIsOpen(parentID) {
+				return nil, status.Error(codes.FailedPrecondition,
+					"parent listing is no longer open (cancelled or already consumed)")
+			}
+		}
+	}
+
 	resp, code, err := h.peerDispatch.Proxy(ctx, rc.counterpartyCode, rc.rid, rc.foreignID, "GET", "/accept", nil)
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "cross-bank accept dispatch failed: %v", err)

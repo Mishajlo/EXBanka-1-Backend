@@ -430,6 +430,23 @@ func (r *OTCNegotiationRepository) ListRemoteNegBySellerAndParent(
 	return out, err
 }
 
+// ListRemoteNegByParent returns every ongoing REMOTE chain grouped under the
+// given remote parent listing (routing, native id), regardless of which party
+// is the seller. Used by the listing-cancel cascade so a poster cancelling a
+// cross-bank listing terminates ALL its remote child chains (not just the local
+// ones, which key on the numeric parent_offer_id). Free-form chains (NULL
+// parent) are excluded by the equality match.
+func (r *OTCNegotiationRepository) ListRemoteNegByParent(
+	parentRouting int64, parentNative string,
+) ([]model.OTCNegotiation, error) {
+	var out []model.OTCNegotiation
+	err := r.db.Where(
+		"status = ? AND remote_parent_routing = ? AND remote_parent_native_id = ? AND local = ?",
+		"ongoing", parentRouting, parentNative, false).
+		Order("created_at ASC").Find(&out).Error
+	return out, err
+}
+
 // ListRemoteNegByClient returns remote rows where the caller's bank hosts a
 // party matching (ownRouting, clientPrincipal). clientPrincipal is the wire id
 // ("client-<N>"); role narrows to "buyer", "seller" or "" / "both". Scoped to

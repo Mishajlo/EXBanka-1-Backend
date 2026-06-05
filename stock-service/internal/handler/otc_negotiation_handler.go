@@ -421,11 +421,60 @@ func (h *OTCOptionsHandler) CancelListing(ctx context.Context, in *stockpb.Cance
 	for i := range res.CancelledChains {
 		out = append(out, negToProto(&res.CancelledChains[i]))
 	}
+	// Cross-bank cascade: the local CancelListing only cancelled LOCAL child
+	// chains (keyed on the numeric parent_offer_id). REMOTE child chains carry
+	// parent_offer_id=0 and group on (remote_parent_routing, remote_parent_native_id),
+	// so they are NOT touched above. Cancel them too — flip each ongoing remote
+	// child to cancelled locally AND DELETE to the bidder's bank so its mirror
+	// flips. Without this, a cross-bank child of a cancelled listing stays
+	// "ongoing" and the orphan-accept gate (acceptRemoteNegotiation) is the only
+	// thing stopping a contract from forming on a dead listing — this makes the
+	// chain terminal too (verified live 2026-06-05). Best-effort: a cascade
+	// failure must not undo the listing cancel (which already committed).
+	remoteCancelled := h.cascadeCancelRemoteChildrenOfListing(ctx, in.GetOfferId())
+	out = append(out, remoteCancelled...)
 	return &stockpb.CancelListingResponse{
 		OfferId:         res.Offer.ID,
 		Status:          res.Offer.Status,
 		CancelledChains: out,
 	}, nil
+}
+
+// cascadeCancelRemoteChildrenOfListing flips every ongoing REMOTE child chain
+// grouped under the just-cancelled LOCAL listing (parent routing == ours, native
+// id == the local offer id) to cancelled and DELETEs to each bidder's bank.
+// Returns the cancelled children projected onto the wire shape. No-op (and nil)
+// when the cross-bank ops/dispatch aren't wired.
+func (h *OTCOptionsHandler) cascadeCancelRemoteChildrenOfListing(
+	ctx context.Context, offerID uint64,
+) []*stockpb.OTCNegotiationResponse {
+	cancelled := []*stockpb.OTCNegotiationResponse{}
+	if h.remoteNegOps == nil || h.peerDispatch == nil {
+		return cancelled
+	}
+	parentNative := strconv.FormatUint(offerID, 10)
+	children, err := h.remoteNegOps.ListRemoteNegByParent(h.ownRouting, parentNative)
+	if err != nil {
+		return cancelled // best-effort
+	}
+	for i := range children {
+		ch := &children[i]
+		chNative := remoteNativeIDOf(ch)
+		if err := h.remoteNegOps.UpdateRemoteNegStatus(ch.RoutingNumber, chNative, "cancelled"); err == nil {
+			ch.Status = "cancelled"
+		}
+		// DELETE to the bidder's bank. From the listing-host's perspective the
+		// counterparty of a child chain is its BUYER bank.
+		buyerRouting, _ := remoteBuyer(ch)
+		_, _, _ = h.peerDispatch.Proxy(ctx,
+			strconv.FormatInt(buyerRouting, 10),
+			strconv.FormatInt(ch.RoutingNumber, 10),
+			chNative, "DELETE", "", nil)
+		if item, _ := peerNegToProto(ch, h.ownRouting); item != nil {
+			cancelled = append(cancelled, item)
+		}
+	}
+	return cancelled
 }
 
 // ListMyNegotiations merges the caller's LOCAL (intra-bank) and REMOTE
