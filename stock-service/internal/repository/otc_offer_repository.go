@@ -262,7 +262,10 @@ type HistoryFilter struct {
 // offer from the caller" — so a buyer querying for counterparty_id=X
 // gets offers where the seller is X, and vice versa.
 func (r *OTCOfferRepository) ListNegotiationHistory(ownerType model.OwnerType, ownerID *uint64, f HistoryFilter) ([]model.OTCOffer, int64, error) {
-	q := r.db.Model(&model.OTCOffer{})
+	// Local-only history: a bank/employee caller (OwnerBank, nil id) would
+	// otherwise match folded-in remote offer rows (also OwnerBank/nil), so
+	// scope to our own routing (parity with the other local-only queries).
+	q := r.db.Model(&model.OTCOffer{}).Where("routing_number = ?", model.OwnRouting())
 
 	// Caller is one of the two parties — match either side.
 	if ownerID == nil {
