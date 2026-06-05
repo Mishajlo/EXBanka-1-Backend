@@ -176,7 +176,7 @@ func newAuthFlowFixture(t *testing.T) *authFlowFixture {
 	loginRepo := repository.NewLoginAttemptRepository(db)
 	totpRepo := repository.NewTOTPRepository(db)
 	totpSvc := NewTOTPService()
-	jwtSvc := NewJWTService("test-secret-256bit-min-len-please", 15*time.Minute)
+	jwtSvc := NewJWTService(mustTestKeyManager(), 15*time.Minute)
 	accountRepo := repository.NewAccountRepository(db)
 	userClient := &stubUserClient{
 		resp: &userpb.EmployeeResponse{

@@ -34,6 +34,7 @@ type stubAuthService struct {
 	setAccountStatusFn               func(ctx context.Context, pt string, pid int64, active bool) error
 	getAccountStatusFn               func(ctx context.Context, pt string, pid int64) (string, bool, error)
 	resendActivationEmailFn          func(ctx context.Context, email string) error
+	signingKeysFn                    func() ([]service.PublicKeyInfo, error)
 	getAccountStatusBatchFn          func(ctx context.Context, pt string, pids []int64) (map[int64]model.Account, error)
 	refreshTokenForMobileFn          func(ctx context.Context, rt, dev string, m service.MobileDeviceLookup) (string, string, error)
 	listSessionsFn                   func(ctx context.Context, userID int64) ([]model.ActiveSession, error)
@@ -71,6 +72,12 @@ func (s *stubAuthService) GetAccountStatus(ctx context.Context, pt string, pid i
 }
 func (s *stubAuthService) ResendActivationEmail(ctx context.Context, email string) error {
 	return s.resendActivationEmailFn(ctx, email)
+}
+func (s *stubAuthService) SigningKeys() ([]service.PublicKeyInfo, error) {
+	if s.signingKeysFn != nil {
+		return s.signingKeysFn()
+	}
+	return []service.PublicKeyInfo{{Kid: "test-kid", Alg: "ES256", PEM: "PEM", Primary: true}}, nil
 }
 func (s *stubAuthService) GetAccountStatusBatch(ctx context.Context, pt string, pids []int64) (map[int64]model.Account, error) {
 	return s.getAccountStatusBatchFn(ctx, pt, pids)

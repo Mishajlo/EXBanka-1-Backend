@@ -28,7 +28,7 @@ func newAuthServiceWithRealCache(t *testing.T) (*AuthService, *cache.RedisCache,
 	loginRepo := repository.NewLoginAttemptRepository(db)
 	totpRepo := repository.NewTOTPRepository(db)
 	totpSvc := NewTOTPService()
-	jwtSvc := NewJWTService("test-secret-key-256bit-min", 15*time.Minute)
+	jwtSvc := NewJWTService(mustTestKeyManager(), 15*time.Minute)
 	accountRepo := repository.NewAccountRepository(db)
 
 	svc := NewAuthService(

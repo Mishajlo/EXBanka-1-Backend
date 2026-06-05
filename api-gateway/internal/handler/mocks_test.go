@@ -112,6 +112,9 @@ func (s *stubAuthClient) Login(_ context.Context, in *authpb.LoginRequest, _ ...
 	}
 	return &authpb.LoginResponse{}, nil
 }
+func (s *stubAuthClient) GetSigningKeys(_ context.Context, _ *authpb.GetSigningKeysRequest, _ ...grpc.CallOption) (*authpb.GetSigningKeysResponse, error) {
+	return &authpb.GetSigningKeysResponse{}, nil
+}
 func (s *stubAuthClient) ValidateToken(_ context.Context, in *authpb.ValidateTokenRequest, _ ...grpc.CallOption) (*authpb.ValidateTokenResponse, error) {
 	if s.validateTokenFn != nil {
 		return s.validateTokenFn(in)

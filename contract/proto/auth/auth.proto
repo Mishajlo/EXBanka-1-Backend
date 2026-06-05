@@ -7,6 +7,11 @@ option go_package = "github.com/exbanka/contract/authpb;authpb";
 service AuthService {
   rpc Login(LoginRequest) returns (LoginResponse);
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  // GetSigningKeys returns the public half of the ES256 access-token signing
+  // keys (JWKS-style) so the api-gateway can verify tokens locally without a
+  // per-request ValidateToken round-trip. Current key first; previous keys are
+  // included during a rotation overlap.
+  rpc GetSigningKeys(GetSigningKeysRequest) returns (GetSigningKeysResponse);
   rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
   rpc Logout(LogoutRequest) returns (LogoutResponse);
   rpc RequestPasswordReset(PasswordResetRequest) returns (PasswordResetResponse);
@@ -66,6 +71,19 @@ message ValidateTokenResponse {
   string last_name = 11;
   bool account_active = 12;
   bool biometrics_enabled = 13; // only set when device_type == "mobile"
+}
+
+message GetSigningKeysRequest {}
+
+message JWK {
+  string kid = 1;
+  string alg = 2;             // always "ES256"
+  string pem_public_key = 3;  // PKIX ("PUBLIC KEY") PEM block
+  bool primary = 4;           // true for the current signing key
+}
+
+message GetSigningKeysResponse {
+  repeated JWK keys = 1;      // current key first, then rotation-overlap keys
 }
 
 message RefreshTokenRequest {

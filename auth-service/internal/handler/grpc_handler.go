@@ -20,6 +20,7 @@ import (
 type authServiceFacade interface {
 	Login(ctx context.Context, email, password, ipAddress, userAgent string) (string, string, error)
 	ValidateToken(token string) (*service.Claims, error)
+	SigningKeys() ([]service.PublicKeyInfo, error)
 	RefreshToken(ctx context.Context, refreshToken, ipAddress, userAgent string) (string, string, error)
 	RequestPasswordReset(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token, newPassword, confirmPassword string) error
@@ -100,6 +101,20 @@ func (h *AuthGRPCHandler) ValidateToken(ctx context.Context, req *pb.ValidateTok
 		AccountActive:     claims.AccountActive,
 		BiometricsEnabled: claims.BiometricsEnabled,
 	}, nil
+}
+
+// GetSigningKeys publishes the PUBLIC half of the ES256 access-token signing
+// keys so the api-gateway can verify tokens locally (no per-request hop).
+func (h *AuthGRPCHandler) GetSigningKeys(_ context.Context, _ *pb.GetSigningKeysRequest) (*pb.GetSigningKeysResponse, error) {
+	keys, err := h.authService.SigningKeys()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "signing keys unavailable")
+	}
+	out := make([]*pb.JWK, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, &pb.JWK{Kid: k.Kid, Alg: k.Alg, PemPublicKey: k.PEM, Primary: k.Primary})
+	}
+	return &pb.GetSigningKeysResponse{Keys: out}, nil
 }
 
 func (h *AuthGRPCHandler) RefreshToken(ctx context.Context, req *pb.RefreshTokenRequest) (*pb.RefreshTokenResponse, error) {

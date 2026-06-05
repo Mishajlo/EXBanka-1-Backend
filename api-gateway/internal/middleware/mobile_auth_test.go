@@ -25,6 +25,9 @@ type mobileAuthClientStub struct {
 	validateDeviceSignatureFn func(*authpb.ValidateDeviceSignatureRequest) (*authpb.ValidateDeviceSignatureResponse, error)
 }
 
+func (m *mobileAuthClientStub) GetSigningKeys(_ context.Context, _ *authpb.GetSigningKeysRequest, _ ...grpc.CallOption) (*authpb.GetSigningKeysResponse, error) {
+	return &authpb.GetSigningKeysResponse{}, nil
+}
 func (m *mobileAuthClientStub) ValidateToken(_ context.Context, req *authpb.ValidateTokenRequest, _ ...grpc.CallOption) (*authpb.ValidateTokenResponse, error) {
 	if m.validateTokenFn != nil {
 		return m.validateTokenFn(req)

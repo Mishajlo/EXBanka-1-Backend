@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	AuthService_Login_FullMethodName                   = "/auth.AuthService/Login"
 	AuthService_ValidateToken_FullMethodName           = "/auth.AuthService/ValidateToken"
+	AuthService_GetSigningKeys_FullMethodName          = "/auth.AuthService/GetSigningKeys"
 	AuthService_RefreshToken_FullMethodName            = "/auth.AuthService/RefreshToken"
 	AuthService_Logout_FullMethodName                  = "/auth.AuthService/Logout"
 	AuthService_RequestPasswordReset_FullMethodName    = "/auth.AuthService/RequestPasswordReset"
@@ -52,6 +53,11 @@ const (
 type AuthServiceClient interface {
 	Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (*LoginResponse, error)
 	ValidateToken(ctx context.Context, in *ValidateTokenRequest, opts ...grpc.CallOption) (*ValidateTokenResponse, error)
+	// GetSigningKeys returns the public half of the ES256 access-token signing
+	// keys (JWKS-style) so the api-gateway can verify tokens locally without a
+	// per-request ValidateToken round-trip. Current key first; previous keys are
+	// included during a rotation overlap.
+	GetSigningKeys(ctx context.Context, in *GetSigningKeysRequest, opts ...grpc.CallOption) (*GetSigningKeysResponse, error)
 	RefreshToken(ctx context.Context, in *RefreshTokenRequest, opts ...grpc.CallOption) (*RefreshTokenResponse, error)
 	Logout(ctx context.Context, in *LogoutRequest, opts ...grpc.CallOption) (*LogoutResponse, error)
 	RequestPasswordReset(ctx context.Context, in *PasswordResetRequest, opts ...grpc.CallOption) (*PasswordResetResponse, error)
@@ -102,6 +108,16 @@ func (c *authServiceClient) ValidateToken(ctx context.Context, in *ValidateToken
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ValidateTokenResponse)
 	err := c.cc.Invoke(ctx, AuthService_ValidateToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) GetSigningKeys(ctx context.Context, in *GetSigningKeysRequest, opts ...grpc.CallOption) (*GetSigningKeysResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSigningKeysResponse)
+	err := c.cc.Invoke(ctx, AuthService_GetSigningKeys_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -344,6 +360,11 @@ func (c *authServiceClient) GetLoginHistory(ctx context.Context, in *LoginHistor
 type AuthServiceServer interface {
 	Login(context.Context, *LoginRequest) (*LoginResponse, error)
 	ValidateToken(context.Context, *ValidateTokenRequest) (*ValidateTokenResponse, error)
+	// GetSigningKeys returns the public half of the ES256 access-token signing
+	// keys (JWKS-style) so the api-gateway can verify tokens locally without a
+	// per-request ValidateToken round-trip. Current key first; previous keys are
+	// included during a rotation overlap.
+	GetSigningKeys(context.Context, *GetSigningKeysRequest) (*GetSigningKeysResponse, error)
 	RefreshToken(context.Context, *RefreshTokenRequest) (*RefreshTokenResponse, error)
 	Logout(context.Context, *LogoutRequest) (*LogoutResponse, error)
 	RequestPasswordReset(context.Context, *PasswordResetRequest) (*PasswordResetResponse, error)
@@ -385,6 +406,9 @@ func (UnimplementedAuthServiceServer) Login(context.Context, *LoginRequest) (*Lo
 }
 func (UnimplementedAuthServiceServer) ValidateToken(context.Context, *ValidateTokenRequest) (*ValidateTokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ValidateToken not implemented")
+}
+func (UnimplementedAuthServiceServer) GetSigningKeys(context.Context, *GetSigningKeysRequest) (*GetSigningKeysResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSigningKeys not implemented")
 }
 func (UnimplementedAuthServiceServer) RefreshToken(context.Context, *RefreshTokenRequest) (*RefreshTokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RefreshToken not implemented")
@@ -508,6 +532,24 @@ func _AuthService_ValidateToken_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthServiceServer).ValidateToken(ctx, req.(*ValidateTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_GetSigningKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSigningKeysRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).GetSigningKeys(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_GetSigningKeys_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).GetSigningKeys(ctx, req.(*GetSigningKeysRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -940,6 +982,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidateToken",
 			Handler:    _AuthService_ValidateToken_Handler,
+		},
+		{
+			MethodName: "GetSigningKeys",
+			Handler:    _AuthService_GetSigningKeys_Handler,
 		},
 		{
 			MethodName: "RefreshToken",

@@ -374,6 +374,12 @@ func (s *AuthService) ValidateToken(tokenString string) (*Claims, error) {
 	return claims, nil
 }
 
+// SigningKeys returns the public JWKS (current + rotation-overlap keys) so the
+// GetSigningKeys RPC can hand them to the gateway for local ES256 verification.
+func (s *AuthService) SigningKeys() ([]PublicKeyInfo, error) {
+	return s.jwtService.Keys().JWKS()
+}
+
 // RevokeAccessToken adds a JWT JTI to the Redis blacklist until it would naturally expire.
 func (s *AuthService) RevokeAccessToken(ctx context.Context, jti string, remainingTTL time.Duration) error {
 	if s.cache == nil {
