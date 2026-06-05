@@ -238,8 +238,11 @@ func (h *OTCOptionsHandler) CounterNegotiation(ctx context.Context, in *stockpb.
 				return nil, rerr
 			}
 			if ok {
-				callerPrincipal := "client-" + strconv.FormatUint(*oid, 10)
-				return h.counterRemoteNegotiation(ctx, rc, callerPrincipal, qty, strike, premium, settle)
+				// The counter's wire ids (buyer/seller + lastModifiedBy) are read
+				// from the ROW inside counterRemoteNegotiation, so a bank-driven
+				// counter keeps the stable employee-<N> regardless of which
+				// employee performs it (SP-3 Task 5 wire-id stability).
+				return h.counterRemoteNegotiation(ctx, rc, qty, strike, premium, settle)
 			}
 		}
 		return nil, err

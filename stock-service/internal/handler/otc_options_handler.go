@@ -1014,12 +1014,23 @@ func (h *OTCOptionsHandler) ExerciseContract(ctx context.Context, in *stockpb.Ex
 //     (including the holder-authorization NotFound for a non-buyer caller).
 //
 // Authorization mirrors resolveRemoteContract + the old ExercisePeerContract:
-// only the BUYER side this bank hosts may exercise. A REMOTE contract is
+// only the BUYER/HOLDER side this bank hosts may exercise. A REMOTE contract is
 // exercisable from this bank only when it carries RemoteDirection=="CREDIT"
-// (this bank holds the buyer/holder side); the caller's SI-TX participant id
-// ("client-<actorUserId>" for client callers) must equal the contract's
-// RemoteBuyerID. A non-buyer/non-holder (the writer, another client, or an
-// employee with no cross-bank identity) gets NotFound — existence must not leak.
+// (this bank holds the buyer/holder side). The buyer party id is read from the
+// ROW; the caller is authorized as that party by identity:
+//
+//   - CLIENT buyer (RemoteBuyerID "client-<N>") → the caller's SI-TX participant
+//     id "client-<actorUserId>" (client actors only) must equal RemoteBuyerID.
+//   - BANK buyer (RemoteBuyerID "employee-<N>") → the caller must be acting AS
+//     THE BANK (actor_system_type "bank", on_behalf_of_client_id == 0). The
+//     strike settles from the bank's bound account (buyer_account_number,
+//     gateway-validated as a bank account) and the holding owner resolves to
+//     (bank, nil) via the inbound parser (SP-3 Task 3). ANY employee may drive
+//     it (the originating employee is not re-derived here).
+//
+// A non-buyer/non-holder (the writer, another client, an employee on behalf of a
+// client, or a client on a bank-buyer contract) gets NotFound — existence must
+// not leak.
 func (h *OTCOptionsHandler) exerciseRemoteContract(ctx context.Context, in *stockpb.ExerciseContractRequest) (*stockpb.ExerciseResponse, bool, error) {
 	if h.peerContracts == nil || h.crossBankExerciser == nil {
 		return nil, false, nil
@@ -1033,19 +1044,21 @@ func (h *OTCOptionsHandler) exerciseRemoteContract(ctx context.Context, in *stoc
 		return nil, true, status.Errorf(codes.Internal, "load remote contract: %v", err)
 	}
 
-	// AUTHORIZE: only the buyer/holder side this bank hosts may exercise.
-	// Compute the caller's SI-TX participant id from the same identity fields
-	// the local ownership check uses (actor_user_id + actor_system_type). An
-	// employee has no cross-bank participant id and is therefore never the
-	// holder of a remote contract.
-	var callerPartyID string
-	if in.GetActorSystemType() == "client" {
-		callerPartyID = "client-" + strconv.FormatInt(in.GetActorUserId(), 10)
+	// AUTHORIZE: only the buyer/holder side this bank hosts (the CREDIT side) may
+	// exercise; the seller/DEBIT side never does (the writer never exercises).
+	buyerID := remoteContractBuyerID(contract)
+	authorized := false
+	if remoteContractDirection(contract) == "CREDIT" {
+		if isBankWireID(buyerID) {
+			// Bank-hosted buyer — authorize a caller acting as the bank.
+			authorized = in.GetActorSystemType() == "bank" && in.GetOnBehalfOfClientId() == 0
+		} else {
+			// Client-hosted buyer — authorize the matching client principal.
+			authorized = in.GetActorSystemType() == "client" &&
+				buyerID == "client-"+strconv.FormatInt(in.GetActorUserId(), 10)
+		}
 	}
-	// The exercisable (buyer/holder) side this bank hosts is the CREDIT side.
-	// Only that side carries a buyer participant id we can authorize against;
-	// the seller/DEBIT side may not exercise (the writer never exercises).
-	if remoteContractDirection(contract) != "CREDIT" || callerPartyID == "" || callerPartyID != remoteContractBuyerID(contract) {
+	if !authorized {
 		// NotFound — do not leak existence to non-holders (same policy as
 		// resolveRemoteContract / the gateway's enforceOwnership).
 		return nil, true, status.Error(codes.NotFound, "not_found")

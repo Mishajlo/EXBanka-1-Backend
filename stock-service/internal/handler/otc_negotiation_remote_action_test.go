@@ -15,6 +15,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -71,6 +72,69 @@ func seedRemoteNeg(t *testing.T, db *gorm.DB, foreignID, buyerID, sellerID, pare
 		t.Fatalf("read seeded remote neg %q: %v", foreignID, err)
 	}
 	return got.ID
+}
+
+// seedBankHostedRemoteNeg inserts a folded-in REMOTE chain where the side WE
+// host (the BUYER, routing 111) is BANK-owned: its wire id is "employee-<N>"
+// and the row carries ActingEmployeeID = the ORIGINATOR employee. The seller is
+// a client on peer 222. This is the chain shape produced by openRemoteNegotiation
+// for a bank bid (SP-3 Task 4). Returns the surrogate id.
+func seedBankHostedRemoteNeg(t *testing.T, db *gorm.DB, foreignID string, originatorEmployeeID uint64, sellerID, parentNative string) uint64 {
+	t.Helper()
+	buyerID := "employee-" + strconv.FormatUint(originatorEmployeeID, 10)
+	offer := contractsitx.OtcOffer{
+		Ticker:          "AAPL",
+		Amount:          10,
+		PricePerStock:   decimal.RequireFromString("150"),
+		Currency:        "USD",
+		Premium:         decimal.RequireFromString("20"),
+		PremiumCurrency: "USD",
+		SettlementDate:  "2026-07-01",
+		LastModifiedBy:  contractsitx.ForeignBankId{RoutingNumber: 222, ID: sellerID},
+	}
+	offerJSON, _ := json.Marshal(offer)
+	var parentRoutingPtr *int64
+	var parentNativePtr *string
+	if parentNative != "" {
+		pr := int64(222)
+		pn := parentNative
+		parentRoutingPtr = &pr
+		parentNativePtr = &pn
+	}
+	row := buildRemoteNeg(
+		222, foreignID, offer, string(offerJSON),
+		111, buyerID, // bank buyer hosted by us (employee-<N>)
+		222, sellerID, // client seller on the peer
+		parentRoutingPtr, parentNativePtr, "ongoing",
+	)
+	emp := originatorEmployeeID
+	row.ActingEmployeeID = &emp // stamp the stable wire-identity originator
+	if err := repository.NewOTCNegotiationRepository(db).UpsertRemoteNeg(row); err != nil {
+		t.Fatalf("seed bank-hosted remote neg %q: %v", foreignID, err)
+	}
+	got, err := repository.NewOTCNegotiationRepository(db).GetRemoteNegByRoutingAndNative(222, foreignID)
+	if err != nil {
+		t.Fatalf("read seeded bank-hosted remote neg %q: %v", foreignID, err)
+	}
+	return got.ID
+}
+
+// bankCounterReq builds a CounterNegotiationRequest for a caller acting AS THE
+// BANK (caller_owner_type "bank", caller_owner_id 0, acting employee = the
+// employee PERFORMING the counter, which may differ from the originator).
+func bankCounterReq(nid, performingEmployeeID uint64) *stockpb.CounterNegotiationRequest {
+	return &stockpb.CounterNegotiationRequest{
+		NegotiationId:       nid,
+		CallerOwnerType:     "bank",
+		CallerOwnerId:       0,
+		Quantity:            "10",
+		StrikePrice:         "155.5",
+		Premium:             "22.5",
+		SettlementDate:      "2026-07-01",
+		ActingPrincipalType: "employee",
+		ActingPrincipalId:   performingEmployeeID,
+		ActingEmployeeId:    performingEmployeeID,
+	}
 }
 
 func counterReq(nid, callerID uint64) *stockpb.CounterNegotiationRequest {
@@ -454,5 +518,219 @@ func TestRemoteNegAction_NonParty_NotFound(t *testing.T) {
 	}
 	if len(dispatcher.proxyCalls) != 0 {
 		t.Errorf("proxy should NOT fire for a non-party caller: %+v", dispatcher.proxyCalls)
+	}
+}
+
+// --- SP-3 Task 5: bank-party authorization on a bank-hosted chain ----------
+
+// TestCounterNegotiation_BankHostedChain_EmployeeMNotN is the wire-id-stability
+// test: a bank-hosted chain was OPENED by employee 42 (ActingEmployeeID=42,
+// RemoteBuyerID "employee-42"); a DIFFERENT employee 99 (acting AS THE BANK)
+// performs a counter. The counter is authorized AND the composed wire buyerId +
+// lastModifiedBy carry the ROW's stable "employee-42", NOT "employee-99".
+func TestCounterNegotiation_BankHostedChain_EmployeeMNotN(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{proxyStatus: 200, proxyResp: []byte(`{}`)}
+	accounts := &fakeOTCAccountClient{acct: usdBankAccount()}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	// Originator employee 42; seller client-77 on the peer.
+	nid := seedBankHostedRemoteNeg(t, db, "neg-bh-1", 42, "client-77", "")
+
+	// Employee 99 (≠ 42), acting as the bank, performs the counter.
+	resp, err := h.CounterNegotiation(context.Background(), bankCounterReq(nid, 99))
+	if err != nil {
+		t.Fatalf("bank counter (employee 99 ≠ originator 42): %v", err)
+	}
+
+	// A single PUT to the seller (222).
+	if len(dispatcher.proxyCalls) != 1 {
+		t.Fatalf("proxy called %d times, want 1", len(dispatcher.proxyCalls))
+	}
+	pc := dispatcher.proxyCalls[0]
+	if pc.method != "PUT" || pc.subpath != "" || pc.peerBankCode != "222" || pc.foreignID != "neg-bh-1" {
+		t.Errorf("proxy target: got %+v, want PUT \"\" on 222/neg-bh-1", pc)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(pc.body, &parsed); err != nil {
+		t.Fatalf("unmarshal counter body: %v", err)
+	}
+	// STABILITY: the buyer (the side we host) carries the ROW's employee-42, not
+	// the performing employee 99.
+	buyer, _ := parsed["buyerId"].(map[string]any)
+	if buyer == nil || buyer["id"] != "employee-42" {
+		t.Errorf("wire buyerId.id: got %v, want employee-42 (the ROW's stable id, NOT employee-99)", parsed["buyerId"])
+	}
+	// lastModifiedBy must also be the stable employee-42, NOT employee-99.
+	lastBy, _ := parsed["lastModifiedBy"].(map[string]any)
+	if lastBy == nil || lastBy["id"] != "employee-42" {
+		t.Errorf("wire lastModifiedBy.id: got %v, want employee-42 (NOT the performing employee-99)", parsed["lastModifiedBy"])
+	}
+	// The counterparty (seller) is the stored remote client id.
+	seller, _ := parsed["sellerId"].(map[string]any)
+	if seller == nil || seller["id"] != "client-77" {
+		t.Errorf("wire sellerId.id: got %v, want client-77", parsed["sellerId"])
+	}
+
+	// The local mirror reflects the new terms and the stable wire id.
+	mirror, _ := repository.NewOTCNegotiationRepository(db).GetRemoteNegByRoutingAndNative(222, "neg-bh-1")
+	var mo contractsitx.OtcOffer
+	_ = json.Unmarshal([]byte(remoteOfferJSONOf(mirror)), &mo)
+	if mo.LastModifiedBy.ID != "employee-42" {
+		t.Errorf("mirror lastModifiedBy.id: got %q, want employee-42", mo.LastModifiedBy.ID)
+	}
+	if !mo.PricePerStock.Equal(decimal.RequireFromString("155.5")) {
+		t.Errorf("mirror strike: got %s, want 155.5", mo.PricePerStock)
+	}
+	if resp.GetKind() != "remote" || resp.GetId() != nid {
+		t.Errorf("response: kind=%q id=%d, want remote / %d", resp.GetKind(), resp.GetId(), nid)
+	}
+}
+
+// TestAcceptNegotiation_BankHostedChain_BankCaller — a caller acting AS THE BANK
+// accepts a bank-hosted chain: authorized, GET /accept proxied to the seller,
+// mirror flips to accepted.
+func TestAcceptNegotiation_BankHostedChain_BankCaller(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{
+		proxyByKey: map[string]proxyResult{
+			"GET /accept": {resp: []byte(`{"transactionId":"tx-bh","status":"accepted"}`), status: 200},
+		},
+	}
+	accounts := &fakeOTCAccountClient{acct: usdBankAccount()}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	nid := seedBankHostedRemoteNeg(t, db, "neg-bh-acc", 42, "client-77", "")
+
+	resp, err := h.AcceptNegotiationChain(context.Background(), &stockpb.OTCAcceptNegotiationRequest{
+		NegotiationId:       nid,
+		CallerOwnerType:     "bank",
+		CallerOwnerId:       0,
+		ActingPrincipalType: "employee",
+		ActingPrincipalId:   99, // any employee may drive the bank's chain
+		ActingEmployeeId:    99,
+		AcceptorAccountId:   5001,
+	})
+	if err != nil {
+		t.Fatalf("bank accept: %v", err)
+	}
+	var sawAccept bool
+	for _, pc := range dispatcher.proxyCalls {
+		if pc.method == "GET" && pc.subpath == "/accept" && pc.foreignID == "neg-bh-acc" && pc.peerBankCode == "222" {
+			sawAccept = true
+		}
+	}
+	if !sawAccept {
+		t.Errorf("expected GET /accept to seller 222; calls: %+v", dispatcher.proxyCalls)
+	}
+	win, _ := repository.NewOTCNegotiationRepository(db).GetRemoteNegByRoutingAndNative(222, "neg-bh-acc")
+	if win.Status != "accepted" {
+		t.Errorf("mirror status: got %q, want accepted", win.Status)
+	}
+	if resp.GetParentStatus() != "accepted" {
+		t.Errorf("parent_status: got %q, want accepted", resp.GetParentStatus())
+	}
+	if resp.GetCrossBankTransactionId() != "tx-bh" {
+		t.Errorf("cross_bank_transaction_id: got %q, want tx-bh", resp.GetCrossBankTransactionId())
+	}
+}
+
+// TestRejectNegotiation_BankHostedChain_BankCaller — a bank caller rejects a
+// bank-hosted chain: authorized, DELETE proxied, mirror cancelled.
+func TestRejectNegotiation_BankHostedChain_BankCaller(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{proxyStatus: 204}
+	accounts := &fakeOTCAccountClient{acct: usdBankAccount()}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	nid := seedBankHostedRemoteNeg(t, db, "neg-bh-rej", 42, "client-77", "")
+
+	resp, err := h.RejectNegotiation(context.Background(), &stockpb.RejectNegotiationRequest{
+		NegotiationId:       nid,
+		CallerOwnerType:     "bank",
+		CallerOwnerId:       0,
+		ActingPrincipalType: "employee",
+		ActingPrincipalId:   99,
+		ActingEmployeeId:    99,
+	})
+	if err != nil {
+		t.Fatalf("bank reject: %v", err)
+	}
+	assertSingleDelete(t, dispatcher, "neg-bh-rej")
+	assertMirrorCancelled(t, db, "neg-bh-rej")
+	if resp.GetStatus() != "cancelled" {
+		t.Errorf("response status: got %q, want cancelled", resp.GetStatus())
+	}
+}
+
+// TestCancelNegotiation_BankHostedChain_BankCaller — a bank caller cancels a
+// bank-hosted chain: authorized, DELETE proxied, mirror cancelled.
+func TestCancelNegotiation_BankHostedChain_BankCaller(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{proxyStatus: 204}
+	accounts := &fakeOTCAccountClient{acct: usdBankAccount()}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	nid := seedBankHostedRemoteNeg(t, db, "neg-bh-can", 42, "client-77", "")
+
+	resp, err := h.CancelNegotiation(context.Background(), &stockpb.CancelNegotiationRequest{
+		NegotiationId:       nid,
+		CallerOwnerType:     "bank",
+		CallerOwnerId:       0,
+		ActingPrincipalType: "employee",
+		ActingPrincipalId:   99,
+		ActingEmployeeId:    99,
+	})
+	if err != nil {
+		t.Fatalf("bank cancel: %v", err)
+	}
+	assertSingleDelete(t, dispatcher, "neg-bh-can")
+	assertMirrorCancelled(t, db, "neg-bh-can")
+	if resp.GetStatus() != "cancelled" {
+		t.Errorf("response status: got %q, want cancelled", resp.GetStatus())
+	}
+}
+
+// TestRemoteNegAction_BankCallerOnClientChain_NotFound — a caller acting AS THE
+// BANK on a CLIENT-hosted chain (hosted side is "client-9", NOT a bank id) is
+// NOT a party → NotFound, no proxy. (Existence must not leak; the bank may only
+// drive bank-owned chains.)
+func TestRemoteNegAction_BankCallerOnClientChain_NotFound(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{proxyStatus: 204}
+	accounts := &fakeOTCAccountClient{acct: usdBankAccount()}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	// Client-hosted chain: we host buyer client-9.
+	nid := seedRemoteNeg(t, db, "neg-cli", "client-9", "client-77", "")
+
+	_, err := h.CancelNegotiation(context.Background(), &stockpb.CancelNegotiationRequest{
+		NegotiationId:       nid,
+		CallerOwnerType:     "bank",
+		CallerOwnerId:       0,
+		ActingPrincipalType: "employee",
+		ActingPrincipalId:   99,
+		ActingEmployeeId:    99,
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("bank caller on a client chain: expected NotFound, got %v", err)
+	}
+	if len(dispatcher.proxyCalls) != 0 {
+		t.Errorf("proxy must NOT fire for a bank caller on a client-hosted chain: %+v", dispatcher.proxyCalls)
+	}
+}
+
+// TestRemoteNegAction_ClientCallerOnBankChain_NotFound — a CLIENT caller on a
+// BANK-hosted chain (hosted side "employee-42") is NOT the party → NotFound, no
+// proxy. The bank chain is only driveable by a bank caller.
+func TestRemoteNegAction_ClientCallerOnBankChain_NotFound(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{proxyStatus: 204}
+	accounts := &fakeOTCAccountClient{acct: usdBankAccount()}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	nid := seedBankHostedRemoteNeg(t, db, "neg-bh-cli", 42, "client-77", "")
+
+	_, err := h.CancelNegotiation(context.Background(), &stockpb.CancelNegotiationRequest{
+		NegotiationId:       nid,
+		CallerOwnerType:     "client",
+		CallerOwnerId:       42, // a client whose id collides with the employee number — still not the bank
+		ActingPrincipalType: "client",
+		ActingPrincipalId:   42,
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("client caller on a bank chain: expected NotFound, got %v", err)
+	}
+	if len(dispatcher.proxyCalls) != 0 {
+		t.Errorf("proxy must NOT fire for a client caller on a bank-hosted chain: %+v", dispatcher.proxyCalls)
 	}
 }

@@ -106,6 +106,132 @@ func TestExerciseContract_Remote_HolderDispatches(t *testing.T) {
 	}
 }
 
+// SP-3 Task 5: the BANK is the buyer/holder of a cross-bank CREDIT contract
+// (RemoteBuyerID "employee-<N>"); a caller acting AS THE BANK (actor_system_type
+// "bank", on_behalf_of_client_id 0) exercises it. Authorized → the cross-bank
+// dispatch fires with the bank's bound settlement account.
+func TestExerciseContract_Remote_BankHolderDispatches(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	h, fx, cb := newRemoteExerciseFixture(t, ownRouting)
+	seedPeerContract(t, fx, &peerContractSeed{
+		ID:                 910,
+		CrossbankTxID:      "tx-910",
+		PostingIndex:       0,
+		NegotiationID:      "neg-910",
+		BuyerRoutingNumber: ownRouting, BuyerID: "employee-42", // WE host the BANK buyer
+		SellerRoutingNumber: peerSellerRouting, SellerID: "client-3",
+		Ticker:         "ACME",
+		Quantity:       5,
+		StrikePrice:    decimal.NewFromInt(200),
+		Currency:       "USD",
+		SettlementDate: "2030-01-01",
+		Direction:      "CREDIT",
+		Status:         "active",
+		CreatedAt:      time.Now(),
+	})
+
+	resp, err := h.ExerciseContract(context.Background(), &stockpb.ExerciseContractRequest{
+		ContractId:         910,
+		ActorUserId:        0,      // bank actor has no user id
+		ActorSystemType:    "bank", // acting AS THE BANK
+		OnBehalfOfClientId: 0,      // 0 = acting as the bank, not on behalf of a client
+		BuyerAccountNumber: "111-BANK-USD-01",
+	})
+	if err != nil {
+		t.Fatalf("bank holder exercise: unexpected err: %v", err)
+	}
+	if !cb.called {
+		t.Fatalf("cross-bank exercise was NOT dispatched for the bank holder")
+	}
+	if cb.gotReq.GetPeerOptionContractId() != 910 {
+		t.Errorf("dispatched contract id = %d, want 910", cb.gotReq.GetPeerOptionContractId())
+	}
+	// Settlement uses the bank's bound account (gateway-validated as a bank account).
+	if cb.gotReq.GetBuyerAccountNumber() != "111-BANK-USD-01" {
+		t.Errorf("dispatched buyer account = %q, want 111-BANK-USD-01", cb.gotReq.GetBuyerAccountNumber())
+	}
+	if resp.GetContractId() != 910 {
+		t.Errorf("resp contract id = %d, want 910", resp.GetContractId())
+	}
+}
+
+// A client caller may NOT exercise a BANK-hosted (employee-<N>) buyer contract,
+// even if their client id collides with the employee number → NotFound, no
+// dispatch.
+func TestExerciseContract_Remote_ClientCannotExerciseBankContract(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	h, fx, cb := newRemoteExerciseFixture(t, ownRouting)
+	seedPeerContract(t, fx, &peerContractSeed{
+		ID:                 911,
+		CrossbankTxID:      "tx-911",
+		PostingIndex:       0,
+		NegotiationID:      "neg-911",
+		BuyerRoutingNumber: ownRouting, BuyerID: "employee-42", // BANK buyer
+		SellerRoutingNumber: peerSellerRouting, SellerID: "client-3",
+		Ticker:         "ACME",
+		Quantity:       5,
+		StrikePrice:    decimal.NewFromInt(200),
+		Currency:       "USD",
+		SettlementDate: "2030-01-01",
+		Direction:      "CREDIT",
+		Status:         "active",
+		CreatedAt:      time.Now(),
+	})
+
+	_, err := h.ExerciseContract(context.Background(), &stockpb.ExerciseContractRequest{
+		ContractId:         911,
+		ActorUserId:        42, // a client whose id collides with the employee number
+		ActorSystemType:    "client",
+		BuyerAccountNumber: "265-12-13",
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("client on a bank contract: expected NotFound, got %v", err)
+	}
+	if cb.called {
+		t.Fatalf("cross-bank exercise must NOT dispatch for a client on a bank-buyer contract")
+	}
+}
+
+// An employee acting ON BEHALF OF A CLIENT (on_behalf_of_client_id != 0) is NOT
+// acting as the bank → may not exercise a bank-hosted contract → NotFound.
+func TestExerciseContract_Remote_OnBehalfOfClientNotBank(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	h, fx, cb := newRemoteExerciseFixture(t, ownRouting)
+	seedPeerContract(t, fx, &peerContractSeed{
+		ID:                 912,
+		CrossbankTxID:      "tx-912",
+		PostingIndex:       0,
+		NegotiationID:      "neg-912",
+		BuyerRoutingNumber: ownRouting, BuyerID: "employee-42",
+		SellerRoutingNumber: peerSellerRouting, SellerID: "client-3",
+		Ticker:         "ACME",
+		Quantity:       5,
+		StrikePrice:    decimal.NewFromInt(200),
+		Currency:       "USD",
+		SettlementDate: "2030-01-01",
+		Direction:      "CREDIT",
+		Status:         "active",
+		CreatedAt:      time.Now(),
+	})
+
+	_, err := h.ExerciseContract(context.Background(), &stockpb.ExerciseContractRequest{
+		ContractId:         912,
+		ActorUserId:        0,
+		ActorSystemType:    "bank",
+		OnBehalfOfClientId: 77, // acting on behalf of a client, NOT as the bank
+		BuyerAccountNumber: "111-BANK-USD-01",
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("on-behalf-of-client on a bank contract: expected NotFound, got %v", err)
+	}
+	if cb.called {
+		t.Fatalf("cross-bank exercise must NOT dispatch when acting on behalf of a client")
+	}
+}
+
 // A NON-holder caller (a different client, not the buyer this bank hosts) →
 // NotFound, and NO cross-bank dispatch (existence must not leak, money must not
 // move).
