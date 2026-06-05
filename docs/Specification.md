@@ -3197,6 +3197,6 @@ Per Celina 5 §"Plaćanja" (*"u celosti, ili ne uopšte"*):
 
 ### Out of scope
 
-- Bank-side OTC participation across banks — employees acting as bank can already participate intra-bank, but the unified remote-bid path (`POST /api/v3/otc/options/:id/bid` against a remote listing) forces `client-<n>` from the JWT principal (a bank/employee-acting-as-bank remote bidder is rejected with 409, SP-3 deferral).
+- ~~Bank-side OTC participation across banks~~ — **DELIVERED in SP-3 (2026-06-05).** An employee acting as the bank is now a first-class cross-bank OTC principal: bank-owned offers publish `employee-<ActingEmployeeID>` on the SI-TX wire (biddable by peers), and the bank can bid/counter/accept/reject/cancel/exercise cross-bank against BANK accounts/holdings (sentinel `1000000000`). The unified bid path (`POST /api/v3/otc/options/:id/bid` against a remote listing) now publishes `buyerId=employee-<N>` for the bank principal (no longer a 409); the wire id is stable per-resource via the `acting_employee_id` column; the bank sees its own remote chains in all read views; inbound `employee-<N>` party ids parse to bank ownership; the exercise strike account is gated (gateway `ResolveAndCheckAccountByNumber` + stock-service bank re-assert).
 - Cross-bank currency conversion at exercise — buyer must hold the strike currency directly; cross-currency strikes would need exchange-service plumbing through the SI-TX path.
 - HMAC outbound auth has been wired but not exercised end-to-end with another team's bank.
