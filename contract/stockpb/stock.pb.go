@@ -16085,8 +16085,15 @@ type LookupPeerOptionContractResponse struct {
 	Currency       string                 `protobuf:"bytes,6,opt,name=currency,proto3" json:"currency,omitempty"`
 	SettlementDate string                 `protobuf:"bytes,7,opt,name=settlement_date,json=settlementDate,proto3" json:"settlement_date,omitempty"` // ISO-8601 string (lex-comparable, SI-TX shape)
 	Status         string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`                                       // "active" | "exercising" | "exercised" | ...
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// seller_account_number is the seller's NOMINATED 18-digit account number,
+	// bound at accept (the local listing's InitiatorAccountID). When set, the
+	// transaction-service executor credits the strike to THIS exact account on
+	// exercise instead of resolving seller_id to the seller's first active
+	// <currency> account. Empty ⇒ no nomination stored (older contract / unbound)
+	// → the executor falls back to seller_id participant resolution.
+	SellerAccountNumber string `protobuf:"bytes,9,opt,name=seller_account_number,json=sellerAccountNumber,proto3" json:"seller_account_number,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *LookupPeerOptionContractResponse) Reset() {
@@ -16171,6 +16178,13 @@ func (x *LookupPeerOptionContractResponse) GetSettlementDate() string {
 func (x *LookupPeerOptionContractResponse) GetStatus() string {
 	if x != nil {
 		return x.Status
+	}
+	return ""
+}
+
+func (x *LookupPeerOptionContractResponse) GetSellerAccountNumber() string {
+	if x != nil {
+		return x.SellerAccountNumber
 	}
 	return ""
 }
@@ -20504,7 +20518,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x11released_quantity\x18\x01 \x01(\x03R\x10releasedQuantity\"\x86\x01\n" +
 	"\x1fLookupPeerOptionContractRequest\x12<\n" +
 	"\x1anegotiation_routing_number\x18\x01 \x01(\x03R\x18negotiationRoutingNumber\x12%\n" +
-	"\x0enegotiation_id\x18\x02 \x01(\tR\rnegotiationId\"\x89\x02\n" +
+	"\x0enegotiation_id\x18\x02 \x01(\tR\rnegotiationId\"\xbd\x02\n" +
 	" LookupPeerOptionContractResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
 	"\tseller_id\x18\x02 \x01(\tR\bsellerId\x12\x16\n" +
@@ -20513,7 +20527,8 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\bquantity\x18\x05 \x01(\x03R\bquantity\x12\x1a\n" +
 	"\bcurrency\x18\x06 \x01(\tR\bcurrency\x12'\n" +
 	"\x0fsettlement_date\x18\a \x01(\tR\x0esettlementDate\x12\x16\n" +
-	"\x06status\x18\b \x01(\tR\x06status\"\xbf\x01\n" +
+	"\x06status\x18\b \x01(\tR\x06status\x122\n" +
+	"\x15seller_account_number\x18\t \x01(\tR\x13sellerAccountNumber\"\xbf\x01\n" +
 	"\x1aCreateRecurringFundRequest\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\x04R\bclientId\x12\x17\n" +
 	"\afund_id\x18\x02 \x01(\x04R\x06fundId\x12\x1d\n" +

@@ -2261,6 +2261,13 @@ message LookupPeerOptionContractResponse {
   string currency = 6;
   string settlement_date = 7;  // ISO-8601 string (lex-comparable, SI-TX shape)
   string status = 8;           // "active" | "exercising" | "exercised" | ...
+  // seller_account_number is the seller's NOMINATED 18-digit account number,
+  // bound at accept (the local listing's InitiatorAccountID). When set, the
+  // transaction-service executor credits the strike to THIS exact account on
+  // exercise instead of resolving seller_id to the seller's first active
+  // <currency> account. Empty ⇒ no nomination stored (older contract / unbound)
+  // → the executor falls back to seller_id participant resolution.
+  string seller_account_number = 9;
 }
 
 // ---- RecurringFundService -----------------------------------------------

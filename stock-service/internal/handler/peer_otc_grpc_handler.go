@@ -71,6 +71,25 @@ type LocalParentChecker interface {
 	LocalParentIsOpen(offerID uint64) bool
 }
 
+// SellerAccountResolver returns the seller's NOMINATED account NUMBER for a
+// cross-bank negotiation WE host the seller side of, so the seller-credit legs
+// we compose target that exact account (spec §2.6 TxAccount.ACCOUNT{num})
+// instead of being resolved loosely to "the seller's first active account in
+// the currency" on our own posting executor.
+//
+// The nominated account is the local parent listing's InitiatorAccountID (the
+// account the seller bound at offer creation — it RECEIVES the premium on a
+// sell_initiated offer, mirroring the local accept saga's
+// sellerAccountID = offer.InitiatorAccountID). Returns "" when no nomination is
+// available (free-form negotiation with no local parent listing, an unbound
+// account, or an account that fails the active/owner/currency checks) — the
+// caller then falls back to the participant id (the documented first-active
+// path). Optional — nil disables the pin (legacy/test mode keeps the prior
+// participant-id behaviour).
+type SellerAccountResolver interface {
+	ResolveSellerAccountNumber(ctx context.Context, neg *model.OTCNegotiation, premiumCurrency string) string
+}
+
 // PeerOTCGRPCHandler implements stockpb.PeerOTCServiceServer.
 //
 // GetPublicStocks queries the local holdings table for rows flagged
@@ -165,6 +184,12 @@ type PeerOTCGRPCHandler struct {
 	// still being open (when WE host the listing). Optional — nil disables the
 	// check. Wired via WithParentChecker. Closes the inbound orphan-accept hole.
 	parentChecker LocalParentChecker
+
+	// sellerAccountResolver resolves the seller's nominated account number so the
+	// seller-credit legs we compose target a concrete account (ACCOUNT{num})
+	// rather than the participant id (resolved first-active). Optional — nil keeps
+	// the prior participant-id behaviour. Wired via WithSellerAccountResolver.
+	sellerAccountResolver SellerAccountResolver
 }
 
 // PeerCapitalGainRepo is the narrow surface PeerOTCGRPCHandler uses to
@@ -194,6 +219,16 @@ func (h *PeerOTCGRPCHandler) WithSellerValidator(v LocalSellerValidator) *PeerOT
 // for chaining. nil leaves the check disabled (legacy/test mode).
 func (h *PeerOTCGRPCHandler) WithParentChecker(c LocalParentChecker) *PeerOTCGRPCHandler {
 	h.parentChecker = c
+	return h
+}
+
+// WithSellerAccountResolver wires the seller-nominated-account resolver consulted
+// by AcceptNegotiation (and the COMMIT-time RecordOptionContract) so the
+// seller-credit legs target the bound account (ACCOUNT{num}) instead of the
+// loosely-resolved participant id. Returns the handler for chaining. nil leaves
+// the prior participant-id behaviour in place (legacy/test mode).
+func (h *PeerOTCGRPCHandler) WithSellerAccountResolver(r SellerAccountResolver) *PeerOTCGRPCHandler {
+	h.sellerAccountResolver = r
 	return h
 }
 
@@ -885,27 +920,48 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	if offer.BuyerAccountNumber != "" {
 		buyerAccountID = offer.BuyerAccountNumber
 	}
+	// Seller-credit nomination (the symmetric fix to the buyer-debit pin above).
+	// WE host the seller, so the seller-CREDIT money leg is composed by us and
+	// resolved by OUR OWN posting executor. Bind the seller's NOMINATED account
+	// number — the local parent listing's InitiatorAccountID (mirrors the local
+	// accept saga's sellerAccountID = offer.InitiatorAccountID on a sell_initiated
+	// offer) — and emit it as a concrete ACCOUNT{num} leg, so the premium lands in
+	// the account the seller chose at offer creation rather than "the seller's
+	// first active <currency> account". When no nomination is resolvable (free-form
+	// negotiation with no local parent listing, an unbound account, or one failing
+	// the active/owner/currency checks) the resolver returns "" and we keep the
+	// participant id (the documented first-active fallback). The OPTION legs ALWAYS
+	// keep the seller PARTICIPANT id — it becomes the contract's seller_id used for
+	// the exercise share-consume + /me/otc/contracts listing.
+	sellerAccountID := sellerID
+	if h.sellerAccountResolver != nil {
+		if num := h.sellerAccountResolver.ResolveSellerAccountNumber(ctx, row, offer.PremiumCurrency); num != "" {
+			sellerAccountID = num
+		}
+	}
 	// Money legs (premium) carry account numbers — the buyer's pinned account
-	// for the DEBIT (so the executor debits the exact account), and the seller's
-	// participant id for the CREDIT (executor resolves to any active currency
-	// account). Option-asset legs carry PARTICIPANT ids ("client-<n>") on BOTH
-	// sides: that id becomes the peer_option_contract's buyer_id/seller_id, which
-	// must be parseable as a participant for the exercise share-credit and for
-	// the /me/otc/contracts listing (ListByLocalParticipant matches buyer_id =
-	// "client-<principal>"). Using the buyer account number on the option leg
-	// (the old bug) left an unparseable buyer_id — exercise couldn't credit the
-	// buyer and the contract was invisible in their listing.
+	// for the DEBIT and the seller's nominated account for the CREDIT (so the
+	// executor credits the exact account); when either nomination is absent the
+	// leg falls back to the participant id, which the executor resolves to an
+	// active currency account. Option-asset legs carry PARTICIPANT ids
+	// ("client-<n>") on BOTH sides: that id becomes the peer_option_contract's
+	// buyer_id/seller_id, which must be parseable as a participant for the exercise
+	// share-credit and for the /me/otc/contracts listing (ListByLocalParticipant
+	// matches buyer_id = "client-<principal>"). Using an account number on the
+	// option leg (the old bug) left an unparseable buyer_id/seller_id — exercise
+	// couldn't credit/consume and the contract was invisible in their listing.
 	// Type tags (SI-TX §3.6) — the downstream executor detects an option leg via
 	// AssetType=="OPTION" (not by sniffing the asset_id prefix) and the outbound
 	// wire builder uses AccountType/AssetType to construct the spec account/asset
 	// tagged unions. The two premium legs carry MONAS; the two option legs OPTION.
 	// AccountType is derived from the AccountId form: a raw 18-digit bank account
-	// number → ACCOUNT, a "client-N"/"employee-N" participant id → PERSON. Only the
-	// premium DEBIT (posting 0) may carry an account number (the buyer's pinned
-	// account when BuyerAccountNumber is set); all other legs carry participant ids.
+	// number → ACCOUNT, a "client-N"/"employee-N" participant id → PERSON. The two
+	// premium money legs (postings 0 and 1) carry a pinned account number when the
+	// buyer / seller nominated one (else the participant id); the two OPTION legs
+	// (postings 2 and 3) always carry participant ids.
 	postings := []*transactionpb.SiTxPosting{
 		{RoutingNumber: buyerRouting, AccountId: buyerAccountID, AccountType: accountTypeFor(buyerAccountID), AssetId: offer.PremiumCurrency, AssetType: contractsitx.AssetTypeMonas, Amount: premium, Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: sellerRouting, AccountId: sellerID, AccountType: accountTypeFor(sellerID), AssetId: offer.PremiumCurrency, AssetType: contractsitx.AssetTypeMonas, Amount: premium, Direction: contractsitx.DirectionCredit},
+		{RoutingNumber: sellerRouting, AccountId: sellerAccountID, AccountType: accountTypeFor(sellerAccountID), AssetId: offer.PremiumCurrency, AssetType: contractsitx.AssetTypeMonas, Amount: premium, Direction: contractsitx.DirectionCredit},
 		{RoutingNumber: sellerRouting, AccountId: sellerID, AccountType: accountTypeFor(sellerID), AssetId: optAssetID, AssetType: contractsitx.AssetTypeOption, Amount: "1", Direction: contractsitx.DirectionDebit},
 		{RoutingNumber: buyerRouting, AccountId: buyerID, AccountType: accountTypeFor(buyerID), AssetId: optAssetID, AssetType: contractsitx.AssetTypeOption, Amount: "1", Direction: contractsitx.DirectionCredit},
 	}
@@ -1174,6 +1230,15 @@ func remoteContractSellerID(c *model.OptionContract) string {
 	return ""
 }
 
+// remoteContractSellerAccountNumber returns the seller's stored nominated account
+// number (the bound account on the local listing), or "" when none was stored.
+func remoteContractSellerAccountNumber(c *model.OptionContract) string {
+	if c.RemoteSellerAccountNumber != nil {
+		return *c.RemoteSellerAccountNumber
+	}
+	return ""
+}
+
 func remoteContractBuyerRouting(c *model.OptionContract) int64 {
 	if c.BuyerBankCode != nil {
 		if n, err := strconv.ParseInt(*c.BuyerBankCode, 10, 64); err == nil {
@@ -1388,6 +1453,21 @@ func (h *PeerOTCGRPCHandler) RecordOptionContract(ctx context.Context, req *stoc
 		req.GetBuyerId().GetRoutingNumber(), req.GetBuyerId().GetId(),
 		req.GetSellerId().GetRoutingNumber(), req.GetSellerId().GetId(),
 	)
+	// Sub-case 2 (producer side): on a SELLER-side (DEBIT) contract THIS bank
+	// hosts the seller. Resolve the seller's NOMINATED account number (the local
+	// listing's InitiatorAccountID) from the originating negotiation and persist it
+	// on the row, so the exercise strike credit (read back via
+	// LookupPeerOptionContract) lands in the bound account instead of the seller's
+	// first active <currency> account. Best-effort: an unresolved nomination leaves
+	// it NULL → the executor falls back to participant resolution. Buyer-side
+	// (CREDIT) rows never carry the seller's nomination.
+	if req.GetDirection() == contractsitx.DirectionDebit && h.sellerAccountResolver != nil {
+		if neg, nerr := h.negRepo.GetRemoteNegByNative(opt.NegotiationID.ID); nerr == nil && neg != nil {
+			if num := h.sellerAccountResolver.ResolveSellerAccountNumber(ctx, neg, opt.PricePerUnit.Currency); num != "" {
+				row.RemoteSellerAccountNumber = &num
+			}
+		}
+	}
 	if err := h.peerOptionRepo.UpsertRemoteContract(row); err != nil {
 		return nil, status.Errorf(codes.Internal, "persist peer option contract: %v", err)
 	}
@@ -1664,14 +1744,15 @@ func (h *PeerOTCGRPCHandler) LookupPeerOptionContract(_ context.Context, req *st
 		return nil, status.Errorf(codes.Internal, "lookup contract: %v", err)
 	}
 	return &stockpb.LookupPeerOptionContractResponse{
-		Found:          true,
-		SellerId:       remoteContractSellerID(contract),
-		Ticker:         contract.Ticker,
-		StrikePrice:    contract.StrikePrice.String(),
-		Quantity:       remoteContractQuantityInt(contract),
-		Currency:       contract.StrikeCurrency,
-		SettlementDate: remoteContractSettlementString(contract),
-		Status:         contract.Status,
+		Found:               true,
+		SellerId:            remoteContractSellerID(contract),
+		Ticker:              contract.Ticker,
+		StrikePrice:         contract.StrikePrice.String(),
+		Quantity:            remoteContractQuantityInt(contract),
+		Currency:            contract.StrikeCurrency,
+		SettlementDate:      remoteContractSettlementString(contract),
+		Status:              contract.Status,
+		SellerAccountNumber: remoteContractSellerAccountNumber(contract),
 	}, nil
 }
 

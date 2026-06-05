@@ -117,6 +117,13 @@ type OptionContract struct {
 	RemoteDirection           *string `gorm:"size:8" json:"-"`
 	RemoteBuyerID             *string `gorm:"size:128" json:"-"`
 	RemoteSellerID            *string `gorm:"size:128" json:"-"`
+	// RemoteSellerAccountNumber is the seller's NOMINATED 18-digit account number
+	// (the local listing's InitiatorAccountID resolved to its number), stored on a
+	// SELLER-side (DEBIT) REMOTE contract at accept-COMMIT. The exercise strike
+	// credit reads it back via LookupPeerOptionContract so the strike lands in the
+	// account the seller chose rather than their first active <currency> account.
+	// NULL ⇒ no nomination stored (older row / unbound) → first-active fallback.
+	RemoteSellerAccountNumber *string `gorm:"size:34" json:"-"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

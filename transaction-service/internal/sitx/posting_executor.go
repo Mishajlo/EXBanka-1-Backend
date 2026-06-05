@@ -300,8 +300,19 @@ func (e *PostingExecutor) reserveExercisePseudoLeg(ctx context.Context, p contra
 		}
 		// Resolve + credit the seller's money account, tracked like any MONAS
 		// credit so COMMIT settles (CommitIncoming) and ROLLBACK releases.
+		// Honour the seller's NOMINATED account (the account bound at accept,
+		// stored on the contract) when present: credit that concrete 18-digit
+		// number directly (resolveAccountForPosting passes account numbers through
+		// unchanged), so the strike lands in the account the seller chose rather
+		// than their first active <currency> account. Empty ⇒ no nomination stored
+		// (older contract / unbound) → fall back to seller_id participant
+		// resolution. (Sub-case 2 of the cross-bank OTC nominated-account fix.)
 		currency := p.AssetID
-		key, reason, ok := e.reserveIncomingCredit(ctx, look.GetSellerId(), currency, p.Amount, peerBankCode, locallyGeneratedKey)
+		creditTarget := look.GetSellerId()
+		if num := look.GetSellerAccountNumber(); num != "" {
+			creditTarget = num
+		}
+		key, reason, ok := e.reserveIncomingCredit(ctx, creditTarget, currency, p.Amount, peerBankCode, locallyGeneratedKey)
 		if !ok {
 			nv := noVote(reason, i)
 			return exercisePseudoResult{noVote: &nv}

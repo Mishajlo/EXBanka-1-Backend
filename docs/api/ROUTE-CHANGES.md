@@ -340,3 +340,31 @@ authenticated sender + this bank's persisted state decide who may accept.
 **Why this is better:** it no longer rejects an honest peer that happens to fill
 `lastModifiedBy` differently — a forged/odd payload routing is simply ignored, not
 fatal. Wire shapes are unchanged. Version bumped PATCH (2.8.0 → 2.8.1).
+
+---
+
+## 7. Cross-bank OTC settlement honors the seller's NOMINATED account (2.9.0)
+
+Money-path correctness fix. On a cross-bank OTC option **accept** and **exercise**,
+when a party WE host receives funds — the **seller's premium credit** (accept) and
+the **seller's strike credit** (exercise) — the destination now resolves to the
+account the seller NOMINATED (the local listing's bound `account_id` /
+`InitiatorAccountID`), instead of "the seller's first active account in that
+currency". Spec-legal per §2.6 (`TxAccount` may target a specific account via
+`ACCOUNT{num}`).
+
+| Flow | Before (2.8.x) | After (2.9.0) |
+|---|---|---|
+| `…/negotiations/:nid/accept` (cross-bank, we host the seller) | seller premium-CREDIT leg carried the seller PARTICIPANT id → receiver picked the seller's **first active** `<premium-ccy>` account | seller premium-CREDIT leg carries the bound **account number** (`ACCOUNT{num}`) → premium lands in the **nominated** account |
+| `…/contracts/:id/exercise` (cross-bank, we host the seller) | strike credit at the OPTION pseudo-account resolved the seller's **first active** `<strike-ccy>` account | strike credit targets the seller's **nominated** account, read back from the stored contract via the internal `LookupPeerOptionContract` |
+
+**No REST request/response shape changed.** `account_id` (listing create / bid) and
+`buyer_account_number` (exercise) are unchanged; the buyer-debit leg already pinned
+the buyer's bound account. Only the **money destination** for the seller's receipts
+improved (it now matches the local-accept saga, which already bound
+`sellerAccountID = offer.InitiatorAccountID`). When no nomination is resolvable
+(free-form negotiation with no local parent listing, an unbound account, or a
+wrong-currency account) the legs fall back to the prior first-active resolution —
+documented, conservation-preserving behavior. Verified live two-stack (premium and
+strike land in the nominated account with a 2-account seller; conservation holds,
+no stuck reservations). Version bumped MINOR (2.8.1 → 2.9.0).

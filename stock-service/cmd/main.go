@@ -954,6 +954,12 @@ func main() {
 	// client-<n> seller does not resolve to a real local client (closes the
 	// resource-pollution loophole found in the live adversarial sweep).
 	peerOtcHandler = peerOtcHandler.WithSellerValidator(handler.NewClientSellerValidator(clientClient))
+	// Seller-nominated-account binding: the seller-credit legs we compose on a
+	// cross-bank accept (and the strike credit at exercise) target the seller's
+	// bound account (the local listing's InitiatorAccountID) as a concrete
+	// ACCOUNT{num} posting, instead of the participant id resolved first-active.
+	peerOtcHandler = peerOtcHandler.WithSellerAccountResolver(
+		handler.NewSellerAccountResolver(otcOfferRepo, accountClient, ownRouting))
 
 	// Phase 6 refresher: now that otcOfferRepo and ownRouting exist,
 	// start the OPTION cache refresher that polls every active peer's
