@@ -6,9 +6,12 @@ package handler_test
 // claims OUR routing (routing_number == OwnRouting()), which would make the
 // row look LOCAL and corrupt the local-vs-remote invariant.
 //
-// These tests cover the RecordOptionContract guard. The CreateNegotiation and
-// RecordOutboundNegotiation guards were added in Task 5 and verified there;
-// the otccache guard is tested in internal/otccache/option_cache_test.go.
+// These tests cover:
+//   - RecordOptionContract guard (own-counterparty-routing rejection)
+//   - CreateNegotiation guard (peer_bank_code == own routing rejected)
+//   - RecordOutboundNegotiation guard (peer_bank_code == own routing rejected)
+//
+// The otccache guard is tested in internal/otccache/option_cache_test.go.
 
 import (
 	"context"
@@ -60,11 +63,11 @@ func TestPeerOTC_RecordOptionContract_OwnCounterpartyRouting_Rejected(t *testing
 	}
 }
 
-// TestPeerOTC_RecordOptionContract_OwnCounterpartyRouting_CreditDirection_Rejected
-// verifies the CREDIT direction variant: buyer=this bank (111), seller=other bank (222)
-// → CREDIT direction counterparty = seller routing = 222 ≠ OwnRouting() → ALLOWED.
-// CREDIT direction, buyer=222, seller=111 → counterparty = buyer routing = 222 ≠ OwnRouting() → ALLOWED.
-// CREDIT direction, buyer=111, seller=111 → counterparty = seller routing = 111 = OwnRouting() → REJECTED.
+// TestPeerOTC_RecordOptionContract_OwnCounterpartyRouting_CreditBothOwn_Rejected
+// verifies the CREDIT direction variant where both parties are on this bank.
+// For CREDIT direction, remoteContractCounterpartyRouting() returns the SELLER
+// routing (the bank that sold the option). With buyer=111 AND seller=111 the
+// seller routing == OwnRouting() (111) → the row would look local → REJECTED.
 func TestPeerOTC_RecordOptionContract_OwnCounterpartyRouting_CreditBothOwn_Rejected(t *testing.T) {
 	h, _, _, _ := newPeerOtcHandler(t) // ownRouting = 111
 
@@ -93,6 +96,75 @@ func TestPeerOTC_RecordOptionContract_OwnCounterpartyRouting_CreditBothOwn_Rejec
 		t.Errorf("expected InvalidArgument, got %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// CreateNegotiation collision guard
+// ---------------------------------------------------------------------------
+
+// TestPeerOTC_CreateNegotiation_OwnRouting_Rejected verifies that
+// CreateNegotiation rejects a payload whose peer_bank_code resolves to this
+// bank's own routing number. The unified table keys remote negotiation rows on
+// routing_number=<peer>; if the peer routing equals OwnRouting() the row would
+// alias a local chain and corrupt the local-vs-remote invariant.
+//
+// Guard location: peer_otc_grpc_handler.go CreateNegotiation(), after
+// peer_bank_code is parsed and before the UpsertRemoteNeg call.
+func TestPeerOTC_CreateNegotiation_OwnRouting_Rejected(t *testing.T) {
+	h, _, _, _ := newPeerOtcHandler(t) // ownRouting = 111
+
+	// Provide a minimal valid offer, buyer_id, and seller_id so the handler
+	// reaches the collision guard (nil-arg check comes first). The guard keys
+	// on peer_bank_code, so "111" (== OwnRouting()) must trigger rejection
+	// regardless of the buyer/seller values.
+	_, err := h.CreateNegotiation(context.Background(), &stockpb.CreateNegotiationRequest{
+		PeerBankCode: "111", // == OwnRouting() — must be rejected
+		Offer:        &stockpb.PeerOtcOffer{Ticker: "AAPL", Amount: 1},
+		BuyerId:      &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-20"},
+		SellerId:     &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-7"},
+	})
+	if err == nil {
+		t.Fatal("expected error: peer_bank_code colliding with own routing must be rejected")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RecordOutboundNegotiation collision guard
+// ---------------------------------------------------------------------------
+
+// TestPeerOTC_RecordOutboundNegotiation_OwnRouting_Rejected verifies that
+// RecordOutboundNegotiation rejects a payload whose peer_bank_code resolves to
+// this bank's own routing. The buyer-side mirror row is keyed on
+// routing_number=<seller bank>; if the peer routing equals OwnRouting() the
+// row would alias a local chain and leak into local money paths.
+//
+// Guard location: peer_otc_grpc_handler.go RecordOutboundNegotiation(), after
+// peerRoutingForCode() and before UpsertRemoteNeg.
+func TestPeerOTC_RecordOutboundNegotiation_OwnRouting_Rejected(t *testing.T) {
+	h, _, _, _ := newPeerOtcHandler(t) // ownRouting = 111
+
+	// Minimal valid fields so the nil-arg guard passes; only peer_bank_code
+	// needs to equal OwnRouting() to trigger the collision guard.
+	_, err := h.RecordOutboundNegotiation(context.Background(), &stockpb.RecordOutboundNegotiationRequest{
+		PeerBankCode:  "111", // == OwnRouting() — must be rejected
+		NegotiationId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "neg-outbound"},
+		BuyerId:       &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-10"},
+		SellerId:      &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-7"},
+		Offer:         &stockpb.PeerOtcOffer{Ticker: "MSFT", Amount: 2},
+	})
+	if err == nil {
+		t.Fatal("expected error: peer_bank_code colliding with own routing must be rejected")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RecordOptionContract happy-path sanity check
+// ---------------------------------------------------------------------------
 
 // TestPeerOTC_RecordOptionContract_LegitCrossBank_Allowed verifies that a
 // genuine cross-bank contract (buyer on one bank, seller on the other) is
