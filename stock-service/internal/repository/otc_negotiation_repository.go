@@ -329,6 +329,21 @@ func (r *OTCNegotiationRepository) UpsertRemoteNeg(n *model.OTCNegotiation) erro
 	}).Create(n).Error
 }
 
+// GetRemoteNegByID loads a REMOTE negotiation by its surrogate primary key.
+// A row whose routing_number == OwnRouting() is a LOCAL chain and is treated as
+// not-found here, so a local surrogate id never resolves through the remote
+// dispatch path. Mirrors OTCOfferRepository.GetRemoteByID (SP-2b Task 4).
+func (r *OTCNegotiationRepository) GetRemoteNegByID(id uint64) (*model.OTCNegotiation, error) {
+	var n model.OTCNegotiation
+	if err := r.db.First(&n, id).Error; err != nil {
+		return nil, err
+	}
+	if n.RoutingNumber == model.OwnRouting() {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &n, nil
+}
+
 // GetRemoteNegByRoutingAndNative loads a remote negotiation by its (peer
 // routing, native id). Returns ErrRecordNotFound when no remote row matches or
 // when the matched row is local (routing == own).

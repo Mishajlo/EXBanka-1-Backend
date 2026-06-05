@@ -53,6 +53,31 @@ type fakePeerDispatcher struct {
 	routing         int64
 	foreignID       string
 	err             error
+
+	// Proxy capture (SP-2b Task 4): each Proxy call is appended to proxyCalls
+	// so tests can assert which verb/subpath/peer fired (e.g. the cascade
+	// DELETE to a sibling bidder's bank). proxyResp/proxyStatus/proxyErr are
+	// the canned return; proxyByKey overrides per "method subpath" route.
+	proxyCalls  []proxyCall
+	proxyResp   []byte
+	proxyStatus int
+	proxyErr    error
+	proxyByKey  map[string]proxyResult
+}
+
+type proxyCall struct {
+	peerBankCode string
+	rid          string
+	foreignID    string
+	method       string
+	subpath      string
+	body         []byte
+}
+
+type proxyResult struct {
+	resp   []byte
+	status int
+	err    error
 }
 
 func (f *fakePeerDispatcher) CreateNegotiation(_ context.Context, peerBankCode string, offer map[string]any) (int64, string, error) {
@@ -63,6 +88,24 @@ func (f *fakePeerDispatcher) CreateNegotiation(_ context.Context, peerBankCode s
 		return 0, "", f.err
 	}
 	return f.routing, f.foreignID, nil
+}
+
+func (f *fakePeerDispatcher) Proxy(_ context.Context, peerBankCode, rid, foreignID, method, subpath string, body []byte) ([]byte, int, error) {
+	f.proxyCalls = append(f.proxyCalls, proxyCall{
+		peerBankCode: peerBankCode, rid: rid, foreignID: foreignID,
+		method: method, subpath: subpath, body: body,
+	})
+	if r, ok := f.proxyByKey[method+" "+subpath]; ok {
+		return r.resp, r.status, r.err
+	}
+	if f.proxyErr != nil {
+		return nil, f.proxyStatus, f.proxyErr
+	}
+	st := f.proxyStatus
+	if st == 0 {
+		st = 200
+	}
+	return f.proxyResp, st, nil
 }
 
 // newRemoteBidFixture builds an OTCOptionsHandler wired for SP-2b remote bid

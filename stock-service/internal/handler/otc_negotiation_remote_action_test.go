@@ -1,0 +1,320 @@
+// Package handler — cross-bank (REMOTE) dispatch tests for the negotiation
+// ACTIONS (counter / accept / reject / cancel) on a folded-in REMOTE chain
+// (Unified OTC SP-2b Task 4). These exercise the REMOTE branch of each action
+// RPC: when :nid resolves to a peer-hosted chain, the action is proxied to the
+// counterparty bank over SI-TX and the local mirror is updated to match.
+//
+//   - counter PUTs the new terms + mirrors the offer JSON,
+//   - accept GETs /accept + flips the mirror to accepted + cascade-cancels
+//     siblings (a fake sibling asserts the DELETE proxy fired),
+//   - reject/cancel DELETE + mirror cancelled,
+//   - a NON-party caller → NotFound (existence not leaked),
+//   - the composed counter offer body uses JSON-NUMBER amounts (SI-TX §2.5).
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/shopspring/decimal"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"gorm.io/gorm"
+
+	contractsitx "github.com/exbanka/contract/sitx"
+	stockpb "github.com/exbanka/contract/stockpb"
+	"github.com/exbanka/stock-service/internal/model"
+	"github.com/exbanka/stock-service/internal/repository"
+)
+
+// seedRemoteNeg inserts a folded-in REMOTE OTCNegotiation chain into the unified
+// table. We host the BUYER (buyerRouting == own=111); the seller is on peer 222.
+// parentNative groups the chain for cascade-cancel; pass "" for a free-form
+// chain. Returns the surrogate id.
+func seedRemoteNeg(t *testing.T, db *gorm.DB, foreignID, buyerID, sellerID, parentNative string) uint64 {
+	t.Helper()
+	offer := contractsitx.OtcOffer{
+		Ticker:          "AAPL",
+		Amount:          10,
+		PricePerStock:   decimal.RequireFromString("150"),
+		Currency:        "USD",
+		Premium:         decimal.RequireFromString("20"),
+		PremiumCurrency: "USD",
+		SettlementDate:  "2026-07-01",
+		LastModifiedBy:  contractsitx.ForeignBankId{RoutingNumber: 222, ID: sellerID},
+	}
+	offerJSON, _ := json.Marshal(offer)
+	var parentRoutingPtr *int64
+	var parentNativePtr *string
+	if parentNative != "" {
+		pr := int64(222)
+		pn := parentNative
+		parentRoutingPtr = &pr
+		parentNativePtr = &pn
+	}
+	// peerRouting=222 (the issuing/seller bank), buyer hosted locally (111).
+	row := buildRemoteNeg(
+		222, foreignID, offer, string(offerJSON),
+		111, buyerID, // buyer hosted by us
+		222, sellerID, // seller on the peer
+		parentRoutingPtr, parentNativePtr, "ongoing",
+	)
+	if err := repository.NewOTCNegotiationRepository(db).UpsertRemoteNeg(row); err != nil {
+		t.Fatalf("seed remote neg %q: %v", foreignID, err)
+	}
+	got, err := repository.NewOTCNegotiationRepository(db).GetRemoteNegByRoutingAndNative(222, foreignID)
+	if err != nil {
+		t.Fatalf("read seeded remote neg %q: %v", foreignID, err)
+	}
+	return got.ID
+}
+
+func counterReq(nid, callerID uint64) *stockpb.CounterNegotiationRequest {
+	return &stockpb.CounterNegotiationRequest{
+		NegotiationId:       nid,
+		CallerOwnerType:     "client",
+		CallerOwnerId:       callerID,
+		Quantity:            "10",
+		StrikePrice:         "155.5",
+		Premium:             "22.5",
+		SettlementDate:      "2026-07-01",
+		ActingPrincipalType: "client",
+		ActingPrincipalId:   callerID,
+	}
+}
+
+func TestCounterNegotiation_RemoteChain_PutsAndMirrors(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{proxyStatus: 200, proxyResp: []byte(`{}`)}
+	accounts := &fakeOTCAccountClient{acct: usdAccount(9)}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	nid := seedRemoteNeg(t, db, "neg-1", "client-9", "client-77", "")
+
+	resp, err := h.CounterNegotiation(context.Background(), counterReq(nid, 9))
+	if err != nil {
+		t.Fatalf("CounterNegotiation: %v", err)
+	}
+
+	// A single PUT to /negotiations/222/neg-1 on the counterparty (seller=222).
+	if len(dispatcher.proxyCalls) != 1 {
+		t.Fatalf("proxy called %d times, want 1", len(dispatcher.proxyCalls))
+	}
+	pc := dispatcher.proxyCalls[0]
+	if pc.method != "PUT" || pc.subpath != "" {
+		t.Errorf("proxy method/subpath: got %q %q, want PUT \"\"", pc.method, pc.subpath)
+	}
+	if pc.peerBankCode != "222" || pc.rid != "222" || pc.foreignID != "neg-1" {
+		t.Errorf("proxy target: got peer=%q rid=%q fid=%q", pc.peerBankCode, pc.rid, pc.foreignID)
+	}
+
+	// The composed offer body uses JSON-NUMBER amounts (SI-TX §2.5).
+	wire := string(pc.body)
+	if strings.Contains(wire, `"amount":"`) {
+		t.Errorf("counter body has quoted amount (string), want bare number; wire: %s", wire)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(pc.body, &parsed); err != nil {
+		t.Fatalf("unmarshal counter body: %v", err)
+	}
+	ppu, _ := parsed["pricePerUnit"].(map[string]any)
+	if ppu == nil || ppu["amount"].(float64) != 155.5 {
+		t.Errorf("pricePerUnit.amount: got %v, want 155.5", parsed["pricePerUnit"])
+	}
+	prem, _ := parsed["premium"].(map[string]any)
+	if prem == nil || prem["amount"].(float64) != 22.5 {
+		t.Errorf("premium.amount: got %v, want 22.5", parsed["premium"])
+	}
+
+	// The local mirror offer JSON was refreshed with the new strike/premium.
+	mirror, _ := repository.NewOTCNegotiationRepository(db).GetRemoteNegByRoutingAndNative(222, "neg-1")
+	var mo contractsitx.OtcOffer
+	_ = json.Unmarshal([]byte(remoteOfferJSONOf(mirror)), &mo)
+	if !mo.PricePerStock.Equal(decimal.RequireFromString("155.5")) {
+		t.Errorf("mirror strike: got %s, want 155.5", mo.PricePerStock)
+	}
+	if !mo.Premium.Equal(decimal.RequireFromString("22.5")) {
+		t.Errorf("mirror premium: got %s, want 22.5", mo.Premium)
+	}
+
+	if resp.GetKind() != "remote" || resp.GetId() != nid {
+		t.Errorf("response: kind=%q id=%d, want remote / %d", resp.GetKind(), resp.GetId(), nid)
+	}
+}
+
+func TestAcceptNegotiation_RemoteChain_AcceptsFlipsAndCascades(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{
+		proxyByKey: map[string]proxyResult{
+			"GET /accept": {resp: []byte(`{"transactionId":"tx-1","status":"accepted"}`), status: 200},
+			"DELETE ":     {resp: []byte(``), status: 204},
+		},
+	}
+	accounts := &fakeOTCAccountClient{acct: usdAccount(9)}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+
+	// The chain we accept + a sibling chain sharing the same lot key under the
+	// same seller (client-77). The sibling's buyer is on a DIFFERENT bank (333)
+	// so the cascade DELETE targets that bidder's bank.
+	winNID := seedRemoteNeg(t, db, "neg-win", "client-9", "client-77", "lot-abc")
+	sibNID := seedRemoteNeg(t, db, "neg-sib", "client-55", "client-77", "lot-abc")
+	// Point the sibling's buyer routing at bank 333 (a different bidder bank).
+	bumpSiblingBuyerRouting(t, db, sibNID, 333)
+
+	req := &stockpb.OTCAcceptNegotiationRequest{
+		NegotiationId:       winNID,
+		CallerOwnerType:     "client",
+		CallerOwnerId:       9,
+		ActingPrincipalType: "client",
+		ActingPrincipalId:   9,
+		AcceptorAccountId:   5001,
+	}
+	resp, err := h.AcceptNegotiationChain(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AcceptNegotiationChain: %v", err)
+	}
+
+	// The accept GET fired to the seller (222).
+	var sawAccept bool
+	var sawSiblingDelete bool
+	for _, pc := range dispatcher.proxyCalls {
+		if pc.method == "GET" && pc.subpath == "/accept" && pc.foreignID == "neg-win" && pc.peerBankCode == "222" {
+			sawAccept = true
+		}
+		if pc.method == "DELETE" && pc.foreignID == "neg-sib" && pc.peerBankCode == "333" {
+			sawSiblingDelete = true
+		}
+	}
+	if !sawAccept {
+		t.Errorf("expected GET /accept to seller 222; calls: %+v", dispatcher.proxyCalls)
+	}
+	if !sawSiblingDelete {
+		t.Errorf("expected cascade DELETE to sibling bidder bank 333; calls: %+v", dispatcher.proxyCalls)
+	}
+
+	// The local mirror for the winning chain flipped to accepted.
+	win, _ := repository.NewOTCNegotiationRepository(db).GetRemoteNegByRoutingAndNative(222, "neg-win")
+	if win.Status != "accepted" {
+		t.Errorf("winning mirror status: got %q, want accepted", win.Status)
+	}
+	// The sibling mirror flipped to cancelled.
+	sib, _ := repository.NewOTCNegotiationRepository(db).GetRemoteNegByRoutingAndNative(222, "neg-sib")
+	if sib.Status != "cancelled" {
+		t.Errorf("sibling mirror status: got %q, want cancelled", sib.Status)
+	}
+
+	// The response carries parent_status=accepted + the cancelled sibling.
+	if resp.GetParentStatus() != "accepted" {
+		t.Errorf("parent_status: got %q, want accepted", resp.GetParentStatus())
+	}
+	if len(resp.GetCancelledSiblings()) != 1 {
+		t.Fatalf("cancelled_siblings: got %d, want 1", len(resp.GetCancelledSiblings()))
+	}
+	if got := resp.GetCancelledSiblings()[0].GetId(); got != sibNID {
+		t.Errorf("cancelled sibling id: got %d, want %d", got, sibNID)
+	}
+}
+
+// bumpSiblingBuyerRouting points a seeded sibling's buyer routing at a different
+// bidder bank so the cascade DELETE targets that bank (not our own 111).
+func bumpSiblingBuyerRouting(t *testing.T, db *gorm.DB, id uint64, routing int64) {
+	t.Helper()
+	if err := db.Session(&gorm.Session{SkipHooks: true}).
+		Model(&model.OTCNegotiation{}).
+		Where("id = ?", id).
+		Update("remote_buyer_routing", routing).Error; err != nil {
+		t.Fatalf("bump sibling buyer routing: %v", err)
+	}
+}
+
+func TestRejectNegotiation_RemoteChain_DeletesAndMirrors(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{proxyStatus: 204}
+	accounts := &fakeOTCAccountClient{acct: usdAccount(9)}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	nid := seedRemoteNeg(t, db, "neg-r", "client-9", "client-77", "")
+
+	resp, err := h.RejectNegotiation(context.Background(), &stockpb.RejectNegotiationRequest{
+		NegotiationId:       nid,
+		CallerOwnerType:     "client",
+		CallerOwnerId:       9,
+		ActingPrincipalType: "client",
+		ActingPrincipalId:   9,
+	})
+	if err != nil {
+		t.Fatalf("RejectNegotiation: %v", err)
+	}
+	assertSingleDelete(t, dispatcher, "neg-r")
+	assertMirrorCancelled(t, db, "neg-r")
+	if resp.GetStatus() != "cancelled" {
+		t.Errorf("response status: got %q, want cancelled", resp.GetStatus())
+	}
+}
+
+func TestCancelNegotiation_RemoteChain_DeletesAndMirrors(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{proxyStatus: 204}
+	accounts := &fakeOTCAccountClient{acct: usdAccount(9)}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	nid := seedRemoteNeg(t, db, "neg-c", "client-9", "client-77", "")
+
+	resp, err := h.CancelNegotiation(context.Background(), &stockpb.CancelNegotiationRequest{
+		NegotiationId:       nid,
+		CallerOwnerType:     "client",
+		CallerOwnerId:       9,
+		ActingPrincipalType: "client",
+		ActingPrincipalId:   9,
+	})
+	if err != nil {
+		t.Fatalf("CancelNegotiation: %v", err)
+	}
+	assertSingleDelete(t, dispatcher, "neg-c")
+	assertMirrorCancelled(t, db, "neg-c")
+	if resp.GetStatus() != "cancelled" {
+		t.Errorf("response status: got %q, want cancelled", resp.GetStatus())
+	}
+}
+
+func assertSingleDelete(t *testing.T, d *fakePeerDispatcher, foreignID string) {
+	t.Helper()
+	if len(d.proxyCalls) != 1 {
+		t.Fatalf("proxy called %d times, want 1; calls: %+v", len(d.proxyCalls), d.proxyCalls)
+	}
+	pc := d.proxyCalls[0]
+	if pc.method != "DELETE" || pc.subpath != "" || pc.foreignID != foreignID || pc.peerBankCode != "222" {
+		t.Errorf("proxy call: got %+v, want DELETE \"\" %s on 222", pc, foreignID)
+	}
+}
+
+func assertMirrorCancelled(t *testing.T, db *gorm.DB, foreignID string) {
+	t.Helper()
+	m, err := repository.NewOTCNegotiationRepository(db).GetRemoteNegByRoutingAndNative(222, foreignID)
+	if err != nil {
+		t.Fatalf("read mirror %q: %v", foreignID, err)
+	}
+	if m.Status != "cancelled" {
+		t.Errorf("mirror status: got %q, want cancelled", m.Status)
+	}
+}
+
+func TestRemoteNegAction_NonParty_NotFound(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{proxyStatus: 204}
+	accounts := &fakeOTCAccountClient{acct: usdAccount(9)}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	// We host buyer client-9; caller client-42 is NOT a party.
+	nid := seedRemoteNeg(t, db, "neg-x", "client-9", "client-77", "")
+
+	_, err := h.CancelNegotiation(context.Background(), &stockpb.CancelNegotiationRequest{
+		NegotiationId:       nid,
+		CallerOwnerType:     "client",
+		CallerOwnerId:       42, // not a party
+		ActingPrincipalType: "client",
+		ActingPrincipalId:   42,
+	})
+	if err == nil {
+		t.Fatal("expected NotFound for a non-party caller, got nil")
+	}
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("code: got %v, want NotFound", status.Code(err))
+	}
+	if len(dispatcher.proxyCalls) != 0 {
+		t.Errorf("proxy should NOT fire for a non-party caller: %+v", dispatcher.proxyCalls)
+	}
+}

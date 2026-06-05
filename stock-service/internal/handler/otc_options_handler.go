@@ -59,13 +59,36 @@ type OTCOptionsHandler struct {
 	peerDispatch    PeerNegotiationDispatcher
 	remoteNegWriter RemoteNegotiationWriter
 	accounts        OTCAccountClient
+	// remoteNegOps backs the SP-2b Task-4 counter/accept/reject/cancel
+	// cross-bank dispatch: it resolves a REMOTE chain by surrogate id and
+	// mirrors the peer-driven state changes (+ drives cascade-cancel on
+	// accept). Optional; when unset a remote :nid on those actions falls
+	// through to the local NotFound.
+	remoteNegOps RemoteNegotiationOps
 }
 
 // PeerNegotiationDispatcher POSTs a composed SI-TX OtcOffer to a peer bank's
 // /negotiations API and returns the peer-assigned (routingNumber, foreignID).
-// Satisfied by *peerotc.Client (SP-2b).
+// Proxy forwards a single-negotiation action (counter PUT, accept GET /accept,
+// reject/cancel DELETE) to {peer}/negotiations/{rid}/{foreignID}{subpath} and
+// returns the raw body + HTTP status. Both are satisfied by *peerotc.Client
+// (SP-2b — Task 4 adds the counter/accept/reject/cancel cross-bank dispatch).
 type PeerNegotiationDispatcher interface {
 	CreateNegotiation(ctx context.Context, peerBankCode string, offer map[string]any) (int64, string, error)
+	Proxy(ctx context.Context, peerBankCode, rid, foreignID, method, subpath string, body []byte) ([]byte, int, error)
+}
+
+// RemoteNegotiationOps is the cross-bank negotiation-mirror surface the
+// counter/accept/reject/cancel dispatch needs to (a) resolve a REMOTE chain by
+// its local surrogate id, (b) mirror peer-driven state changes, and (c) drive
+// the cross-bank cascade-cancel on accept. Satisfied by
+// *repository.OTCNegotiationRepository (SP-2b Task 4).
+type RemoteNegotiationOps interface {
+	GetRemoteNegByID(id uint64) (*model.OTCNegotiation, error)
+	UpdateRemoteNegOffer(routing int64, native, offerJSON string) error
+	UpdateRemoteNegStatus(routing int64, native, status string) error
+	CompareAndSetRemoteNegStatus(routing int64, native, from, to string) (bool, error)
+	ListRemoteNegBySellerAndParent(sellerRouting int64, sellerID string, parentRouting int64, parentNative string) ([]model.OTCNegotiation, error)
 }
 
 // RemoteNegotiationWriter persists a REMOTE OTCNegotiation mirror row (the
@@ -92,6 +115,25 @@ func (h *OTCOptionsHandler) WithPeerOTCDispatch(dispatcher PeerNegotiationDispat
 	cp.peerDispatch = dispatcher
 	cp.remoteNegWriter = remoteNegWriter
 	cp.accounts = accounts
+	// remoteNegWriter is *repository.OTCNegotiationRepository in production,
+	// which also implements the broader RemoteNegotiationOps surface used by
+	// the Task-4 counter/accept/reject/cancel dispatch. Capture it when the
+	// concrete type satisfies the interface so callers don't need a second
+	// wire-up. Tests that pass a narrow writer can use WithRemoteNegOps.
+	if ops, ok := remoteNegWriter.(RemoteNegotiationOps); ok {
+		cp.remoteNegOps = ops
+	}
+	return &cp
+}
+
+// WithRemoteNegOps wires the cross-bank negotiation-mirror ops used by the
+// counter/accept/reject/cancel cross-bank dispatch (SP-2b Task 4). In
+// production this is the same *repository.OTCNegotiationRepository passed to
+// WithPeerOTCDispatch (which auto-captures it); this explicit setter exists so
+// tests can inject a fake independent of the writer.
+func (h *OTCOptionsHandler) WithRemoteNegOps(ops RemoteNegotiationOps) *OTCOptionsHandler {
+	cp := *h
+	cp.remoteNegOps = ops
 	return &cp
 }
 
