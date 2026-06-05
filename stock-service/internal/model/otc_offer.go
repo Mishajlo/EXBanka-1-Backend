@@ -94,9 +94,22 @@ type OTCOffer struct {
 	Public            bool      `gorm:"not null;default:true" json:"public"`
 	Private           bool      `gorm:"not null;default:false" json:"private"`
 	PrivateToBankCode *string   `gorm:"size:3" json:"private_to_bank_code,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
-	Version           int64     `gorm:"not null;default:0" json:"-"`
+	// Remote-mirror columns (SP-2a). Populated ONLY on remote rows
+	// (routing_number != OwnRouting()), folded in from the retired
+	// remote_otc_offer mirror. NULL on local rows.
+	//   StrikeCurrency / PremiumCurrency — the peer's published currencies
+	//     (OTCOffer carries no currency for local rows; it lives on the
+	//     StockExchange the listing trades on).
+	//   RemoteSellerID — the SI-TX wire seller id ("client-<N>" | "bank").
+	//   LastSeenAt — last successful peer poll that listed the offer; the
+	//     reconcile flip (open->cancelled) keys off it.
+	StrikeCurrency    *string    `gorm:"size:8" json:"strike_currency,omitempty"`
+	PremiumCurrency   *string    `gorm:"size:8" json:"premium_currency,omitempty"`
+	RemoteSellerID    *string    `gorm:"size:128" json:"remote_seller_id,omitempty"`
+	LastSeenAt        *time.Time `gorm:"index" json:"last_seen_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	Version           int64      `gorm:"not null;default:0" json:"-"`
 }
 
 // BeforeCreate stamps the own routing number on local rows. Remote rows

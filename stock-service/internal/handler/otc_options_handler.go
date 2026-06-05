@@ -106,11 +106,13 @@ func (h *OTCOptionsHandler) WithListings(listings *repository.ListingRepository)
 	return &cp
 }
 
-// RemoteOfferGetter fetches a remote-offer mirror row by surrogate id.
-// GetOffer falls back to this mirror when an offer id is not a local
-// OTCOffer (SP-1).
+// RemoteOfferGetter fetches a folded-in REMOTE OTCOffer row by surrogate id.
+// GetOffer falls back to this when an offer id is not a local OTCOffer
+// (SP-1). Returns gorm.ErrRecordNotFound for a local id (a local offer is
+// not a remote offer). *repository.OTCOfferRepository satisfies it via
+// GetRemoteByID (SP-2a).
 type RemoteOfferGetter interface {
-	GetByID(id uint64) (*model.RemoteOTCOffer, error)
+	GetRemoteByID(id uint64) (*model.OTCOffer, error)
 }
 
 // WithRemoteOffers wires the persistent cross-bank remote-offer mirror plus
@@ -427,38 +429,61 @@ func (h *OTCOptionsHandler) GetOffer(ctx context.Context, in *stockpb.GetOTCOffe
 	return out, nil
 }
 
-// resolveRemoteOffer builds an OTCOfferDetailResponse from the persistent
-// cross-bank mirror for a non-local offer id. Returns gorm.ErrRecordNotFound
-// when the mirror is unwired or has no such row, so the caller can surface a
-// plain 404. Remote offers carry no local revision chain.
+// remoteOfferToProto projects a folded-in REMOTE OTCOffer row onto the wire
+// OTCOfferResponse (kind="remote", me_owner=false — remote listings are hosted
+// by a peer). Currencies come from the remote-mirror columns; the seller
+// display string from RemoteSellerID; bank_code from InitiatorBankCode.
+// Settlement/created timestamps are emitted as RFC3339 (the peer published
+// RFC3339; we store time.Time and re-render it).
+func remoteOfferToProto(m *model.OTCOffer) *stockpb.OTCOfferResponse {
+	bankCode := ""
+	if m.InitiatorBankCode != nil {
+		bankCode = *m.InitiatorBankCode
+	}
+	sellerID := ""
+	if m.RemoteSellerID != nil {
+		sellerID = *m.RemoteSellerID
+	}
+	settlement := ""
+	if !m.SettlementDate.IsZero() {
+		settlement = m.SettlementDate.UTC().Format(time.RFC3339)
+	}
+	return &stockpb.OTCOfferResponse{
+		Id:             m.ID,
+		Kind:           "remote",
+		RoutingNumber:  m.RoutingNumber,
+		BankCode:       bankCode,
+		Direction:      m.Direction,
+		StockTicker:    m.Ticker,
+		Quantity:       strconv.FormatInt(m.Quantity.IntPart(), 10),
+		StrikePrice:    m.StrikePrice.String(),
+		Premium:        m.Premium.String(),
+		SettlementDate: settlement,
+		Status:         m.Status,
+		CreatedAt:      m.CreatedAt.UTC().Format(time.RFC3339),
+		MeOwner:        false,
+		Initiator: &stockpb.PartyRef{
+			DisplayName: sellerID,
+			BankCode:    bankCode,
+		},
+	}
+}
+
+// resolveRemoteOffer builds an OTCOfferDetailResponse from the folded-in
+// remote OTCOffer rows for a non-local offer id. Returns gorm.ErrRecordNotFound
+// when the mirror is unwired or has no such row (or the id is a local offer),
+// so the caller can surface a plain 404. Remote offers carry no local revision
+// chain.
 func (h *OTCOptionsHandler) resolveRemoteOffer(id uint64) (*stockpb.OTCOfferDetailResponse, error) {
 	if h.remoteOffers == nil {
 		return nil, gorm.ErrRecordNotFound
 	}
-	m, err := h.remoteOffers.GetByID(id)
+	m, err := h.remoteOffers.GetRemoteByID(id)
 	if err != nil {
 		return nil, err
 	}
 	return &stockpb.OTCOfferDetailResponse{
-		Offer: &stockpb.OTCOfferResponse{
-			Id:             m.ID,
-			Kind:           "remote",
-			RoutingNumber:  m.PeerRoutingNumber,
-			BankCode:       m.BankCode,
-			Direction:      m.Direction,
-			StockTicker:    m.Ticker,
-			Quantity:       strconv.FormatInt(m.Amount, 10),
-			StrikePrice:    m.StrikePrice.String(),
-			Premium:        m.Premium.String(),
-			SettlementDate: m.SettlementDate,
-			Status:         m.Status,
-			CreatedAt:      m.PeerCreatedAt,
-			MeOwner:        false,
-			Initiator: &stockpb.PartyRef{
-				DisplayName: m.SellerID,
-				BankCode:    m.BankCode,
-			},
-		},
+		Offer:     remoteOfferToProto(m),
 		Revisions: nil,
 	}, nil
 }

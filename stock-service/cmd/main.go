@@ -138,10 +138,6 @@ func main() {
 		// Cross-bank option contracts written at COMMIT_TX time
 		// when transaction-service finalises an OTC accept TX.
 		&model.PeerOptionContract{},
-		// SP-1: persistent mirror of OTC option offers discovered on peer banks.
-		// Gives each remote listing a stable local surrogate id; reconciliation
-		// flips Status open->cancelled when a peer stops listing it.
-		&model.RemoteOTCOffer{},
 		// Outbox: durable queue for Kafka events published from inside
 		// sagas. The drainer goroutine (started below) reads pending rows
 		// and publishes them, so a crash between business commit and
@@ -969,8 +965,11 @@ func main() {
 		return out, nil
 	}
 	optionRefresher.WithAggregateBids(cacheAgg)
-	remoteOfferRepo := repository.NewRemoteOTCOfferRepository(db)
-	optionRefresher = optionRefresher.WithMirror(remoteOfferRepo)
+	// SP-2a: remote offers are folded into the unified OTCOffer table as
+	// remote rows (routing=<peer>, native_id=<foreign id>). The OTCOffer
+	// repo satisfies both the refresher's mirror interface and GetOffer's
+	// remote getter; the standalone remote_otc_offer mirror is retired.
+	optionRefresher = optionRefresher.WithMirror(otcOfferRepo)
 	// Now that aggregation and mirror are wired, kick off the refresher (gated by cronreg).
 	optionCacheEntry := cronRegistry.Register("option-offer-cache-refresher", "Refreshes unified option offer cache from local + peer banks", 5*time.Second)
 	go func() {
@@ -1018,7 +1017,7 @@ func main() {
 		WithPeerContracts(peerOptionRepo, ownRouting).
 		WithRatings(ratingSvc).
 		WithNegotiations(otcNegotiationSvc).
-		WithRemoteOffers(remoteOfferRepo, cfg.OwnBankCode).
+		WithRemoteOffers(otcOfferRepo, cfg.OwnBankCode).
 		WithPeerNegotiations(peerOtcRepo) // SP-1 Task 7: unified local+remote negotiation list
 
 	// Phase 3: OTC stocks marketplace (sell + buy direction). The

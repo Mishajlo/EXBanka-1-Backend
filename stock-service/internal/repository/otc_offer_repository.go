@@ -120,6 +120,80 @@ func (r *OTCOfferRepository) ListOpenForCache(limit int) ([]model.OTCOffer, erro
 	return out, err
 }
 
+// UpsertRemote inserts or refreshes a REMOTE OTCOffer row keyed by the
+// natural key (routing_number, native_id), stamping LastSeenAt and
+// (re)opening the row. Returns the stable surrogate id. The caller MUST
+// have set o.RoutingNumber to the peer's routing and o.NativeID to the
+// peer's foreign offer id. Uses ON CONFLICT (never SELECT-then-INSERT) per
+// the Concurrency requirement; the conflict target is the natural key.
+//
+// The peer routing is set explicitly on o, so BeforeCreate's own-routing
+// stamping is a no-op here (it only fires for routing_number == 0).
+func (r *OTCOfferRepository) UpsertRemote(o *model.OTCOffer, seenAt time.Time) (uint64, error) {
+	o.Status = model.OTCOfferStatusOpen
+	o.LastSeenAt = &seenAt
+	err := r.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "routing_number"}, {Name: "native_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"initiator_bank_code", "remote_seller_id", "direction", "ticker",
+			"quantity", "strike_price", "premium", "settlement_date",
+			"strike_currency", "premium_currency", "status", "last_seen_at", "updated_at",
+		}),
+	}).Create(o).Error
+	if err != nil {
+		return 0, err
+	}
+	// Defensive only: current GORM populates o.ID on the DO-UPDATE path
+	// (Postgres RETURNING / SQLite last_insert_rowid). Kept as a guard
+	// against driver behavior changes — mirrors the retired remote repo.
+	if o.ID == 0 {
+		var row model.OTCOffer
+		if e := r.db.Select("id").
+			Where("routing_number = ? AND native_id = ?", o.RoutingNumber, o.NativeID).
+			First(&row).Error; e != nil {
+			return 0, e
+		}
+		o.ID = row.ID
+	}
+	return o.ID, nil
+}
+
+// ReconcileRemoteNotSeen flips every open REMOTE row for peerRouting whose
+// native_id is NOT in seenNativeIDs to "cancelled", and returns the count
+// flipped. MUST be called only after a SUCCESSFUL poll of that peer. A
+// nil/empty seen slice means the peer listed nothing -> cancel all open
+// rows for that peer. Bulk update with SkipHooks (intentional non-versioned
+// mass flip per the Concurrency requirement).
+//
+// peerRouting is the peer's routing (!= OwnRouting(), guaranteed by the
+// caller), so this never touches local rows.
+func (r *OTCOfferRepository) ReconcileRemoteNotSeen(peerRouting int64, seenNativeIDs []string) (int64, error) {
+	q := r.db.Session(&gorm.Session{SkipHooks: true}).
+		Model(&model.OTCOffer{}).
+		Where("routing_number = ? AND status = ?", peerRouting, model.OTCOfferStatusOpen)
+	// peer offer counts are O(tens) in this domain; NOT IN (...) is acceptable.
+	if len(seenNativeIDs) > 0 {
+		q = q.Where("native_id NOT IN ?", seenNativeIDs)
+	}
+	res := q.Updates(map[string]any{"status": model.OTCOfferStatusCancelled, "updated_at": time.Now().UTC()})
+	return res.RowsAffected, res.Error
+}
+
+// GetRemoteByID returns a REMOTE OTCOffer row by surrogate id, or
+// gorm.ErrRecordNotFound. A row whose routing_number == OwnRouting() is a
+// LOCAL offer and is treated as not-found here, so a local id never resolves
+// through the remote-offer path.
+func (r *OTCOfferRepository) GetRemoteByID(id uint64) (*model.OTCOffer, error) {
+	var o model.OTCOffer
+	if err := r.db.First(&o, id).Error; err != nil {
+		return nil, err
+	}
+	if o.RoutingNumber == model.OwnRouting() {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &o, nil
+}
+
 // ListByOwner returns offers where the owner appears as initiator,
 // counterparty, or either, optionally filtered by status (variadic) and
 // stock_id (zero = no filter). owner_id may be nil for OwnerType=bank.

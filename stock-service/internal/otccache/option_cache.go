@@ -27,6 +27,7 @@ import (
 	"github.com/exbanka/contract/sitx"
 	transactionpb "github.com/exbanka/contract/transactionpb"
 	"github.com/exbanka/stock-service/internal/model"
+	"github.com/shopspring/decimal"
 )
 
 // OptionOffer is the unified shape stored in the cache. Local offers
@@ -37,8 +38,9 @@ type OptionOffer struct {
 	RoutingNumber int64
 	OfferID       string // local: strconv(uint64); remote: foreign id
 	// LocalID is the stable local surrogate id. For local offers it equals
-	// the numeric OfferID; for remote offers it is the RemoteOTCOffer.ID
-	// minted by the mirror, so the FE addresses any offer by a plain id.
+	// the numeric OfferID; for remote offers it is the OTCOffer.ID of the
+	// folded-in remote row minted by the mirror, so the FE addresses any
+	// offer by a plain id.
 	LocalID uint64
 
 	SellerID   string // SI-TX-prefixed ("client-<N>" | "bank")
@@ -80,10 +82,12 @@ type OfferAggregate struct {
 type AggregateActiveBidsFn func(offerIDs []uint64) (map[uint64]OfferAggregate, error)
 
 // RemoteOfferMirror gives remote offers stable surrogate ids and reconciles
-// peer-side cancels. *repository.RemoteOTCOfferRepository satisfies it.
+// peer-side cancels by folding them into the unified OTCOffer table as remote
+// rows (routing_number=<peer>, native_id=<foreign id>).
+// *repository.OTCOfferRepository satisfies it (SP-2a).
 type RemoteOfferMirror interface {
-	Upsert(o *model.RemoteOTCOffer, seenAt time.Time) (uint64, error)
-	ReconcilePeerNotSeen(peerRouting int64, seenForeignIDs []string) (int64, error)
+	UpsertRemote(o *model.OTCOffer, seenAt time.Time) (uint64, error)
+	ReconcileRemoteNotSeen(peerRouting int64, seenNativeIDs []string) (int64, error)
 }
 
 type OptionSnapshot struct {
@@ -393,21 +397,38 @@ func (r *OptionRefresher) buildAndMirrorRemoteOffers(peerBankCode string, peerRo
 			ActiveChainsCount: o.ActiveChainsCount,
 		}
 		if r.mirror != nil {
-			id, err := r.mirror.Upsert(&model.RemoteOTCOffer{
-				PeerRoutingNumber: peerRouting,
-				ForeignOfferID:    o.OfferID.ID,
-				BankCode:          peerBankCode,
-				SellerID:          o.SellerID.ID,
-				Direction:         o.Direction,
-				Ticker:            o.Ticker,
-				Amount:            o.Amount,
-				StrikePrice:       o.StrikePrice,
-				StrikeCurrency:    o.StrikeCurrency,
-				Premium:           o.Premium,
-				PremiumCurrency:   o.PremiumCurrency,
-				SettlementDate:    o.SettlementDate,
-				PeerCreatedAt:     o.CreatedAt,
-			}, now)
+			nativeID := o.OfferID.ID
+			bankCode := peerBankCode
+			sellerID := o.SellerID.ID
+			strikeCcy := o.StrikeCurrency
+			premiumCcy := o.PremiumCurrency
+			remoteRow := &model.OTCOffer{
+				RoutingNumber:     peerRouting,
+				NativeID:          &nativeID,
+				InitiatorBankCode: &bankCode,
+				RemoteSellerID:    &sellerID,
+				// Remote rows are "bank-ish" from our view: OwnerBank + nil id
+				// is the only owner combination ValidateOwner accepts without a
+				// concrete local owner. The actual remote seller is carried in
+				// RemoteSellerID / InitiatorBankCode for display.
+				InitiatorOwnerType: model.OwnerBank,
+				Direction:          o.Direction,
+				// StockID is local-only and meaningless for a peer listing; 0.
+				Ticker: o.Ticker,
+				// Wire amount is int64; OTCOffer.Quantity is decimal.
+				Quantity:        decimal.NewFromInt(o.Amount),
+				StrikePrice:     o.StrikePrice,
+				Premium:         o.Premium,
+				StrikeCurrency:  &strikeCcy,
+				PremiumCurrency: &premiumCcy,
+				SettlementDate:  parseRFC3339OrZero(o.SettlementDate),
+				Status:          model.OTCOfferStatusOpen,
+				// NOT-NULL audit columns: the refresher is the actor for
+				// remote rows. "system"/0 marks a machine-written row.
+				LastModifiedByPrincipalType: "system",
+				LastModifiedByPrincipalID:   0,
+			}
+			id, err := r.mirror.UpsertRemote(remoteRow, now)
 			if err != nil {
 				log.Printf("otccache(options): mirror upsert peer=%s foreign=%s failed: %v", peerBankCode, o.OfferID.ID, err)
 			} else {
@@ -418,13 +439,29 @@ func (r *OptionRefresher) buildAndMirrorRemoteOffers(peerBankCode string, peerRo
 		out = append(out, row)
 	}
 	if r.mirror != nil {
-		if n, err := r.mirror.ReconcilePeerNotSeen(peerRouting, seen); err != nil {
+		if n, err := r.mirror.ReconcileRemoteNotSeen(peerRouting, seen); err != nil {
 			log.Printf("otccache(options): reconcile peer=%s failed: %v", peerBankCode, err)
 		} else if n > 0 {
 			log.Printf("otccache(options): reconciled %d cancelled offers from peer=%s", n, peerBankCode)
 		}
 	}
 	return out
+}
+
+// parseRFC3339OrZero parses an RFC3339 timestamp string into time.Time.
+// On a parse error (or empty string) it logs and returns the zero time, so a
+// malformed peer settlement_date never aborts the whole refresh — the remote
+// row is still folded in, just with a zero settlement_date.
+func parseRFC3339OrZero(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		log.Printf("otccache(options): bad RFC3339 settlement_date %q: %v (using zero time)", s, err)
+		return time.Time{}
+	}
+	return t
 }
 
 // peerRoutingOf returns the polled peer's routing number (SI-TX bank codes

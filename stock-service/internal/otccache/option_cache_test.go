@@ -19,15 +19,19 @@ type fakeMirror struct {
 func newFakeMirror() *fakeMirror {
 	return &fakeMirror{byKey: map[string]uint64{}, reconciled: map[int64][]string{}}
 }
-func (m *fakeMirror) Upsert(o *model.RemoteOTCOffer, _ time.Time) (uint64, error) {
-	if id, ok := m.byKey[o.ForeignOfferID]; ok {
+func (m *fakeMirror) UpsertRemote(o *model.OTCOffer, _ time.Time) (uint64, error) {
+	key := ""
+	if o.NativeID != nil {
+		key = *o.NativeID
+	}
+	if id, ok := m.byKey[key]; ok {
 		return id, nil
 	}
 	m.nextID++
-	m.byKey[o.ForeignOfferID] = m.nextID
+	m.byKey[key] = m.nextID
 	return m.nextID, nil
 }
-func (m *fakeMirror) ReconcilePeerNotSeen(peerRouting int64, seen []string) (int64, error) {
+func (m *fakeMirror) ReconcileRemoteNotSeen(peerRouting int64, seen []string) (int64, error) {
 	m.reconciled[peerRouting] = seen
 	return 0, nil
 }
@@ -68,10 +72,10 @@ func TestBuildAndMirrorRemoteOffers_EmptyReconcilesAll(t *testing.T) {
 
 type errMirror struct{ reconciled map[int64][]string }
 
-func (m *errMirror) Upsert(_ *model.RemoteOTCOffer, _ time.Time) (uint64, error) {
+func (m *errMirror) UpsertRemote(_ *model.OTCOffer, _ time.Time) (uint64, error) {
 	return 0, errors.New("db down")
 }
-func (m *errMirror) ReconcilePeerNotSeen(peerRouting int64, seen []string) (int64, error) {
+func (m *errMirror) ReconcileRemoteNotSeen(peerRouting int64, seen []string) (int64, error) {
 	if m.reconciled == nil {
 		m.reconciled = map[int64][]string{}
 	}
