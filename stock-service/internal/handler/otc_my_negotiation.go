@@ -156,14 +156,19 @@ func buildMyNegotiationIndex(
 	// REMOTE bidder chains. Only a client principal has a cross-bank identity.
 	if ownerType == model.OwnerClient && ownerID != nil {
 		principal := "client-" + strconv.FormatUint(*ownerID, 10)
-		remoteRows, rerr := lister.ListRemoteNegByClient(ownRouting, principal, "")
+		// role="buyer": the my-nid feature stamps the caller's chains AS BIDDER,
+		// so restrict to remote_buyer_* (the default "" would also pull seller-side
+		// chains, which carry RemoteParentRouting==ownRouting and so can never
+		// match a peer-hosted discovery offer — inert, but the explicit role keeps
+		// intent clear and trims the query).
+		remoteRows, rerr := lister.ListRemoteNegByClient(ownRouting, principal, "buyer")
 		if rerr != nil {
 			return idx, rerr
 		}
 		remoteGroups := map[string][]*model.OTCNegotiation{}
 		for i := range remoteRows {
 			r := &remoteRows[i]
-			if r.RemoteParentRouting == nil || r.RemoteParentNativeID == nil {
+			if r.RemoteParentRouting == nil || r.RemoteParentNativeID == nil || *r.RemoteParentNativeID == "" {
 				continue // chain without a resolvable parent key — can't match an offer
 			}
 			key := remoteParentKey(*r.RemoteParentRouting, *r.RemoteParentNativeID)
