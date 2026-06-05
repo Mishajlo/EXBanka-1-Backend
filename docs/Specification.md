@@ -3092,6 +3092,16 @@ The unified OTC offer view (local + cross-bank) is served by `stock-service`'s `
 - CREDIT direction (buyer's bank): no holding op.
 - Both: row → `status=expired`. Seller keeps the premium (no money movement).
 
+#### Safety-net negotiation reconciler (SP-1 Task 9, 2026-06-05)
+
+`PeerOTCNegotiationReconciler` is a background goroutine (`service.NewPeerOTCNegotiationReconciler`) that runs every **2 minutes** in stock-service. It polls each active peer bank's `GET /api/v3/cross-bank-protocol/negotiations/{rid}/{id}` for every locally-`ongoing` row whose authoritative bank is the PEER (identified by `peerRoutingForRow`: whichever of `buyer_routing_number` / `seller_routing_number` does not equal `ownRouting`). When the peer reports `isOngoing: false` (accepted, cancelled, expired, or any terminal state), and our row is still `ongoing`, the reconciler flips it to `status=cancelled` via `PeerOtcNegotiationRepository.UpdateStatus` (same path as the inbound DELETE webhook) and emits a best-effort `OTC_OFFER_CANCELLED` in-app notification to the local party if one can be resolved.
+
+**False-cancel guard:** any transport error, non-2xx HTTP status, or JSON parse failure on the poll causes the row to be **skipped** for that tick. The reconciler never cancels on ambiguous data. Intra-bank rows (both `buyer_routing_number` and `seller_routing_number` equal `ownRouting`) are also skipped (no peer to query).
+
+**Cronreg integration:** the reconciler is registered as `"peer-otc-neg-reconciler"` in the stock-service cron registry, so operators can pause, resume, or manually trigger it via `GET /api/v3/admin/crons/stock-service/peer-otc-neg-reconciler`.
+
+**Implementation:** `stock-service/internal/service/peer_otc_reconciler.go`. `PeerOtcNegotiationRepository.ListOngoing()` returns all `ongoing` rows for the poll loop.
+
 ### Database tables
 
 - **`peer_otc_negotiations`** — receiver-side persistence of inbound peer negotiations. Composite-unique on `(peer_bank_code, foreign_id)`. Columns: `id`, `peer_bank_code`, `foreign_id`, `buyer_routing_number`, `buyer_id`, `seller_routing_number`, `seller_id`, `offer_json`, `status` (`ongoing` | `accepted` | `cancelled`), timestamps. Terminal-state rows (`accepted`, `cancelled`) are retained and returned by `ListByClient` with no status filter — callers see the full history.

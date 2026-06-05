@@ -97,6 +97,15 @@ func (r *PeerOtcNegotiationRepository) Delete(peerCode, foreignID string) error 
 		Delete(&model.PeerOtcNegotiation{}).Error
 }
 
+// ListOngoing returns every peer_otc_negotiation row whose status is
+// "ongoing". Used by the safety-net reconciler to find rows that may have
+// missed a peer-driven cancel webhook.
+func (r *PeerOtcNegotiationRepository) ListOngoing() ([]model.PeerOtcNegotiation, error) {
+	var out []model.PeerOtcNegotiation
+	err := r.db.Where("status = ?", "ongoing").Order("updated_at ASC").Find(&out).Error
+	return out, err
+}
+
 // Upsert creates or updates the offer_json + party metadata for a
 // (peer_bank_code, foreign_id) pair. Used by RecordOutboundNegotiation
 // so the buyer-side mirror lands idempotently — a retry of the same

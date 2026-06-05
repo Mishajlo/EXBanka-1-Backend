@@ -846,6 +846,44 @@ func main() {
 		log.Fatalf("invalid OWN_BANK_CODE %q: %v", cfg.OwnBankCode, err)
 	}
 	peerOtcRepo := repository.NewPeerOtcNegotiationRepository(db)
+
+	// SP-1 Task 9 — safety-net reconciler for missed cross-bank negotiation
+	// cancels. Polls each active peer's GET /negotiations/{rid}/{id} every
+	// 2 minutes for our "ongoing" rows; flips any that the peer reports as
+	// terminal to "cancelled" (false-cancel guard: skips on any non-2xx or
+	// transport error). Wrapped in cronreg so operators can pause/trigger it.
+	negReconcilerEntry := cronRegistry.Register("peer-otc-neg-reconciler", "Safety-net poll for missed cross-bank negotiation cancels (2 min tick)", 2*time.Minute)
+	negReconciler := service.NewPeerOTCNegotiationReconciler(
+		peerOtcRepo, peerBankAdminClient, nil /* default http.Client */, ownRouting, 2*time.Minute,
+	).WithNotifier(producer)
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		// Run an initial reconcile immediately (best-effort on startup).
+		if negReconcilerEntry.BeginRun() {
+			negReconciler.RunOnce(ctx)
+			negReconcilerEntry.EndRun(nil)
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if !negReconcilerEntry.BeginRun() {
+					continue
+				}
+				negReconciler.RunOnce(ctx)
+				negReconcilerEntry.EndRun(nil)
+			case <-negReconcilerEntry.TriggerChan():
+				if !negReconcilerEntry.BeginRun() {
+					continue
+				}
+				negReconciler.RunOnce(ctx)
+				negReconcilerEntry.EndRun(nil)
+			}
+		}
+	}()
+
 	peerOptionRepo := repository.NewPeerOptionContractRepository(db)
 	peerOtcHandler := handler.NewPeerOTCGRPCHandler(peerOtcRepo, peerOptionRepo, holdingRepo, peerTxClient, ownRouting)
 	peerOtcHandler.SetHoldingReserver(holdingReservationSvc)
