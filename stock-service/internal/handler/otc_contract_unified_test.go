@@ -367,6 +367,83 @@ func TestListMyContracts_BankCallerSkipsRemote(t *testing.T) {
 	}
 }
 
+// A BANK caller (employee acting as the bank) sees its OWN cross-bank contracts:
+// remote rows whose hosted side party id has the "employee-%" prefix. A CREDIT
+// row WE host with remote_buyer_id="employee-1" → me_owner=true (we hold buyer).
+// A client row WE host (buyer="client-7") must NOT surface for the bank caller,
+// and the bank's row must NOT surface for a client caller (no-leak both ways).
+func TestListMyContracts_BankCallerSeesItsRemote(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	h, fx := newUnifiedContractFixture(t, ownRouting, "111")
+	// Bank-hosted CREDIT remote contract: we hold the BUYER and the buyer is the
+	// bank itself (employee-1).
+	seedPeerContract(t, fx, &peerContractSeed{
+		ID:                 71,
+		CrossbankTxID:      "tx-bank-1",
+		PostingIndex:       0,
+		NegotiationID:      "neg-bank-1",
+		BuyerRoutingNumber: ownRouting, BuyerID: "employee-1",
+		SellerRoutingNumber: peerSellerRouting, SellerID: "client-3",
+		Ticker:         "ACME",
+		Quantity:       5,
+		StrikePrice:    decimal.NewFromInt(200),
+		Currency:       "USD",
+		SettlementDate: "2030-01-01",
+		Direction:      "CREDIT",
+		Status:         "active",
+		CreatedAt:      time.Now(),
+	})
+	// A CLIENT-hosted CREDIT remote contract (buyer = client-7) — must NOT
+	// surface for the bank caller.
+	seedPeerContract(t, fx, &peerContractSeed{
+		ID:                 72,
+		CrossbankTxID:      "tx-client-1",
+		PostingIndex:       0,
+		NegotiationID:      "neg-client-1",
+		BuyerRoutingNumber: ownRouting, BuyerID: "client-7",
+		SellerRoutingNumber: peerSellerRouting, SellerID: "client-3",
+		Ticker:         "ACME",
+		Quantity:       5,
+		StrikePrice:    decimal.NewFromInt(200),
+		Currency:       "USD",
+		SettlementDate: "2030-01-01",
+		Direction:      "CREDIT",
+		Status:         "active",
+		CreatedAt:      time.Now(),
+	})
+
+	// Bank caller → sees exactly its own (employee-1) remote contract.
+	resp, err := h.ListMyContracts(context.Background(), &stockpb.ListMyContractsRequest{
+		ActorUserId: 0, ActorSystemType: "bank", Page: 1, PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("bank err: %v", err)
+	}
+	var remoteIDs []uint64
+	for _, c := range resp.GetContracts() {
+		if c.GetKind() == "remote" {
+			remoteIDs = append(remoteIDs, c.GetId())
+		}
+	}
+	if len(remoteIDs) != 1 || remoteIDs[0] != 71 {
+		t.Fatalf("bank caller remote ids = %v, want [71]", remoteIDs)
+	}
+
+	// Client caller (client-7) → sees its own remote (72) but NEVER the bank's (71).
+	cresp, err := h.ListMyContracts(context.Background(), &stockpb.ListMyContractsRequest{
+		ActorUserId: 7, ActorSystemType: "client", Page: 1, PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("client err: %v", err)
+	}
+	for _, c := range cresp.GetContracts() {
+		if c.GetKind() == "remote" && c.GetId() == 71 {
+			t.Errorf("client caller must NOT see the bank's remote contract 71")
+		}
+	}
+}
+
 // ---------------- GetContract: remote resolve / miss / error ----------------
 
 // A non-local id resolves to a remote peer contract (CREDIT → me_owner=true).

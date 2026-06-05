@@ -369,3 +369,55 @@ func (r *OptionContractRepository) ListRemoteContractsByLocalParticipant(
 	}
 	return rows, total, nil
 }
+
+// ListRemoteContractsByBankParty returns remote rows where the side WE host
+// (the local routing == ownRouting, stored in buyer_bank_code/seller_bank_code)
+// is the BANK — the party id carries the "employee-" prefix. This is the
+// contracts analog of ListRemoteNegByBankParty (SP-3 Task 5b): a CREDIT row
+// where this bank holds the BUYER (remote_buyer_id LIKE 'employee-%') or a DEBIT
+// row where this bank holds the SELLER (remote_seller_id LIKE 'employee-%').
+// ownRouting is the local bank's routing used as the side discriminator (matched
+// against the COUNTERPARTY routing stored in buyer_bank_code/seller_bank_code).
+// role can be "buyer", "seller", or anything else (= "either"). The bank has no
+// single wire principal across contracts, so it is matched by PREFIX, not an
+// exact id; the "employee-%" LIKE pattern is a constant prefix (no user input),
+// so there is no injection risk. Pagination is 1-based; pageSize <= 0 disables
+// the limit. Scoped to routing_number != OwnRouting() (same remote scope as
+// ListRemoteContractsByLocalParticipant) so a LOCAL row can never satisfy it.
+func (r *OptionContractRepository) ListRemoteContractsByBankParty(
+	ownRouting int64, role string, page, pageSize int,
+) ([]model.OptionContract, int64, error) {
+	own := strconv.FormatInt(ownRouting, 10)
+	const employeePrefix = "employee-%"
+	q := r.db.Model(&model.OptionContract{}).Where("routing_number != ?", model.OwnRouting())
+	switch role {
+	case "buyer":
+		q = q.Where("remote_direction = ? AND buyer_bank_code = ? AND remote_buyer_id LIKE ?", "CREDIT", own, employeePrefix)
+	case "seller":
+		q = q.Where("remote_direction = ? AND seller_bank_code = ? AND remote_seller_id LIKE ?", "DEBIT", own, employeePrefix)
+	default:
+		q = q.Where(
+			"(remote_direction = ? AND buyer_bank_code = ? AND remote_buyer_id LIKE ?) OR (remote_direction = ? AND seller_bank_code = ? AND remote_seller_id LIKE ?)",
+			"CREDIT", own, employeePrefix,
+			"DEBIT", own, employeePrefix,
+		)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if pageSize > 0 {
+		offset := (page - 1) * pageSize
+		if offset < 0 {
+			offset = 0
+		}
+		q = q.Order("id DESC").Offset(offset).Limit(pageSize)
+	} else {
+		q = q.Order("id DESC")
+	}
+	var rows []model.OptionContract
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}

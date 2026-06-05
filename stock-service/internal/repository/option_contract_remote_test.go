@@ -300,3 +300,63 @@ func TestRemoteContract_ListByLocalParticipant_ExcludesLocal(t *testing.T) {
 		t.Errorf("either role: got %d/%d (local must be excluded)", total, len(rows))
 	}
 }
+
+// ListRemoteContractsByBankParty matches the BANK party by the "employee-%"
+// prefix (the bank has no single wire principal), scoped to the side WE host:
+// a CREDIT row where this bank holds the buyer (remote_buyer_id LIKE employee-%)
+// or a DEBIT row where this bank holds the seller (remote_seller_id LIKE
+// employee-%). Client rows, peer-hosted bank rows, and LOCAL rows are excluded.
+func TestRemoteContract_ListByBankParty_PrefixMatch(t *testing.T) {
+	r := newRemoteContractRepo(t)
+	// Seed a LOCAL contract — must NEVER leak into the remote bank-party list.
+	if err := r.Create(localContract(t)); err != nil {
+		t.Fatalf("create local: %v", err)
+	}
+	// CREDIT (this bank, 111, holds the BUYER = our bank → employee-1).
+	credit := remoteContract(222, "tx-bankbuy", 0, "CREDIT", 111, "employee-1", 222, "client-99", "", "active")
+	_ = r.UpsertRemoteContract(credit)
+	// DEBIT (this bank, 111, holds the SELLER = our bank → employee-2).
+	debit := remoteContract(222, "tx-banksell", 1, "DEBIT", 222, "client-99", 111, "employee-2", "", "active")
+	_ = r.UpsertRemoteContract(debit)
+	// A CLIENT-side remote row WE host (CREDIT, buyer = client-7) — must be
+	// EXCLUDED from the bank-party list (client identity, not employee).
+	clientRow := remoteContract(222, "tx-clientbuy", 0, "CREDIT", 111, "client-7", 222, "client-99", "", "active")
+	_ = r.UpsertRemoteContract(clientRow)
+	// A PEER-HOSTED bank row (the bank side lives at routing 222, NOT us) — must
+	// be EXCLUDED: CREDIT held by the peer (buyer routing 222 = employee-9).
+	peerHosted := remoteContract(222, "tx-peerbank", 0, "CREDIT", 222, "employee-9", 111, "client-7", "", "active")
+	_ = r.UpsertRemoteContract(peerHosted)
+
+	// buyer role → only the CREDIT bank-buy row.
+	rows, total, err := r.ListRemoteContractsByBankParty(111, "buyer", 1, 10)
+	if err != nil {
+		t.Fatalf("buyer err: %v", err)
+	}
+	if total != 1 || len(rows) != 1 {
+		t.Fatalf("buyer role: got %d/%d, want 1/1", total, len(rows))
+	}
+	if rows[0].RemoteBuyerID == nil || *rows[0].RemoteBuyerID != "employee-1" {
+		t.Errorf("buyer row remote_buyer_id = %v, want employee-1", rows[0].RemoteBuyerID)
+	}
+
+	// seller role → only the DEBIT bank-sell row.
+	rows, total, err = r.ListRemoteContractsByBankParty(111, "seller", 1, 10)
+	if err != nil {
+		t.Fatalf("seller err: %v", err)
+	}
+	if total != 1 || len(rows) != 1 {
+		t.Fatalf("seller role: got %d/%d, want 1/1", total, len(rows))
+	}
+	if rows[0].RemoteSellerID == nil || *rows[0].RemoteSellerID != "employee-2" {
+		t.Errorf("seller row remote_seller_id = %v, want employee-2", rows[0].RemoteSellerID)
+	}
+
+	// either role → both bank rows; client + peer-hosted + local all excluded.
+	rows, total, err = r.ListRemoteContractsByBankParty(111, "either", 1, 10)
+	if err != nil {
+		t.Fatalf("either err: %v", err)
+	}
+	if total != 2 || len(rows) != 2 {
+		t.Fatalf("either role: got %d/%d, want 2/2 (client/peer-hosted/local excluded)", total, len(rows))
+	}
+}

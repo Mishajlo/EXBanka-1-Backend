@@ -778,18 +778,35 @@ func (h *OTCOptionsHandler) ListMyContracts(ctx context.Context, in *stockpb.Lis
 		out.Contracts = append(out.Contracts, item)
 	}
 
-	// Cross-bank contracts. Only fetched when the peer-contract repo is
-	// wired (post-Celina-5) AND the caller is a client (cross-bank
-	// participant ids are "client-<n>"; bank-side cross-bank contracts
-	// surface elsewhere). page/page_size pass through unchanged so the
-	// peer list paginates the same way as the intra-bank list. Remote rows
-	// are mapped onto OptionContractResponse (kind="remote") and APPENDED to
-	// the same Contracts list so clients see one merged feed (the unified
-	// Contracts[] is the single source of truth; the legacy peer_contracts/
-	// peer_total fields were removed in SP-2b — SP-1 double-listing fix).
-	if h.peerContracts != nil && ownerType == model.OwnerClient && ownerID != nil {
-		participantID := "client-" + strconv.FormatUint(*ownerID, 10)
-		peerRows, _, perr := h.peerContracts.ListRemoteContractsByLocalParticipant(participantID, h.ownRouting, in.Role, int(in.Page), int(in.PageSize))
+	// Cross-bank contracts. Only fetched when the peer-contract repo is wired
+	// (post-Celina-5). Two principal kinds have a cross-bank identity, mirroring
+	// ListNegotiationHistory's no-leak structure (SP-3 Task 5b):
+	//
+	//   - CLIENT (cross-bank participant id "client-<N>"): match the exact
+	//     principal via ListRemoteContractsByLocalParticipant.
+	//   - BANK (an employee acting AS THE BANK; party id "employee-<N>"): the bank
+	//     has no single wire principal across contracts, so match by the
+	//     "employee-%" PREFIX via ListRemoteContractsByBankParty — this is the
+	//     contracts-analog of the T5b negotiation read-gap and lets a bank caller
+	//     SEE (and thus exercise) its cross-bank contracts. A client caller never
+	//     reaches the bank lister (and vice versa).
+	//
+	// page/page_size pass through unchanged so the peer list paginates the same
+	// way as the intra-bank list. Remote rows are mapped onto
+	// OptionContractResponse (kind="remote") and APPENDED to the same Contracts
+	// list so clients see one merged feed (the unified Contracts[] is the single
+	// source of truth; the legacy peer_contracts/peer_total fields were removed
+	// in SP-2b — SP-1 double-listing fix).
+	if h.peerContracts != nil {
+		var peerRows []model.OptionContract
+		var perr error
+		switch {
+		case ownerType == model.OwnerClient && ownerID != nil:
+			participantID := "client-" + strconv.FormatUint(*ownerID, 10)
+			peerRows, _, perr = h.peerContracts.ListRemoteContractsByLocalParticipant(participantID, h.ownRouting, in.Role, int(in.Page), int(in.PageSize))
+		case ownerType == model.OwnerBank:
+			peerRows, _, perr = h.peerContracts.ListRemoteContractsByBankParty(h.ownRouting, in.Role, int(in.Page), int(in.PageSize))
+		}
 		if perr != nil {
 			return nil, status.Errorf(codes.Internal, "list peer contracts: %v", perr)
 		}
