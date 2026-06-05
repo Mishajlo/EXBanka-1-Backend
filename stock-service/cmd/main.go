@@ -132,9 +132,10 @@ func main() {
 		&model.PriceAlert{},
 		&model.RecurringOrder{},
 		&model.RecurringFundInvestment{},
-		// Phase 4 SI-TX: receiver-side mirror of inbound peer-bank
-		// OTC negotiations. Created/updated by PeerOTCGRPCHandler.
-		&model.PeerOtcNegotiation{},
+		// SP-2a: cross-bank (REMOTE) OTC negotiations are folded into the
+		// unified OTCNegotiation table (routing_number=<peer>, native_id=
+		// <peer foreign id>) — the dedicated peer_otc_negotiation mirror
+		// was retired. PeerOTCGRPCHandler writes the Remote* columns.
 		// Cross-bank option contracts written at COMMIT_TX time
 		// when transaction-service finalises an OTC accept TX.
 		&model.PeerOptionContract{},
@@ -846,7 +847,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("invalid OWN_BANK_CODE %q: %v", cfg.OwnBankCode, err)
 	}
-	peerOtcRepo := repository.NewPeerOtcNegotiationRepository(db)
+	// SP-2a: cross-bank (REMOTE) negotiations live in the unified
+	// OTCNegotiation table now, so the peer-OTC handler + reconciler use the
+	// same OTCNegotiationRepository the local negotiation flows use (its
+	// remote-scoped methods key on routing_number != OwnRouting()).
+	otcNegRepo := repository.NewOTCNegotiationRepository(db)
 	peerOptionRepo := repository.NewPeerOptionContractRepository(db)
 
 	// SP-1 Task 9 — safety-net reconciler for missed cross-bank negotiation
@@ -859,7 +864,7 @@ func main() {
 	// visibility and manual triggering.
 	negReconcilerEntry := cronRegistry.Register("peer-otc-neg-reconciler", "Safety-net poll for missed cross-bank negotiation cancels (2 min tick)", 2*time.Minute)
 	negReconciler := service.NewPeerOTCNegotiationReconciler(
-		peerOtcRepo, peerOptionRepo, peerBankAdminClient, nil /* default http.Client */, ownRouting, 2*time.Minute,
+		otcNegRepo, peerOptionRepo, peerBankAdminClient, nil /* default http.Client */, ownRouting, 2*time.Minute,
 	).WithNotifier(producer)
 	go func() {
 		ticker := time.NewTicker(2 * time.Minute)
@@ -889,7 +894,7 @@ func main() {
 		}
 	}()
 
-	peerOtcHandler := handler.NewPeerOTCGRPCHandler(peerOtcRepo, peerOptionRepo, holdingRepo, peerTxClient, ownRouting)
+	peerOtcHandler := handler.NewPeerOTCGRPCHandler(otcNegRepo, peerOptionRepo, holdingRepo, peerTxClient, ownRouting)
 	peerOtcHandler.SetHoldingReserver(holdingReservationSvc)
 	peerOtcHandler = peerOtcHandler.WithNotifier(producer)
 	// Phase 6: cross-bank option discovery — the peer endpoint
@@ -940,7 +945,7 @@ func main() {
 	// AcceptNegotiation actually mints OptionContract rows + runs the
 	// premium-payment saga (the saga reserves seller shares + buyer
 	// cash before any money moves).
-	otcNegRepo := repository.NewOTCNegotiationRepository(db)
+	// otcNegRepo constructed above (shared with the peer-OTC handler + reconciler).
 	otcNegotiationSvc := service.NewOTCNegotiationService(db, otcOfferRepo, otcNegRepo).
 		WithContractFormer(otcOfferSvc).
 		WithNotifier(producer)
@@ -1018,7 +1023,7 @@ func main() {
 		WithRatings(ratingSvc).
 		WithNegotiations(otcNegotiationSvc).
 		WithRemoteOffers(otcOfferRepo, cfg.OwnBankCode).
-		WithPeerNegotiations(peerOtcRepo) // SP-1 Task 7: unified local+remote negotiation list
+		WithPeerNegotiations(otcNegRepo) // SP-1 Task 7 + SP-2a: unified local+remote negotiation list (REMOTE rows in otc_negotiations)
 
 	// Phase 3: OTC stocks marketplace (sell + buy direction). The
 	// service uses narrow OTCStockListingResolver + OTCStockAccountClient

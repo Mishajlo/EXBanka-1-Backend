@@ -90,10 +90,12 @@ func newPeerOtcHandler(t *testing.T) (*handler.PeerOTCGRPCHandler, *gorm.DB, *fa
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if err := db.AutoMigrate(&model.PeerOtcNegotiation{}, &model.PeerOptionContract{}); err != nil {
+	// SP-2a: remote negotiations live in the unified otc_negotiations table.
+	model.SetOwnRouting("111")
+	if err := db.AutoMigrate(&model.OTCNegotiation{}, &model.PeerOptionContract{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	repo := repository.NewPeerOtcNegotiationRepository(db)
+	repo := repository.NewOTCNegotiationRepository(db)
 	optRepo := repository.NewPeerOptionContractRepository(db)
 	holdings := &fakeHoldingReader{}
 	peerTx := &fakePeerTxClient{}
@@ -447,9 +449,20 @@ func TestValidatePeerOptionMoneyLeg_AcceptPremium(t *testing.T) {
 	// Stored negotiation: 2 MA, strike 250, premium 35 RSD. peer_bank_code is the
 	// counterparty's code ("222"); foreign_id is the negotiation UUID.
 	offer := `{"ticker":"MA","amount":2,"pricePerStock":"250","currency":"RSD","premium":"35","premiumCurrency":"RSD","settlementDate":"2028-06-30T00:00:00Z"}`
-	if err := db.Create(&model.PeerOtcNegotiation{
-		PeerBankCode: "222", ForeignID: "neg-A", BuyerRoutingNumber: 111, BuyerID: "client-1",
-		SellerRoutingNumber: 222, SellerID: "client-9", OfferJSON: offer, Status: "ongoing",
+	// SP-2a: seed a REMOTE OTCNegotiation. We host the buyer (111); the peer
+	// (seller's bank, 222) issued the foreign id, so routing_number=222 and the
+	// terms live in RemoteOfferJSON. ValidatePeerOptionMoneyLeg looks it up by
+	// native_id alone (GetRemoteNegByNative), scoped to routing != own.
+	buyerRouting := int64(111)
+	sellerRouting := int64(222)
+	buyerID := "client-1"
+	sellerID := "client-9"
+	nativeID := "neg-A"
+	if err := db.Create(&model.OTCNegotiation{
+		RoutingNumber: 222, NativeID: &nativeID, BidderOwnerType: model.OwnerBank, Status: "ongoing",
+		RemoteOfferJSON: &offer, RemoteBuyerRouting: &buyerRouting, RemoteBuyerID: &buyerID,
+		RemoteSellerRouting: &sellerRouting, RemoteSellerID: &sellerID,
+		LastActionByPrincipalType: "system", LastActionByOwnerType: string(model.OwnerBank),
 	}).Error; err != nil {
 		t.Fatalf("seed negotiation: %v", err)
 	}

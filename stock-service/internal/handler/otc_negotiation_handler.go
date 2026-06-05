@@ -421,7 +421,7 @@ func (h *OTCOptionsHandler) ListMyNegotiations(ctx context.Context, in *stockpb.
 	// negotiation identity here.
 	if h.peerNegs != nil && ot == model.OwnerClient && oid != nil {
 		principal := "client-" + strconv.FormatUint(*oid, 10)
-		peerRows, perr := h.peerNegs.ListByClient(h.ownRouting, principal, "")
+		peerRows, perr := h.peerNegs.ListRemoteNegByClient(h.ownRouting, principal, "")
 		if perr != nil {
 			return nil, status.Errorf(codes.Internal, "list peer negotiations: %v", perr)
 		}
@@ -472,36 +472,34 @@ func statusSet(statuses []string) map[string]struct{} {
 //   - me_owner = WE host the seller/poster side = SellerRoutingNumber
 //     == our own routing — i.e. someone is bidding on a listing we host.
 //
-// peerNegToProto maps a cross-bank peer-negotiation mirror row onto the
-// unified OTCNegotiationResponse wire shape (SP-1 Task 7). It also returns
-// the decoded offer's Ticker so callers that need both the proto and the
-// ticker (e.g. peerNegToOfferProto) can avoid a second JSON decode.
-func peerNegToProto(row *model.PeerOtcNegotiation, ownRouting int64) (*stockpb.OTCNegotiationResponse, string) {
+// peerNegToProto maps a cross-bank REMOTE negotiation row (in the unified
+// otc_negotiations table) onto the unified OTCNegotiationResponse wire shape
+// (SP-1 Task 7). It also returns the decoded offer's Ticker so callers that
+// need both the proto and the ticker (e.g. peerNegToOfferProto) can avoid a
+// second JSON decode. The cross-bank parties live in the Remote* columns
+// (SP-2a); the authoritative terms are the parsed RemoteOfferJSON.
+func peerNegToProto(row *model.OTCNegotiation, ownRouting int64) (*stockpb.OTCNegotiationResponse, string) {
 	if row == nil {
 		return nil, ""
 	}
 	var offer contractsitx.OtcOffer
-	if err := json.Unmarshal([]byte(row.OfferJSON), &offer); err != nil {
-		log.Printf("WARN peerNegToProto: row %d OfferJSON decode failed: %v", row.ID, err)
+	if err := json.Unmarshal([]byte(remoteOfferJSONOf(row)), &offer); err != nil {
+		log.Printf("WARN peerNegToProto: row %d RemoteOfferJSON decode failed: %v", row.ID, err)
 		// best-effort: id + status still valid; terms left zero
 	}
 
-	meOwner := row.SellerRoutingNumber == ownRouting
+	buyerRouting, _ := remoteBuyer(row)
+	sellerRouting, _ := remoteSeller(row)
+	meOwner := sellerRouting == ownRouting
 	// The counterparty is the side we do NOT host. If we host the seller,
 	// the peer bank is the buyer's; otherwise the peer is the seller's.
-	peerRouting := row.SellerRoutingNumber
+	peerRouting := sellerRouting
 	if meOwner {
-		peerRouting = row.BuyerRoutingNumber
+		peerRouting = buyerRouting
 	}
-	// Use the stored authoritative bank code for the counterparty. The row's
-	// PeerBankCode is ALWAYS the counterparty's human-readable code (set at
-	// row creation time), so it is more reliable than re-deriving it from
-	// the routing number. Fall back to the formatted routing number if the
-	// field is somehow empty (legacy rows).
-	peerBankCode := row.PeerBankCode
-	if peerBankCode == "" {
-		peerBankCode = strconv.FormatInt(peerRouting, 10)
-	}
+	// The remote row's routing_number is the counterparty/peer bank that
+	// issued the foreign id; its string form is the human-readable bank code.
+	peerBankCode := strconv.FormatInt(peerRouting, 10)
 
 	return &stockpb.OTCNegotiationResponse{
 		Id:             row.ID,
@@ -662,7 +660,7 @@ func (h *OTCOptionsHandler) remoteListingOwnChains(
 		mirrorNativeID = *mirror.NativeID
 	}
 	principal := "client-" + strconv.FormatUint(*callerOwnerID, 10)
-	peerRows, perr := h.peerNegs.ListByClient(h.ownRouting, principal, "")
+	peerRows, perr := h.peerNegs.ListRemoteNegByClient(h.ownRouting, principal, "")
 	if perr != nil {
 		return nil, false, status.Errorf(codes.Internal, "list peer negotiations: %v", perr)
 	}
@@ -670,10 +668,10 @@ func (h *OTCOptionsHandler) remoteListingOwnChains(
 	for i := range peerRows {
 		row := &peerRows[i]
 		// Match on the precise lot key carried by the bidder at initiate time.
-		if row.ParentOfferRouting == nil || row.ParentOfferID == nil {
+		if row.RemoteParentRouting == nil || row.RemoteParentNativeID == nil {
 			continue
 		}
-		if *row.ParentOfferRouting != mirror.RoutingNumber || *row.ParentOfferID != mirrorNativeID {
+		if *row.RemoteParentRouting != mirror.RoutingNumber || *row.RemoteParentNativeID != mirrorNativeID {
 			continue
 		}
 		if item, _ := peerNegToProto(row, h.ownRouting); item != nil {
@@ -792,22 +790,22 @@ func (h *OTCOptionsHandler) remoteOfferTimeline(
 		return &stockpb.GetOfferTimelineResponse{Offer: offer, Timeline: []*stockpb.OTCTimelineEntry{}}, true, nil
 	}
 	principal := "client-" + strconv.FormatUint(*callerOwnerID, 10)
-	peerRows, perr := h.peerNegs.ListByClient(h.ownRouting, principal, "")
+	peerRows, perr := h.peerNegs.ListRemoteNegByClient(h.ownRouting, principal, "")
 	if perr != nil {
 		return nil, false, status.Errorf(codes.Internal, "list peer negotiations: %v", perr)
 	}
 	timeline := make([]*stockpb.OTCTimelineEntry, 0)
 	for i := range peerRows {
 		row := &peerRows[i]
-		if row.ParentOfferRouting == nil || row.ParentOfferID == nil {
+		if row.RemoteParentRouting == nil || row.RemoteParentNativeID == nil {
 			continue
 		}
-		if *row.ParentOfferRouting != mirror.RoutingNumber || *row.ParentOfferID != mirrorNativeID {
+		if *row.RemoteParentRouting != mirror.RoutingNumber || *row.RemoteParentNativeID != mirrorNativeID {
 			continue
 		}
 		var off contractsitx.OtcOffer
-		if jerr := json.Unmarshal([]byte(row.OfferJSON), &off); jerr != nil {
-			log.Printf("WARN remoteOfferTimeline: row %d OfferJSON decode failed: %v", row.ID, jerr)
+		if jerr := json.Unmarshal([]byte(remoteOfferJSONOf(row)), &off); jerr != nil {
+			log.Printf("WARN remoteOfferTimeline: row %d RemoteOfferJSON decode failed: %v", row.ID, jerr)
 		}
 		timeline = append(timeline, &stockpb.OTCTimelineEntry{
 			NegotiationId:  row.ID,

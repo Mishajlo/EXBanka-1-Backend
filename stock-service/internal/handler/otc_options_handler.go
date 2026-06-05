@@ -51,10 +51,12 @@ type OTCOptionsHandler struct {
 }
 
 // PeerNegotiationLister fetches the caller's cross-bank negotiation mirror
-// rows. ListMyNegotiations merges these REMOTE chains with the LOCAL ones.
-// Satisfied by *repository.PeerOtcNegotiationRepository.
+// rows (REMOTE rows in the unified otc_negotiations table). ListMyNegotiations
+// merges these REMOTE chains with the LOCAL ones. Satisfied by
+// *repository.OTCNegotiationRepository (SP-2a — the dedicated
+// peer_otc_negotiation mirror was retired and folded into this table).
 type PeerNegotiationLister interface {
-	ListByClient(ownRouting int64, clientPrincipal, role string) ([]model.PeerOtcNegotiation, error)
+	ListRemoteNegByClient(ownRouting int64, clientPrincipal, role string) ([]model.OTCNegotiation, error)
 }
 
 // WithPeerNegotiations wires the cross-bank peer-negotiation mirror so
@@ -267,7 +269,7 @@ func (h *OTCOptionsHandler) ListNegotiationHistory(ctx context.Context, in *stoc
 	// bank/employee caller has no cross-bank negotiation identity.
 	if h.peerNegs != nil && ownerType == model.OwnerClient && ownerID != nil {
 		principal := "client-" + strconv.FormatUint(*ownerID, 10)
-		peerRows, perr := h.peerNegs.ListByClient(h.ownRouting, principal, "")
+		peerRows, perr := h.peerNegs.ListRemoteNegByClient(h.ownRouting, principal, "")
 		if perr != nil {
 			return nil, status.Errorf(codes.Internal, "list peer negotiations: %v", perr)
 		}
@@ -337,12 +339,13 @@ func historyPeerStatusSet(requested []string) map[string]struct{} {
 //     our own routing).
 //
 // The ticker is read from the same peerNegToProto decode (second return value)
-// so OfferJSON is only unmarshalled once per row, not twice.
-func peerNegToOfferProto(row *model.PeerOtcNegotiation, ownRouting int64) *stockpb.OTCOfferResponse {
+// so RemoteOfferJSON is only unmarshalled once per row, not twice.
+func peerNegToOfferProto(row *model.OTCNegotiation, ownRouting int64) *stockpb.OTCOfferResponse {
 	neg, ticker := peerNegToProto(row, ownRouting)
 	if neg == nil {
 		return nil
 	}
+	_, sellerID := remoteSeller(row)
 	return &stockpb.OTCOfferResponse{
 		Id:             neg.GetId(),
 		StockTicker:    ticker,
@@ -358,7 +361,7 @@ func peerNegToOfferProto(row *model.PeerOtcNegotiation, ownRouting int64) *stock
 		BankCode:       neg.GetBankCode(),
 		MeOwner:        neg.GetMeOwner(),
 		Initiator: &stockpb.PartyRef{
-			DisplayName: row.SellerID,
+			DisplayName: sellerID,
 			BankCode:    neg.GetBankCode(),
 		},
 	}

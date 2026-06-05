@@ -76,14 +76,15 @@ func remoteMirrorRow(id uint64, peerRouting int64, foreignID, bankCode, sellerID
 	}
 }
 
-// peerRowWithParent is peerRow plus the (ParentOfferRouting, ParentOfferID) lot
-// key that ties a peer chain to a specific remote listing.
-func peerRowWithParent(id uint64, buyerRouting int64, buyerID string, sellerRouting int64, sellerID, status string, parentRouting int64, parentID string) model.PeerOtcNegotiation {
+// peerRowWithParent is peerRow plus the (RemoteParentRouting,
+// RemoteParentNativeID) lot key that ties a remote chain to a specific remote
+// listing (SP-2a).
+func peerRowWithParent(id uint64, buyerRouting int64, buyerID string, sellerRouting int64, sellerID, status string, parentRouting int64, parentID string) model.OTCNegotiation {
 	row := peerRow(id, buyerRouting, buyerID, sellerRouting, sellerID, status)
 	pr := parentRouting
 	pid := parentID
-	row.ParentOfferRouting = &pr
-	row.ParentOfferID = &pid
+	row.RemoteParentRouting = &pr
+	row.RemoteParentNativeID = &pid
 	return row
 }
 
@@ -194,7 +195,7 @@ func TestListingNegotiations_RemoteId_OwnChainOnly(t *testing.T) {
 	remote := &fakeRemoteOfferGetter{byID: map[uint64]*model.OTCOffer{
 		900: remoteMirrorRow(900, peerSellerRouting, "foreign-7", "222", "client-3", "", ""),
 	}}
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		// Caller's own chain against the remote listing (matching lot key).
 		peerRowWithParent(55, ownRouting, "client-7", peerSellerRouting, "client-3", "ongoing", peerSellerRouting, "foreign-7"),
 		// Caller's chain against a DIFFERENT remote listing — must be excluded.
@@ -269,7 +270,7 @@ func TestTimeline_RemoteId_OwnChainOnly(t *testing.T) {
 	remote := &fakeRemoteOfferGetter{byID: map[uint64]*model.OTCOffer{
 		900: remoteMirrorRow(900, peerSellerRouting, "foreign-7", "222", "client-3", "ACME", "open"),
 	}}
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		peerRowWithParent(55, ownRouting, "client-7", peerSellerRouting, "client-3", "ongoing", peerSellerRouting, "foreign-7"),
 		peerRowWithParent(56, ownRouting, "client-7", peerSellerRouting, "client-3", "ongoing", peerSellerRouting, "foreign-other"),
 	}}

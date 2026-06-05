@@ -99,7 +99,7 @@ type HoldingReserver interface {
 
 type PeerOTCGRPCHandler struct {
 	stockpb.UnimplementedPeerOTCServiceServer
-	negRepo         *repository.PeerOtcNegotiationRepository
+	negRepo         *repository.OTCNegotiationRepository
 	peerOptionRepo  *repository.PeerOptionContractRepository
 	holdings        HoldingReader
 	peerTx          transactionpb.PeerTxServiceClient
@@ -243,7 +243,7 @@ type PeerOfferAggregate struct {
 type AggregateBidsFn func(offerIDs []uint64) (map[uint64]PeerOfferAggregate, error)
 
 func NewPeerOTCGRPCHandler(
-	negRepo *repository.PeerOtcNegotiationRepository,
+	negRepo *repository.OTCNegotiationRepository,
 	peerOptionRepo *repository.PeerOptionContractRepository,
 	holdings HoldingReader,
 	peerTx transactionpb.PeerTxServiceClient,
@@ -441,6 +441,14 @@ func (h *PeerOTCGRPCHandler) CreateNegotiation(ctx context.Context, req *stockpb
 	if parseErr != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "peer_bank_code %q is not numeric", req.GetPeerBankCode())
 	}
+	// Ingestion collision guard (SP-2a): a peer must not write a row that looks
+	// LOCAL. The unified table keys remote rows on routing_number=<peer> — if
+	// the claimed peer routing equals our own, the row would alias a local
+	// chain and could leak into local money paths. Reject up front.
+	if peerRouting == model.OwnRouting() {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"peer_bank_code %q collides with this bank's own routing (%d)", req.GetPeerBankCode(), model.OwnRouting())
+	}
 	if req.GetBuyerId().GetRoutingNumber() != peerRouting {
 		return nil, status.Errorf(codes.PermissionDenied,
 			"buyer_id.routing_number (%d) must match the authenticated peer's routing (%d)",
@@ -455,39 +463,38 @@ func (h *PeerOTCGRPCHandler) CreateNegotiation(ctx context.Context, req *stockpb
 			"seller_id.routing_number (%d) must match this bank's routing (%d) — inbound bids target a seller on this bank only",
 			req.GetSellerId().GetRoutingNumber(), h.ownRouting)
 	}
-	offerJSON, err := json.Marshal(protoToOffer(req.GetOffer()))
+	offer := protoToOffer(req.GetOffer())
+	offerJSON, err := json.Marshal(offer)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "marshal offer: %v", err)
 	}
 	foreignID := uuid.NewString()
-	neg := &model.PeerOtcNegotiation{
-		PeerBankCode:        req.GetPeerBankCode(),
-		ForeignID:           foreignID,
-		BuyerRoutingNumber:  req.GetBuyerId().GetRoutingNumber(),
-		BuyerID:             req.GetBuyerId().GetId(),
-		SellerRoutingNumber: req.GetSellerId().GetRoutingNumber(),
-		SellerID:            req.GetSellerId().GetId(),
-		OfferJSON:           string(offerJSON),
-		Status:              "ongoing",
-	}
 	// Phase 10 — capture the bidder-supplied parent_offer_id for the
 	// cross-bank cascade-cancel grouping. Both fields must be set for
 	// the row to participate in cascade matching; either-or absent
 	// means free-form (no cascade).
+	var parentRouting *int64
+	var parentNativeID *string
 	if p := req.GetOffer().GetParentOfferId(); p != nil && p.GetId() != "" {
 		r := p.GetRoutingNumber()
 		id := p.GetId()
-		neg.ParentOfferRouting = &r
-		neg.ParentOfferID = &id
+		parentRouting = &r
+		parentNativeID = &id
 	}
-	if err := h.negRepo.Create(neg); err != nil {
+	neg := buildRemoteNeg(
+		peerRouting, foreignID, offer, string(offerJSON),
+		req.GetBuyerId().GetRoutingNumber(), req.GetBuyerId().GetId(),
+		req.GetSellerId().GetRoutingNumber(), req.GetSellerId().GetId(),
+		parentRouting, parentNativeID, "ongoing",
+	)
+	if err := h.negRepo.UpsertRemoteNeg(neg); err != nil {
 		return nil, status.Errorf(codes.Internal, "create: %v", err)
 	}
 	// Inbound bid from a peer → notify our local seller (if the seller
 	// side is local). Best-effort, after-commit.
-	if uid, ok := h.localClientUserID(neg.SellerRoutingNumber, neg.SellerID); ok {
+	if uid, ok := h.localClientUserID(req.GetSellerId().GetRoutingNumber(), req.GetSellerId().GetId()); ok {
 		h.publishPeerNotif(ctx, uid, "OTC_OFFER_RECEIVED",
-			notifDataFromOffer(protoToOffer(req.GetOffer())),
+			notifDataFromOffer(offer),
 			"otc_negotiation", neg.ID,
 		)
 	}
@@ -504,27 +511,30 @@ func (h *PeerOTCGRPCHandler) UpdateNegotiation(ctx context.Context, req *stockpb
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "marshal offer: %v", err)
 	}
-	if err := h.negRepo.UpdateOffer(req.GetPeerBankCode(), req.GetNegotiationId().GetId(), string(offerJSON)); err != nil {
+	peerRouting := peerRoutingForCode(req.GetPeerBankCode())
+	if err := h.negRepo.UpdateRemoteNegOffer(peerRouting, req.GetNegotiationId().GetId(), string(offerJSON)); err != nil {
 		return nil, status.Errorf(codes.Internal, "update: %v", err)
 	}
 	// Inbound counter — the peer that posted carries lastModifiedBy
 	// on the offer. The OTHER party in our local row is the recipient.
 	if h.notifier != nil {
-		row, gerr := h.negRepo.GetByPeerAndID(req.GetPeerBankCode(), req.GetNegotiationId().GetId())
+		row, gerr := h.negRepo.GetRemoteNegByRoutingAndNative(peerRouting, req.GetNegotiationId().GetId())
 		if gerr == nil {
 			actorRouting := req.GetOffer().GetLastModifiedBy().GetRoutingNumber()
 			actorID := req.GetOffer().GetLastModifiedBy().GetId()
+			buyerRouting, buyerID := remoteBuyer(row)
+			sellerRouting, sellerID := remoteSeller(row)
 			// Identify the local party that is NOT the actor.
 			var localUID uint64
-			if row.BuyerRoutingNumber == h.ownRouting &&
-				!(row.BuyerRoutingNumber == actorRouting && row.BuyerID == actorID) {
-				if uid, ok := h.localClientUserID(row.BuyerRoutingNumber, row.BuyerID); ok {
+			if buyerRouting == h.ownRouting &&
+				!(buyerRouting == actorRouting && buyerID == actorID) {
+				if uid, ok := h.localClientUserID(buyerRouting, buyerID); ok {
 					localUID = uid
 				}
 			}
-			if localUID == 0 && row.SellerRoutingNumber == h.ownRouting &&
-				!(row.SellerRoutingNumber == actorRouting && row.SellerID == actorID) {
-				if uid, ok := h.localClientUserID(row.SellerRoutingNumber, row.SellerID); ok {
+			if localUID == 0 && sellerRouting == h.ownRouting &&
+				!(sellerRouting == actorRouting && sellerID == actorID) {
+				if uid, ok := h.localClientUserID(sellerRouting, sellerID); ok {
 					localUID = uid
 				}
 			}
@@ -543,7 +553,7 @@ func (h *PeerOTCGRPCHandler) GetNegotiation(ctx context.Context, req *stockpb.Ge
 	if req.GetNegotiationId() == nil {
 		return nil, status.Error(codes.InvalidArgument, "negotiation_id required")
 	}
-	row, err := h.negRepo.GetByPeerAndID(req.GetPeerBankCode(), req.GetNegotiationId().GetId())
+	row, err := h.negRepo.GetRemoteNegByRoutingAndNative(peerRoutingForCode(req.GetPeerBankCode()), req.GetNegotiationId().GetId())
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, status.Error(codes.NotFound, "negotiation not found")
@@ -551,11 +561,13 @@ func (h *PeerOTCGRPCHandler) GetNegotiation(ctx context.Context, req *stockpb.Ge
 		return nil, status.Errorf(codes.Internal, "get: %v", err)
 	}
 	var offer contractsitx.OtcOffer
-	_ = json.Unmarshal([]byte(row.OfferJSON), &offer)
+	_ = json.Unmarshal([]byte(remoteOfferJSONOf(row)), &offer)
+	buyerRouting, buyerID := remoteBuyer(row)
+	sellerRouting, sellerID := remoteSeller(row)
 	return &stockpb.GetNegotiationResponse{
-		Id:        &stockpb.PeerForeignBankId{RoutingNumber: h.ownRouting, Id: row.ForeignID},
-		BuyerId:   &stockpb.PeerForeignBankId{RoutingNumber: row.BuyerRoutingNumber, Id: row.BuyerID},
-		SellerId:  &stockpb.PeerForeignBankId{RoutingNumber: row.SellerRoutingNumber, Id: row.SellerID},
+		Id:        &stockpb.PeerForeignBankId{RoutingNumber: h.ownRouting, Id: remoteNativeIDOf(row)},
+		BuyerId:   &stockpb.PeerForeignBankId{RoutingNumber: buyerRouting, Id: buyerID},
+		SellerId:  &stockpb.PeerForeignBankId{RoutingNumber: sellerRouting, Id: sellerID},
 		Offer:     offerToProto(offer),
 		Status:    row.Status,
 		UpdatedAt: row.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
@@ -571,9 +583,10 @@ func (h *PeerOTCGRPCHandler) DeleteNegotiation(ctx context.Context, req *stockpb
 	// (ParentOfferID set — discovered chain whose seller accepted a
 	// competing bid). Only used for the notification choice; the row
 	// state change is identical either way.
-	row, gerr := h.negRepo.GetByPeerAndID(req.GetPeerBankCode(), req.GetNegotiationId().GetId())
+	peerRouting := peerRoutingForCode(req.GetPeerBankCode())
+	row, gerr := h.negRepo.GetRemoteNegByRoutingAndNative(peerRouting, req.GetNegotiationId().GetId())
 
-	if err := h.negRepo.UpdateStatus(req.GetPeerBankCode(), req.GetNegotiationId().GetId(), "cancelled"); err != nil {
+	if err := h.negRepo.UpdateRemoteNegStatus(peerRouting, req.GetNegotiationId().GetId(), "cancelled"); err != nil {
 		return nil, status.Errorf(codes.Internal, "cancel: %v", err)
 	}
 	if gerr == nil && row != nil && h.notifier != nil {
@@ -583,23 +596,25 @@ func (h *PeerOTCGRPCHandler) DeleteNegotiation(ctx context.Context, req *stockpb
 		// seller side means the cascade fired (the seller would have
 		// accepted a competing bid). Free-form chains (no parent)
 		// can't be cascade victims, so they're plain cancels.
-		if row.ParentOfferRouting != nil && row.ParentOfferID != nil && *row.ParentOfferID != "" {
+		if row.RemoteParentRouting != nil && row.RemoteParentNativeID != nil && *row.RemoteParentNativeID != "" {
 			notifType = "OTC_OFFER_CASCADE_CANCELLED"
 			var offer contractsitx.OtcOffer
-			_ = json.Unmarshal([]byte(row.OfferJSON), &offer)
+			_ = json.Unmarshal([]byte(remoteOfferJSONOf(row)), &offer)
 			data["ticker"] = offer.Ticker
 			data["accepted_premium"] = offer.Premium.String()
 		} else {
 			var offer contractsitx.OtcOffer
-			_ = json.Unmarshal([]byte(row.OfferJSON), &offer)
+			_ = json.Unmarshal([]byte(remoteOfferJSONOf(row)), &offer)
 			data["ticker"] = offer.Ticker
 		}
 		// Recipient: the LOCAL party in this row (whichever side has
 		// own_routing). For caller-driven cancels the caller is the
 		// other bank's user, so the local party is the recipient.
-		if uid, ok := h.localClientUserID(row.BuyerRoutingNumber, row.BuyerID); ok {
+		buyerRouting, buyerID := remoteBuyer(row)
+		sellerRouting, sellerID := remoteSeller(row)
+		if uid, ok := h.localClientUserID(buyerRouting, buyerID); ok {
 			h.publishPeerNotif(ctx, uid, notifType, data, "otc_negotiation", row.ID)
-		} else if uid, ok := h.localClientUserID(row.SellerRoutingNumber, row.SellerID); ok {
+		} else if uid, ok := h.localClientUserID(sellerRouting, sellerID); ok {
 			h.publishPeerNotif(ctx, uid, notifType, data, "otc_negotiation", row.ID)
 		}
 	}
@@ -631,7 +646,8 @@ func (h *PeerOTCGRPCHandler) CascadeCancelSiblings(ctx context.Context, req *sto
 	if h.negRepo == nil {
 		return nil, status.Error(codes.Unimplemented, "negotiation repo not wired")
 	}
-	accepted, err := h.negRepo.GetByPeerAndID(req.GetPeerBankCode(), req.GetForeignId())
+	acceptedRouting := peerRoutingForCode(req.GetPeerBankCode())
+	accepted, err := h.negRepo.GetRemoteNegByRoutingAndNative(acceptedRouting, req.GetForeignId())
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, status.Error(codes.NotFound, "accepted negotiation not found")
@@ -639,12 +655,13 @@ func (h *PeerOTCGRPCHandler) CascadeCancelSiblings(ctx context.Context, req *sto
 		return nil, status.Errorf(codes.Internal, "lookup accepted: %v", err)
 	}
 	// Free-form chains (no parent) are not part of any sibling group.
-	if accepted.ParentOfferRouting == nil || accepted.ParentOfferID == nil || *accepted.ParentOfferID == "" {
+	if accepted.RemoteParentRouting == nil || accepted.RemoteParentNativeID == nil || *accepted.RemoteParentNativeID == "" {
 		return &stockpb.CascadeCancelSiblingsResponse{}, nil
 	}
-	candidates, err := h.negRepo.ListBySellerAndParentOffer(
-		accepted.SellerRoutingNumber, accepted.SellerID,
-		*accepted.ParentOfferRouting, *accepted.ParentOfferID,
+	acceptedSellerRouting, acceptedSellerID := remoteSeller(accepted)
+	candidates, err := h.negRepo.ListRemoteNegBySellerAndParent(
+		acceptedSellerRouting, acceptedSellerID,
+		*accepted.RemoteParentRouting, *accepted.RemoteParentNativeID,
 	)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list siblings: %v", err)
@@ -653,12 +670,14 @@ func (h *PeerOTCGRPCHandler) CascadeCancelSiblings(ctx context.Context, req *sto
 	for i := range candidates {
 		sib := &candidates[i]
 		// Skip the just-accepted row itself.
-		if sib.PeerBankCode == accepted.PeerBankCode && sib.ForeignID == accepted.ForeignID {
+		if sib.RoutingNumber == accepted.RoutingNumber && remoteNativeIDOf(sib) == remoteNativeIDOf(accepted) {
 			continue
 		}
-		if uerr := h.negRepo.UpdateStatus(sib.PeerBankCode, sib.ForeignID, "cancelled"); uerr != nil {
+		sibPeerCode := strconv.FormatInt(sib.RoutingNumber, 10)
+		sibForeignID := remoteNativeIDOf(sib)
+		if uerr := h.negRepo.UpdateRemoteNegStatus(sib.RoutingNumber, sibForeignID, "cancelled"); uerr != nil {
 			log.Printf("WARN: cascade-cancel sibling %s/%s status update failed: %v",
-				sib.PeerBankCode, sib.ForeignID, uerr)
+				sibPeerCode, sibForeignID, uerr)
 			continue
 		}
 		// Project the cancelled row into the same wire shape the FE
@@ -667,12 +686,14 @@ func (h *PeerOTCGRPCHandler) CascadeCancelSiblings(ctx context.Context, req *sto
 		// effort: a failed OfferJSON decode still yields a valid row
 		// (id-only) — FE just won't have the offer terms for that one.
 		var offer contractsitx.OtcOffer
-		_ = json.Unmarshal([]byte(sib.OfferJSON), &offer)
+		_ = json.Unmarshal([]byte(remoteOfferJSONOf(sib)), &offer)
+		sibBuyerRouting, sibBuyerID := remoteBuyer(sib)
+		sibSellerRouting, sibSellerID := remoteSeller(sib)
 		out = append(out, &stockpb.CascadedSibling{
-			PeerBankCode: sib.PeerBankCode,
-			ForeignId:    sib.ForeignID,
-			BuyerId:      &stockpb.PeerForeignBankId{RoutingNumber: sib.BuyerRoutingNumber, Id: sib.BuyerID},
-			SellerId:     &stockpb.PeerForeignBankId{RoutingNumber: sib.SellerRoutingNumber, Id: sib.SellerID},
+			PeerBankCode: sibPeerCode,
+			ForeignId:    sibForeignID,
+			BuyerId:      &stockpb.PeerForeignBankId{RoutingNumber: sibBuyerRouting, Id: sibBuyerID},
+			SellerId:     &stockpb.PeerForeignBankId{RoutingNumber: sibSellerRouting, Id: sibSellerID},
 			Offer:        offerToProto(offer),
 			Status:       "cancelled",
 			Role:         "seller", // cascade fires on accept — caller is always the seller
@@ -692,7 +713,7 @@ func (h *PeerOTCGRPCHandler) MarkNegotiationAccepted(ctx context.Context, req *s
 	if req.GetNegotiationId() == nil {
 		return nil, status.Error(codes.InvalidArgument, "negotiation_id required")
 	}
-	if err := h.negRepo.UpdateStatus(req.GetPeerBankCode(), req.GetNegotiationId().GetId(), "accepted"); err != nil {
+	if err := h.negRepo.UpdateRemoteNegStatus(peerRoutingForCode(req.GetPeerBankCode()), req.GetNegotiationId().GetId(), "accepted"); err != nil {
 		return nil, status.Errorf(codes.Internal, "mark accepted: %v", err)
 	}
 	return &stockpb.MarkNegotiationAcceptedResponse{}, nil
@@ -702,7 +723,8 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	if req.GetNegotiationId() == nil {
 		return nil, status.Error(codes.InvalidArgument, "negotiation_id required")
 	}
-	row, err := h.negRepo.GetByPeerAndID(req.GetPeerBankCode(), req.GetNegotiationId().GetId())
+	peerRouting := peerRoutingForCode(req.GetPeerBankCode())
+	row, err := h.negRepo.GetRemoteNegByRoutingAndNative(peerRouting, req.GetNegotiationId().GetId())
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, status.Error(codes.NotFound, "negotiation not found")
@@ -710,9 +732,12 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 		return nil, status.Errorf(codes.Internal, "get: %v", err)
 	}
 	var offer contractsitx.OtcOffer
-	if err := json.Unmarshal([]byte(row.OfferJSON), &offer); err != nil {
+	if err := json.Unmarshal([]byte(remoteOfferJSONOf(row)), &offer); err != nil {
 		return nil, status.Errorf(codes.Internal, "decode offer: %v", err)
 	}
+	buyerRouting, buyerID := remoteBuyer(row)
+	sellerRouting, sellerID := remoteSeller(row)
+	foreignID := remoteNativeIDOf(row)
 
 	// Atomically claim the negotiation for acceptance (ongoing → accepted) BEFORE
 	// composing/dispatching the option-formation SI-TX. This serialises concurrent
@@ -721,7 +746,7 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	// charged the buyer the premium, reserved the seller's shares again, and minted
 	// a duplicate contract. On a synchronous dispatch failure we revert the claim
 	// (accepted → ongoing) so the negotiation can be re-accepted.
-	claimed, cerr := h.negRepo.CompareAndSetStatus(req.GetPeerBankCode(), req.GetNegotiationId().GetId(), "ongoing", "accepted")
+	claimed, cerr := h.negRepo.CompareAndSetRemoteNegStatus(peerRouting, req.GetNegotiationId().GetId(), "ongoing", "accepted")
 	if cerr != nil {
 		return nil, status.Errorf(codes.Internal, "claim negotiation: %v", cerr)
 	}
@@ -736,7 +761,7 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	// 3. Seller debits 1× OptionDescription (asset)
 	// 4. Buyer credits 1× OptionDescription
 	optDesc := contractsitx.OptionDescription{
-		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: h.ownRouting, ID: row.ForeignID},
+		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: h.ownRouting, ID: foreignID},
 		Stock:          contractsitx.StockDescription{Ticker: offer.Ticker},
 		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: offer.PricePerStock}, Currency: offer.Currency},
 		SettlementDate: offer.SettlementDate,
@@ -758,7 +783,7 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	// currency. Sellers stay on participant-id resolution (the
 	// seller-credit is a credit; no per-account binding needed since
 	// any active <currency> account works for incoming funds).
-	buyerAccountID := row.BuyerID
+	buyerAccountID := buyerID
 	if offer.BuyerAccountNumber != "" {
 		buyerAccountID = offer.BuyerAccountNumber
 	}
@@ -781,10 +806,10 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	// premium DEBIT (posting 0) may carry an account number (the buyer's pinned
 	// account when BuyerAccountNumber is set); all other legs carry participant ids.
 	postings := []*transactionpb.SiTxPosting{
-		{RoutingNumber: row.BuyerRoutingNumber, AccountId: buyerAccountID, AccountType: accountTypeFor(buyerAccountID), AssetId: offer.PremiumCurrency, AssetType: contractsitx.AssetTypeMonas, Amount: premium, Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: row.SellerRoutingNumber, AccountId: row.SellerID, AccountType: accountTypeFor(row.SellerID), AssetId: offer.PremiumCurrency, AssetType: contractsitx.AssetTypeMonas, Amount: premium, Direction: contractsitx.DirectionCredit},
-		{RoutingNumber: row.SellerRoutingNumber, AccountId: row.SellerID, AccountType: accountTypeFor(row.SellerID), AssetId: optAssetID, AssetType: contractsitx.AssetTypeOption, Amount: "1", Direction: contractsitx.DirectionDebit},
-		{RoutingNumber: row.BuyerRoutingNumber, AccountId: row.BuyerID, AccountType: accountTypeFor(row.BuyerID), AssetId: optAssetID, AssetType: contractsitx.AssetTypeOption, Amount: "1", Direction: contractsitx.DirectionCredit},
+		{RoutingNumber: buyerRouting, AccountId: buyerAccountID, AccountType: accountTypeFor(buyerAccountID), AssetId: offer.PremiumCurrency, AssetType: contractsitx.AssetTypeMonas, Amount: premium, Direction: contractsitx.DirectionDebit},
+		{RoutingNumber: sellerRouting, AccountId: sellerID, AccountType: accountTypeFor(sellerID), AssetId: offer.PremiumCurrency, AssetType: contractsitx.AssetTypeMonas, Amount: premium, Direction: contractsitx.DirectionCredit},
+		{RoutingNumber: sellerRouting, AccountId: sellerID, AccountType: accountTypeFor(sellerID), AssetId: optAssetID, AssetType: contractsitx.AssetTypeOption, Amount: "1", Direction: contractsitx.DirectionDebit},
+		{RoutingNumber: buyerRouting, AccountId: buyerID, AccountType: accountTypeFor(buyerID), AssetId: optAssetID, AssetType: contractsitx.AssetTypeOption, Amount: "1", Direction: contractsitx.DirectionCredit},
 	}
 
 	resp, err := h.peerTx.InitiateOutboundTxWithPostings(ctx, &transactionpb.SiTxInitiateWithPostingsRequest{
@@ -795,7 +820,7 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	if err != nil {
 		// Dispatch failed — release the acceptance claim (accepted → ongoing) so
 		// the negotiation can be re-accepted after the cause is resolved.
-		if _, rerr := h.negRepo.CompareAndSetStatus(req.GetPeerBankCode(), req.GetNegotiationId().GetId(), "accepted", "ongoing"); rerr != nil {
+		if _, rerr := h.negRepo.CompareAndSetRemoteNegStatus(peerRouting, req.GetNegotiationId().GetId(), "accepted", "ongoing"); rerr != nil {
 			log.Printf("WARN: peer-otc accept: failed to revert claim for %s/%s after dispatch error: %v",
 				req.GetPeerBankCode(), req.GetNegotiationId().GetId(), rerr)
 		}
@@ -815,7 +840,7 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	// local user is the seller. The buyer's bank emits its own
 	// OTC_CONTRACT_CREATED notification independently when it processes
 	// the SI-TX postings on its side.
-	if uid, ok := h.localClientUserID(row.SellerRoutingNumber, row.SellerID); ok {
+	if uid, ok := h.localClientUserID(sellerRouting, sellerID); ok {
 		h.publishPeerNotif(ctx, uid, "OTC_CONTRACT_CREATED",
 			map[string]string{
 				"ticker":       offer.Ticker,
@@ -854,6 +879,128 @@ func isAllDigits(s string) bool {
 		}
 	}
 	return true
+}
+
+// buildRemoteNeg constructs a REMOTE model.OTCNegotiation row from the SI-TX
+// offer + party ids. It satisfies the unified table's NOT-NULL / CHECK /
+// ValidateOwner constraints for a remote row:
+//   - RoutingNumber = the peer's routing (peerRouting, guaranteed != ownRouting
+//     by the ingestion guard at the call sites). NativeID = the foreign id.
+//   - BidderOwnerType=OwnerBank + BidderOwnerID=nil (ValidateOwner-valid; a
+//     remote chain has no LOCAL bidder identity — the real parties live in the
+//     Remote* columns). ParentOfferID stays 0 (remote rows reference no local
+//     parent listing).
+//   - Quantity/StrikePrice/Premium/SettlementDate are parsed from the offer to
+//     satisfy NOT-NULL; they are advisory only (RemoteOfferJSON is the
+//     authoritative source the read-merge decodes). LastActionBy* audit fields
+//     are stamped with neutral system values.
+//   - Status carries the peer status vocabulary ("ongoing" by default).
+func buildRemoteNeg(
+	peerRouting int64,
+	foreignID string,
+	offer contractsitx.OtcOffer,
+	offerJSON string,
+	buyerRouting int64, buyerID string,
+	sellerRouting int64, sellerID string,
+	parentRouting *int64, parentNativeID *string,
+	status string,
+) *model.OTCNegotiation {
+	now := time.Now().UTC()
+	settle := offer.SettlementDate
+	settleTime := now
+	if settle != "" {
+		if t, e := time.Parse(time.RFC3339, settle); e == nil {
+			settleTime = t
+		} else if t, e := time.Parse("2006-01-02", settle); e == nil {
+			settleTime = t
+		}
+	}
+	buyerR := buyerRouting
+	sellerR := sellerRouting
+	bID := buyerID
+	sID := sellerID
+	oJSON := offerJSON
+	return &model.OTCNegotiation{
+		RoutingNumber:   peerRouting,
+		NativeID:        &foreignID,
+		ParentOfferID:   0,
+		BidderOwnerType: model.OwnerBank,
+		BidderOwnerID:   nil,
+		Quantity:        decimal.NewFromInt(offer.Amount),
+		StrikePrice:     offer.PricePerStock,
+		Premium:         offer.Premium,
+		SettlementDate:  settleTime,
+		Status:          status,
+		// Audit fields — neutral system values (no local principal acts on a
+		// remote mirror row).
+		LastActionByPrincipalType: "system",
+		LastActionByPrincipalID:   0,
+		LastActionByOwnerType:     string(model.OwnerBank),
+		LastActionByOwnerID:       nil,
+		LastActionAt:              now,
+		// Remote-mirror columns.
+		RemoteOfferJSON:      &oJSON,
+		RemoteBuyerRouting:   &buyerR,
+		RemoteBuyerID:        &bID,
+		RemoteSellerRouting:  &sellerR,
+		RemoteSellerID:       &sID,
+		RemoteParentRouting:  parentRouting,
+		RemoteParentNativeID: parentNativeID,
+	}
+}
+
+// peerRoutingForCode parses a peer bank code string into its int64 routing.
+// A non-numeric code yields 0 (no remote row matches), mirroring the repo's
+// tolerant lookup behaviour.
+func peerRoutingForCode(peerCode string) int64 {
+	n, err := strconv.ParseInt(peerCode, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// remoteBuyer / remoteSeller / remoteOfferJSONOf / remoteNativeIDOf /
+// remoteParentOf read the Remote* columns off a unified OTCNegotiation row,
+// dereferencing the nullable pointers to the value forms the cross-bank handler
+// logic expects (zero values for unset pointers — never on a well-formed remote
+// row written by buildRemoteNeg / UpsertRemoteNeg).
+func remoteBuyer(n *model.OTCNegotiation) (int64, string) {
+	var r int64
+	var id string
+	if n.RemoteBuyerRouting != nil {
+		r = *n.RemoteBuyerRouting
+	}
+	if n.RemoteBuyerID != nil {
+		id = *n.RemoteBuyerID
+	}
+	return r, id
+}
+
+func remoteSeller(n *model.OTCNegotiation) (int64, string) {
+	var r int64
+	var id string
+	if n.RemoteSellerRouting != nil {
+		r = *n.RemoteSellerRouting
+	}
+	if n.RemoteSellerID != nil {
+		id = *n.RemoteSellerID
+	}
+	return r, id
+}
+
+func remoteOfferJSONOf(n *model.OTCNegotiation) string {
+	if n.RemoteOfferJSON != nil {
+		return *n.RemoteOfferJSON
+	}
+	return ""
+}
+
+func remoteNativeIDOf(n *model.OTCNegotiation) string {
+	if n.NativeID != nil {
+		return *n.NativeID
+	}
+	return ""
 }
 
 func protoToOffer(p *stockpb.PeerOtcOffer) contractsitx.OtcOffer {
@@ -1111,7 +1258,7 @@ func (h *PeerOTCGRPCHandler) ValidatePeerOptionMoneyLeg(ctx context.Context, req
 		// banks and unique per bank) — NOT by peer_bank_code: this validator runs on
 		// both the coordinator (sees its OWN routing as the peer code) and the
 		// receiver (sees the counterparty), so the peer_bank_code is unreliable here.
-		neg, nerr := h.negRepo.GetByForeignID(req.GetNegotiationId())
+		neg, nerr := h.negRepo.GetRemoteNegByNative(req.GetNegotiationId())
 		if nerr != nil {
 			if errors.Is(nerr, gorm.ErrRecordNotFound) {
 				return deny("no stored negotiation for peer/id")
@@ -1119,7 +1266,7 @@ func (h *PeerOTCGRPCHandler) ValidatePeerOptionMoneyLeg(ctx context.Context, req
 			return nil, status.Errorf(codes.Internal, "lookup negotiation: %v", nerr)
 		}
 		var offer contractsitx.OtcOffer
-		if jerr := json.Unmarshal([]byte(neg.OfferJSON), &offer); jerr != nil {
+		if jerr := json.Unmarshal([]byte(remoteOfferJSONOf(neg)), &offer); jerr != nil {
 			return nil, status.Errorf(codes.Internal, "decode offer: %v", jerr)
 		}
 		// Option terms must match the agreed negotiation (rejects forged ticker/
@@ -1560,29 +1707,37 @@ func (h *PeerOTCGRPCHandler) RecordOutboundNegotiation(ctx context.Context, req 
 	if req.GetPeerBankCode() == "" {
 		return nil, status.Error(codes.InvalidArgument, "peer_bank_code required")
 	}
-	offerJSON, err := json.Marshal(protoToOffer(req.GetOffer()))
+	peerRouting := peerRoutingForCode(req.GetPeerBankCode())
+	// Ingestion collision guard (SP-2a): the buyer-side mirror is keyed on
+	// routing_number=<seller's bank>. If the peer code resolves to our own
+	// routing the row would alias a LOCAL chain — reject so a remote row can
+	// never look local and leak into local money paths.
+	if peerRouting == model.OwnRouting() {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"peer_bank_code %q collides with this bank's own routing (%d)", req.GetPeerBankCode(), model.OwnRouting())
+	}
+	offer := protoToOffer(req.GetOffer())
+	offerJSON, err := json.Marshal(offer)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "marshal offer: %v", err)
 	}
-	neg := &model.PeerOtcNegotiation{
-		PeerBankCode:        req.GetPeerBankCode(),
-		ForeignID:           req.GetNegotiationId().GetId(),
-		BuyerRoutingNumber:  req.GetBuyerId().GetRoutingNumber(),
-		BuyerID:             req.GetBuyerId().GetId(),
-		SellerRoutingNumber: req.GetSellerId().GetRoutingNumber(),
-		SellerID:            req.GetSellerId().GetId(),
-		OfferJSON:           string(offerJSON),
-		Status:              "ongoing",
-	}
 	// Phase 10 — mirror the parent_offer_id on the buyer-side row so
 	// /me/peer-otc/negotiations surfaces the linkage on both ends.
+	var parentRouting *int64
+	var parentNativeID *string
 	if p := req.GetOffer().GetParentOfferId(); p != nil && p.GetId() != "" {
 		r := p.GetRoutingNumber()
 		id := p.GetId()
-		neg.ParentOfferRouting = &r
-		neg.ParentOfferID = &id
+		parentRouting = &r
+		parentNativeID = &id
 	}
-	if err := h.negRepo.Upsert(neg); err != nil {
+	neg := buildRemoteNeg(
+		peerRouting, req.GetNegotiationId().GetId(), offer, string(offerJSON),
+		req.GetBuyerId().GetRoutingNumber(), req.GetBuyerId().GetId(),
+		req.GetSellerId().GetRoutingNumber(), req.GetSellerId().GetId(),
+		parentRouting, parentNativeID, "ongoing",
+	)
+	if err := h.negRepo.UpsertRemoteNeg(neg); err != nil {
 		return nil, status.Errorf(codes.Internal, "upsert: %v", err)
 	}
 	return &stockpb.RecordOutboundNegotiationResponse{}, nil
@@ -1603,7 +1758,7 @@ func (h *PeerOTCGRPCHandler) ListMyPeerNegotiations(ctx context.Context, req *st
 	if !strings.HasPrefix(principal, "client-") {
 		principal = "client-" + principal
 	}
-	rows, err := h.negRepo.ListByClient(req.GetOwnRoutingNumber(), principal, req.GetRole())
+	rows, err := h.negRepo.ListRemoteNegByClient(req.GetOwnRoutingNumber(), principal, req.GetRole())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list: %v", err)
 	}
@@ -1611,9 +1766,12 @@ func (h *PeerOTCGRPCHandler) ListMyPeerNegotiations(ctx context.Context, req *st
 	for i := range rows {
 		row := &rows[i]
 		var offer contractsitx.OtcOffer
-		_ = json.Unmarshal([]byte(row.OfferJSON), &offer)
+		_ = json.Unmarshal([]byte(remoteOfferJSONOf(row)), &offer)
+		buyerRouting, buyerID := remoteBuyer(row)
+		sellerRouting, sellerID := remoteSeller(row)
+		foreignID := remoteNativeIDOf(row)
 		role := "buyer"
-		if row.SellerRoutingNumber == req.GetOwnRoutingNumber() && row.SellerID == principal {
+		if sellerRouting == req.GetOwnRoutingNumber() && sellerID == principal {
 			role = "seller"
 		}
 
@@ -1632,16 +1790,16 @@ func (h *PeerOTCGRPCHandler) ListMyPeerNegotiations(ctx context.Context, req *st
 			// stored on the row; the routing is the seller's bank routing
 			// (which owns the id namespace).
 			if c, cerr := h.peerOptionRepo.GetByNegotiationAndDirection(
-				negotiationOwningRouting(row), row.ForeignID, direction,
+				negotiationOwningRouting(sellerRouting), foreignID, direction,
 			); cerr == nil && c != nil {
 				localContractID = c.ID
 			}
 		}
 
 		out.Items = append(out.Items, &stockpb.PeerNegotiationListItem{
-			Id:              &stockpb.PeerForeignBankId{RoutingNumber: negotiationOwningRouting(row), Id: row.ForeignID},
-			BuyerId:         &stockpb.PeerForeignBankId{RoutingNumber: row.BuyerRoutingNumber, Id: row.BuyerID},
-			SellerId:        &stockpb.PeerForeignBankId{RoutingNumber: row.SellerRoutingNumber, Id: row.SellerID},
+			Id:              &stockpb.PeerForeignBankId{RoutingNumber: negotiationOwningRouting(sellerRouting), Id: foreignID},
+			BuyerId:         &stockpb.PeerForeignBankId{RoutingNumber: buyerRouting, Id: buyerID},
+			SellerId:        &stockpb.PeerForeignBankId{RoutingNumber: sellerRouting, Id: sellerID},
 			Offer:           offerToProto(offer),
 			Status:          row.Status,
 			Role:            role,
@@ -1656,9 +1814,8 @@ func (h *PeerOTCGRPCHandler) ListMyPeerNegotiations(ctx context.Context, req *st
 // the foreign_id — always the seller's bank, regardless of which role
 // the caller plays. The id is generated server-side at CreateNegotiation,
 // which is invoked on the seller's bank by the buyer's bank via SI-TX.
-// The role parameter no longer affects the answer but is kept on call
-// sites for documentation: callers ARE doing role-aware projection
-// even though the routing dimension collapses to one value.
-func negotiationOwningRouting(row *model.PeerOtcNegotiation) int64 {
-	return row.SellerRoutingNumber
+// Takes the (remote) seller routing directly now that the unified table
+// stores parties in the Remote* columns.
+func negotiationOwningRouting(sellerRouting int64) int64 {
+	return sellerRouting
 }

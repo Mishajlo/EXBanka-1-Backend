@@ -97,6 +97,34 @@ type OTCNegotiation struct {
 	// after the formation saga succeeds.
 	MintedContractID *uint64 `gorm:"index" json:"minted_contract_id,omitempty"`
 
+	// Remote-mirror columns (SP-2a). Populated ONLY on REMOTE rows
+	// (routing_number != OwnRouting()), folded in from the retired
+	// peer_otc_negotiation mirror. NULL/zero on local rows. The cross-bank
+	// negotiation lifecycle (CreateNegotiation / counter / accept / cascade-
+	// cancel webhooks) reads & writes ONLY these columns + Status; the local
+	// money paths are routing-guarded (Task 3) so they never observe them.
+	//
+	//   RemoteOfferJSON      — serialised contract/sitx.OtcOffer (authoritative
+	//                          terms for a remote chain; the Quantity/StrikePrice/
+	//                          Premium/SettlementDate columns are best-effort
+	//                          parses kept only to satisfy the NOT-NULL schema).
+	//   RemoteBuyerRouting / RemoteBuyerID   — SI-TX wire buyer party.
+	//   RemoteSellerRouting / RemoteSellerID — SI-TX wire seller party.
+	//   RemoteParentRouting / RemoteParentNativeID — Phase-10 cascade-cancel
+	//                          grouping key (the discovered listing's lot id).
+	//
+	// The shared Status column carries the PEER status vocabulary on remote
+	// rows ("ongoing" | "accepted" | "cancelled" | ...). The SP-1 read shaping
+	// understands it; local code never branches on those values because the
+	// routing guard keeps remote rows out of every local query.
+	RemoteOfferJSON      *string `gorm:"type:text" json:"-"`
+	RemoteBuyerRouting   *int64  `json:"-"`
+	RemoteBuyerID        *string `gorm:"size:128" json:"-"`
+	RemoteSellerRouting  *int64  `json:"-"`
+	RemoteSellerID       *string `gorm:"size:128" json:"-"`
+	RemoteParentRouting  *int64  `gorm:"index:idx_otcneg_remote_parent,priority:1" json:"-"`
+	RemoteParentNativeID *string `gorm:"size:128;index:idx_otcneg_remote_parent,priority:2" json:"-"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Version   int64     `gorm:"not null;default:0" json:"-"`
