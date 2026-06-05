@@ -7091,7 +7091,9 @@ Register a new peer bank.
 ```
 
 **Response 201:** Peer bank object (`api_token_preview` returned, never the full token).
-**Response 400:** Validation error (missing required field).
+**Response 400:** Validation error (missing required field, OR `bank_code`/`routing_number` equals this bank's own — peer-collision rejected; SP-2a).
+
+> **Peer-collision guard (SP-2a):** `POST /api/v3/peer-banks` returns `400 validation_error` when `bank_code` or `routing_number` matches this bank's own configuration. This is enforced at the gRPC service layer (transaction-service `CreatePeerBank` returns `InvalidArgument` → gateway maps to 400). The invariant ensures `routing_number == OwnRouting()` reliably distinguishes local rows from remote (folded-in) rows in the unified OTC tables.
 
 ---
 
@@ -8636,7 +8638,7 @@ Unified cross-bank discovery view: every open OTC option listing on this bank + 
 
 | Field | Type | Notes |
 |---|---|---|
-| `kind` | string | `"local"` (this bank's listing) or `"remote"` (peer-bank mirror). |
+| `kind` | string | `"local"` (this bank's listing) or `"remote"` (peer-bank mirror). **Derived from `routing_number`:** `kind="local"` iff `routing_number == OwnRouting()`; `kind="remote"` otherwise. There is no `kind` column in the DB — it is a computed, frontend-only label. |
 | `routing_number` | int64 | Bank routing number identifying the hosting bank. |
 | `bank_code` | string | 3-digit bank code. |
 | `local_id` | uint64 | Stable local surrogate id — the folded-in remote `OTCOffer.id` for remote rows (SP-2a); the numeric offer id for local rows. Use this as `:id` in `GET /api/v3/otc/options/:id`. |

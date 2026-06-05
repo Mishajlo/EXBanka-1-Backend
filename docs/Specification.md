@@ -2854,9 +2854,11 @@ Hosted on api-gateway, gated by employee JWT + `peer_banks.manage.any` permissio
 |---|---|---|
 | GET | `/api/v3/peer-banks` | List registered peers (optional `?active_only=true`). |
 | GET | `/api/v3/peer-banks/:id` | Read one. |
-| POST | `/api/v3/peer-banks` | Register a new peer (bank_code, routing_number, base_url, api_token, optional HMAC keys, active flag). |
+| POST | `/api/v3/peer-banks` | Register a new peer (bank_code, routing_number, base_url, api_token, optional HMAC keys, active flag). **Returns 400 when `bank_code` or `routing_number` equals this bank's own** (peer-collision invariant, SP-2a). |
 | PUT | `/api/v3/peer-banks/:id` | Update mutable fields. |
 | DELETE | `/api/v3/peer-banks/:id` | Remove. |
+
+**Peer-collision invariant (SP-2a, 2026-06-05):** A peer may never share this bank's own `bank_code` or `routing_number`. The check is enforced at three layers: (1) `POST /api/v3/peer-banks` returns 400 if either field matches own; (2) the `OTCOfferRepository.UpsertRemote` and `OptionContractRepository.UpsertRemoteContract` ingestion paths reject rows where `routing_number == OwnRouting()`; (3) `stock-service` startup aborts if a peer-bank row with own routing is found in the DB (invariant never silently violated at runtime). This ensures that `routing_number == OwnRouting()` is a reliable discriminator between local rows and remote (folded-in) rows in the unified tables.
 
 API tokens are bcrypt-hashed before persist. The plaintext `api_token` is also stored alongside (only readable via the internal `ResolvePeerByAPIToken` RPC, never via REST) so the api-gateway middleware can resolve incoming tokens to peer-bank records.
 
