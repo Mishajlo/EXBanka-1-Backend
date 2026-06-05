@@ -134,12 +134,14 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 	}
 
 	// Compose the SI-TX OtcOffer (mirrors CreatePeerNegotiation's wire shape).
+	// SI-TX §2.5 / §2.8.1 require monetary amounts to be JSON numbers, not
+	// quoted strings. DecimalNumber.MarshalJSON emits a bare numeric token.
 	settlementDate := settle.Format("2006-01-02")
 	offer := map[string]any{
 		"stock":              map[string]any{"ticker": remoteOffer.Ticker},
 		"settlementDate":     settlementDate,
-		"pricePerUnit":       map[string]any{"amount": strike.String(), "currency": strikeCurrency},
-		"premium":            map[string]any{"amount": premium.String(), "currency": premiumCurrency},
+		"pricePerUnit":       map[string]any{"amount": contractsitx.DecimalNumber{Decimal: strike}, "currency": strikeCurrency},
+		"premium":            map[string]any{"amount": contractsitx.DecimalNumber{Decimal: premium}, "currency": premiumCurrency},
 		"buyerId":            map[string]any{"routingNumber": h.ownRouting, "id": buyerID},
 		"sellerId":           map[string]any{"routingNumber": peerRouting, "id": sellerID},
 		"amount":             qty.IntPart(),

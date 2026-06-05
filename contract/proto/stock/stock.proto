@@ -1351,12 +1351,13 @@ message OpenNegotiationRequest {
   string acting_principal_type = 9;
   uint64 acting_principal_id   = 10;
   uint64 acting_employee_id    = 11;
-  // bidder_account_number is the gateway-resolved account number for
-  // bidder_account_id. The cross-bank (remote) branch threads it through to
-  // the seller's bank in the SI-TX OtcOffer as buyerAccountNumber so the
-  // peer's posting executor debits this exact account on accept (no "first
-  // active <currency> account" guesswork). Empty for local bids.
-  string bidder_account_number = 12;
+  // Field 12 (bidder_account_number) removed: stock-service's remote branch
+  // re-fetches the account itself for owner/active/currency validation and
+  // reads GetAccountNumber() directly from that response. The gateway no
+  // longer needs to pre-fetch and forward the number. Reserved to avoid
+  // reuse of field number 12 in future (proto wire compatibility).
+  reserved 12;
+  reserved "bidder_account_number";
 }
 
 message CounterNegotiationRequest {

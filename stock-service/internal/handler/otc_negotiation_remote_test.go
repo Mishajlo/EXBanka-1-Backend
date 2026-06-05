@@ -10,6 +10,8 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -265,5 +267,66 @@ func TestOpenNegotiation_NonexistentParent_StillNotFound(t *testing.T) {
 	}
 	if dispatcher.calls != 0 {
 		t.Errorf("dispatcher should NOT be called for an unknown parent: %d", dispatcher.calls)
+	}
+}
+
+// TestOfferComposition_AmountsAreJSONNumbers verifies that the SI-TX OtcOffer
+// composed by openRemoteNegotiation serialises pricePerUnit.amount and
+// premium.amount as bare JSON numbers (e.g. 150.5, not "150.5").
+// SI-TX §2.5 / §2.8.1 require MonetaryValue.amount to be a number token; a
+// strict cohort peer will reject a quoted string amount.
+func TestOfferComposition_AmountsAreJSONNumbers(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{routing: 222, foreignID: "neg-wire"}
+	accounts := &fakeOTCAccountClient{acct: usdAccount(9)}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+	parentID := seedRemoteOffer(t, db)
+
+	if _, err := h.OpenNegotiation(context.Background(), openReq(parentID, 9, "client")); err != nil {
+		t.Fatalf("OpenNegotiation: %v", err)
+	}
+	if dispatcher.calls != 1 {
+		t.Fatalf("expected 1 dispatch call, got %d", dispatcher.calls)
+	}
+
+	// Marshal the offer the dispatcher received — this is exactly what would
+	// be sent over the wire to the peer bank.
+	raw, err := json.Marshal(dispatcher.gotOffer)
+	if err != nil {
+		t.Fatalf("marshal dispatched offer: %v", err)
+	}
+	wire := string(raw)
+
+	// The wire MUST contain bare numbers (e.g. "amount":150), NOT quoted
+	// strings (e.g. "amount":"150"). Check for both fields.
+	if strings.Contains(wire, `"amount":"`) {
+		t.Errorf("wire contains quoted amount (string), want bare number; wire: %s", wire)
+	}
+
+	// Unmarshal and verify the numeric values are correct.
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("unmarshal wire: %v", err)
+	}
+	ppu, _ := parsed["pricePerUnit"].(map[string]any)
+	if ppu == nil {
+		t.Fatalf("pricePerUnit missing from wire")
+	}
+	// json.Unmarshal produces float64 for JSON numbers.
+	ppuAmt, ok := ppu["amount"].(float64)
+	if !ok {
+		t.Errorf("pricePerUnit.amount: want float64 (bare number), got %T = %v", ppu["amount"], ppu["amount"])
+	} else if ppuAmt != 150 {
+		t.Errorf("pricePerUnit.amount: got %v, want 150", ppuAmt)
+	}
+
+	prem, _ := parsed["premium"].(map[string]any)
+	if prem == nil {
+		t.Fatalf("premium missing from wire")
+	}
+	premAmt, ok := prem["amount"].(float64)
+	if !ok {
+		t.Errorf("premium.amount: want float64 (bare number), got %T = %v", prem["amount"], prem["amount"])
+	} else if premAmt != 20 {
+		t.Errorf("premium.amount: got %v, want 20", premAmt)
 	}
 }

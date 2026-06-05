@@ -27,7 +27,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/exbanka/api-gateway/internal/middleware"
-	accountpb "github.com/exbanka/contract/accountpb"
 	stockpb "github.com/exbanka/contract/stockpb"
 )
 
@@ -88,23 +87,16 @@ func (h *OTCOptionsHandler) OpenNegotiationChain(c *gin.Context) {
 	if err := ResolveAndCheckAccount(c, h.accounts, identity, req.BidderAccountID, 0); err != nil {
 		return
 	}
-	// Resolve the account NUMBER for the cross-bank branch: stock-service's
-	// OpenNegotiation dispatches a local saga OR a cross-bank SI-TX
-	// negotiation depending on whether :id is a local or remote listing. The
-	// remote branch threads bidder_account_number through to the seller's bank
-	// as buyerAccountNumber (so the peer debits this exact account on accept).
-	// The local branch ignores it. Ownership was already verified above.
-	bidderAcct, gerr := h.accounts.GetAccount(c.Request.Context(), &accountpb.GetAccountRequest{Id: req.BidderAccountID})
-	if gerr != nil {
-		handleGRPCError(c, gerr)
-		return
-	}
+	// stock-service's OpenNegotiation dispatches a local saga OR a cross-bank
+	// SI-TX negotiation depending on whether :id is a local or remote listing.
+	// The remote branch fetches the account itself (for owner/active/currency
+	// validation) and reads the account number directly from account-service —
+	// no need for the gateway to pre-fetch and forward bidder_account_number.
 	resp, err := h.client.OpenNegotiation(c.Request.Context(), &stockpb.OpenNegotiationRequest{
 		ParentOfferId:       parentID,
 		BidderOwnerType:     identity.OwnerType,
 		BidderOwnerId:       derefU64(identity.OwnerID),
 		BidderAccountId:     req.BidderAccountID,
-		BidderAccountNumber: bidderAcct.GetAccountNumber(),
 		Quantity:            req.Quantity,
 		StrikePrice:         req.StrikePrice,
 		Premium:             req.Premium,
