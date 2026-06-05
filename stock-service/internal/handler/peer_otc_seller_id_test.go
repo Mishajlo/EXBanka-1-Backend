@@ -67,6 +67,55 @@ func TestComposePeerSellerID(t *testing.T) {
 	}
 }
 
+// TestParseSellerOwner covers the inbound SI-TX party-id parser. It maps a
+// wire party id to (OwnerType, *uint64): "bank" and any "employee-<N>" both
+// resolve to the BANK owner (nil id) — employee-<N> is wire identity only,
+// the numeric id is NOT used to look up an employee — while "client-<n>"
+// resolves to a client owner. Unparseable ids return an error.
+func TestParseSellerOwner(t *testing.T) {
+	tests := []struct {
+		name      string
+		partyID   string
+		wantType  model.OwnerType
+		wantID    *uint64
+		wantError bool
+	}{
+		{name: "literal bank -> bank owner, nil id", partyID: "bank", wantType: model.OwnerBank, wantID: nil},
+		{name: "employee-<N> -> bank owner, nil id", partyID: "employee-17", wantType: model.OwnerBank, wantID: nil},
+		{name: "employee-0 -> bank owner, nil id", partyID: "employee-0", wantType: model.OwnerBank, wantID: nil},
+		{name: "client-<n> -> client owner with id", partyID: "client-9", wantType: model.OwnerClient, wantID: u64(9)},
+		{name: "empty employee number -> error", partyID: "employee-", wantError: true},
+		{name: "non-numeric employee number -> error", partyID: "employee-x", wantError: true},
+		{name: "empty client number -> error", partyID: "client-", wantError: true},
+		{name: "garbage -> error", partyID: "garbage", wantError: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotType, gotID, err := parseSellerOwner(tc.partyID)
+			if tc.wantError {
+				if err == nil {
+					t.Fatalf("parseSellerOwner(%q): expected error, got nil (type=%q id=%v)", tc.partyID, gotType, gotID)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseSellerOwner(%q): unexpected error: %v", tc.partyID, err)
+			}
+			if gotType != tc.wantType {
+				t.Errorf("parseSellerOwner(%q) type = %q, want %q", tc.partyID, gotType, tc.wantType)
+			}
+			switch {
+			case tc.wantID == nil && gotID != nil:
+				t.Errorf("parseSellerOwner(%q) id = %d, want nil", tc.partyID, *gotID)
+			case tc.wantID != nil && gotID == nil:
+				t.Errorf("parseSellerOwner(%q) id = nil, want %d", tc.partyID, *tc.wantID)
+			case tc.wantID != nil && gotID != nil && *gotID != *tc.wantID:
+				t.Errorf("parseSellerOwner(%q) id = %d, want %d", tc.partyID, *gotID, *tc.wantID)
+			}
+		})
+	}
+}
+
 // TestGetPublicOptionOffers_SellerIDComposition asserts the published list:
 //   - a bank offer with ActingEmployeeID=17 surfaces with sellerId.id == "employee-17"
 //   - a bank offer with ActingEmployeeID==nil is ABSENT (filtered out)
