@@ -124,32 +124,42 @@ func TestSP3_BankOwnedOptionOffer_CreatedAndListedAsOwner(t *testing.T) {
 	}
 
 	// ── The offer appears in the BANK's own listing with me_owner=true. ──
-	listResp, err := adminC.GET("/api/v3/me/otc/options")
-	if err != nil {
-		t.Fatalf("SP-3 bank-owned offer: bank list own options: %v", err)
+	// The /me/otc/options listing is served from a periodically-refreshed
+	// in-memory cache, so a just-created offer is not immediately present —
+	// poll until it shows up (mirrors the polling in TestSP2b_OfferList_*).
+	var foundItem map[string]interface{}
+	deadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) && foundItem == nil {
+		listResp, err := adminC.GET("/api/v3/me/otc/options")
+		if err != nil {
+			t.Fatalf("SP-3 bank-owned offer: bank list own options: %v", err)
+		}
+		helpers.RequireStatus(t, listResp, 200)
+		offers, _ := listResp.Body["offers"].([]interface{})
+		for _, raw := range offers {
+			item, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if jsonInt(item["id"]) != offerID {
+				continue
+			}
+			foundItem = item
+			break
+		}
+		if foundItem == nil {
+			time.Sleep(2 * time.Second)
+		}
 	}
-	helpers.RequireStatus(t, listResp, 200)
-	offers, _ := listResp.Body["offers"].([]interface{})
-	found := false
-	for _, raw := range offers {
-		item, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if jsonInt(item["id"]) != offerID {
-			continue
-		}
-		found = true
-		if meOwner, _ := item["me_owner"].(bool); !meOwner {
-			t.Errorf("SP-3 bank-owned offer: bank's own listing item should be me_owner=true; item=%v", item)
-		}
-		if sid, _ := item["seller_id"].(string); sid != "bank" {
-			t.Errorf("SP-3 bank-owned offer: bank's own listing item seller_id = %q, want %q", sid, "bank")
-		}
-		break
+	if foundItem == nil {
+		t.Errorf("SP-3 bank-owned offer: created offer id=%d not present in the bank's own /me/otc/options listing within 45s", offerID)
+		return
 	}
-	if !found {
-		t.Errorf("SP-3 bank-owned offer: created offer id=%d not present in the bank's own /me/otc/options listing", offerID)
+	if meOwner, _ := foundItem["me_owner"].(bool); !meOwner {
+		t.Errorf("SP-3 bank-owned offer: bank's own listing item should be me_owner=true; item=%v", foundItem)
+	}
+	if sid, _ := foundItem["seller_id"].(string); sid != "bank" {
+		t.Errorf("SP-3 bank-owned offer: bank's own listing item seller_id = %q, want %q", sid, "bank")
 	}
 }
 

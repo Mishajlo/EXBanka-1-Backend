@@ -559,20 +559,30 @@ func (s *OTCOfferService) LastReadReceipt(userID int64, systemType string, offer
 	return s.receipts.GetReceipt(ownerType, model.OwnerIDOrZero(ownerID), offerID)
 }
 
-// GetOffer returns the offer + its revisions, scoped to participants only.
+// GetOffer returns the offer to any authenticated caller, mirroring the public
+// discovery list (GET /api/v3/otc/options) which lists every open offer to
+// everyone. The offer body itself carries no negotiation history; the handler
+// stamps me_owner=false for a non-owner. Sensitive sub-data stays gated:
+// revisions (the negotiation history) are returned ONLY to a participant
+// (empty slice otherwise), and the read-receipt is upserted only for a
+// participant. A non-participant therefore sees the offer but never its
+// counter/bid history.
 func (s *OTCOfferService) GetOffer(offerID uint64, actorUserID int64, actorSystemType string) (*model.OTCOffer, []model.OTCOfferRevision, error) {
 	o, err := s.offers.GetByID(offerID)
 	if err != nil {
 		return nil, nil, err
 	}
 	if !s.isParticipant(o, actorUserID, actorSystemType) {
-		return nil, nil, errors.New("not a participant in this offer")
+		// Public discovery: return the offer with no revisions and no
+		// mark-read. Do not reject — a caller can see this offer in the
+		// unified list, so the detail must be readable too (SP-1 me_owner).
+		return o, nil, nil
 	}
 	revs, err := s.revisions.ListByOffer(o.ID)
 	if err != nil {
 		return nil, nil, err
 	}
-	// Mark read.
+	// Mark read (participants only).
 	if s.receipts != nil {
 		actorOwnerType, actorOwnerID := model.OwnerFromLegacy(uint64(actorUserID), actorSystemType)
 		_ = s.receipts.Upsert(actorOwnerType, model.OwnerIDOrZero(actorOwnerID), o.ID, o.UpdatedAt)
