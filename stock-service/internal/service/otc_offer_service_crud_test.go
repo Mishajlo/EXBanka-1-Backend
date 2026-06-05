@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -381,6 +383,48 @@ func TestOTCOfferService_Create_SellInitiated_InsufficientShares(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected insufficient-shares error")
+	}
+	// Must surface as a FailedPrecondition (business-rule violation → HTTP 409),
+	// not an opaque Unknown/Internal that the gateway maps to 500. A 500 here
+	// leaks an internal error class for what is a normal covered-call rejection.
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("insufficient-shares code = %s, want FailedPrecondition", got)
+	}
+}
+
+// TestOTCOfferService_Create_ValidationErrorsAreInvalidArgument guards that the
+// create-time field validations carry codes.InvalidArgument (→ HTTP 400) rather
+// than the default Unknown/Internal that the gateway maps to 500.
+func TestOTCOfferService_Create_ValidationErrorsAreInvalidArgument(t *testing.T) {
+	base := func() CreateOfferInput {
+		return CreateOfferInput{
+			ActorUserID: 7, ActorSystemType: "client",
+			Direction: model.OTCDirectionSellInitiated, StockID: 42,
+			Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
+			Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		}
+	}
+	cases := map[string]func(CreateOfferInput) CreateOfferInput{
+		"zero quantity":    func(in CreateOfferInput) CreateOfferInput { in.Quantity = decimal.Zero; return in },
+		"zero strike":      func(in CreateOfferInput) CreateOfferInput { in.StrikePrice = decimal.Zero; return in },
+		"negative premium": func(in CreateOfferInput) CreateOfferInput { in.Premium = decimal.NewFromInt(-1); return in },
+		"past settlement": func(in CreateOfferInput) CreateOfferInput {
+			in.SettlementDate = time.Now().AddDate(0, 0, -1)
+			return in
+		},
+		"unknown direction": func(in CreateOfferInput) CreateOfferInput { in.Direction = "weird"; return in },
+		"counterparty half": func(in CreateOfferInput) CreateOfferInput { id := int64(9); in.CounterpartyUserID = &id; return in },
+	}
+	for name, mut := range cases {
+		fx2 := newOTCCRUDFixture(t)
+		fx2.seedHolding(t, 7, 42, 100)
+		_, err := fx2.svc.Create(context.Background(), mut(base()))
+		if err == nil {
+			t.Fatalf("%s: expected error", name)
+		}
+		if got := status.Code(err); got != codes.InvalidArgument {
+			t.Fatalf("%s: code = %s, want InvalidArgument", name, got)
+		}
 	}
 }
 

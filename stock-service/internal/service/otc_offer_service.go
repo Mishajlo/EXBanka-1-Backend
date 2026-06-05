@@ -273,18 +273,18 @@ type CreateOfferInput struct {
 
 func (s *OTCOfferService) Create(ctx context.Context, in CreateOfferInput) (*model.OTCOffer, error) {
 	if !in.Quantity.IsPositive() || !in.StrikePrice.IsPositive() {
-		return nil, errors.New("quantity and strike_price must be positive")
+		return nil, fmt.Errorf("quantity and strike_price must be positive: %w", ErrOTCOfferFieldInvalid)
 	}
 	if in.Premium.IsNegative() {
-		return nil, errors.New("premium must be non-negative")
+		return nil, fmt.Errorf("premium must be non-negative: %w", ErrOTCOfferFieldInvalid)
 	}
 	if !in.SettlementDate.After(time.Now().UTC().Truncate(24 * time.Hour)) {
-		return nil, errors.New("settlement_date must be in the future")
+		return nil, fmt.Errorf("settlement_date must be in the future: %w", ErrOTCOfferFieldInvalid)
 	}
 	switch in.Direction {
 	case model.OTCDirectionSellInitiated, model.OTCDirectionBuyInitiated:
 	default:
-		return nil, errors.New("unknown direction")
+		return nil, fmt.Errorf("unknown direction: %w", ErrOTCOfferFieldInvalid)
 	}
 	// Phase 9 follow-up: the legacy single-chain model required a named
 	// counterparty on buy_initiated offers. The new parallel-chains
@@ -294,7 +294,7 @@ func (s *OTCOfferService) Create(ctx context.Context, in CreateOfferInput) (*mod
 	// the offer is "directed" — only the named user sees it in their
 	// list — but it's no longer required.
 	if (in.CounterpartyUserID == nil) != (in.CounterpartySystemType == nil) {
-		return nil, errors.New("counterparty user_id and system_type must both be set or both omitted")
+		return nil, fmt.Errorf("counterparty user_id and system_type must both be set or both omitted: %w", ErrOTCOfferFieldInvalid)
 	}
 
 	if in.Direction == model.OTCDirectionSellInitiated {
@@ -608,7 +608,11 @@ func (s *OTCOfferService) assertSellerHasShares(ownerType model.OwnerType, owner
 	}
 	holding, err := s.holdings.GetByOwnerAndSecurity(ownerType, ownerID, "stock", stockID)
 	if err != nil {
-		return fmt.Errorf("seller has no holding for stock %d: %w", stockID, err)
+		// No holding row (or lookup failure) for a covered-call seller is a
+		// business-rule rejection, not an internal error — surface it as a
+		// typed FailedPrecondition (→ 409) rather than leaking the raw DB
+		// record-not-found that the gateway maps to 500.
+		return fmt.Errorf("seller has no holding for stock %d: %w", stockID, ErrOTCSellerNoHolding)
 	}
 	heldQty := decimal.NewFromInt(holding.Quantity)
 	committed, err := s.offers.SumActiveQuantityForSeller(ownerType, ownerID, stockID)
@@ -617,7 +621,7 @@ func (s *OTCOfferService) assertSellerHasShares(ownerType model.OwnerType, owner
 	}
 	available := heldQty.Sub(committed)
 	if requested.GreaterThan(available) {
-		return fmt.Errorf("insufficient available shares for this seller (held %s, committed %s, requested %s)", heldQty, committed, requested)
+		return fmt.Errorf("insufficient available shares for this seller (held %s, committed %s, requested %s): %w", heldQty, committed, requested, ErrOTCInsufficientShares)
 	}
 	return nil
 }
