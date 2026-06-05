@@ -324,6 +324,16 @@ func (h *PeerOTCGRPCHandler) GetPublicOptionOffers(ctx context.Context, req *sto
 			}
 		}
 		sellerID := composePeerSellerID(o)
+		// A non-conformant seller id (legacy/seed bank offer with no acting
+		// employee, or a client offer missing its owner id) cannot be addressed
+		// by a peer's POST /negotiations — its sellerId.id would fail the
+		// ^(client|employee)-\d+$ check. Drop it from public exposure rather
+		// than ever emitting the legacy literal "bank" (or an empty id) on the
+		// wire, which peers reject.
+		if sellerID == "" {
+			log.Printf("WARN: offer %d skipped from public exposure: no conformant seller id", o.ID)
+			continue
+		}
 		currency := "USD"
 		if h.otcOptionCurrency != nil {
 			if c, err := h.otcOptionCurrency.CurrencyForStock(o.StockID); err == nil && c != "" {
@@ -367,11 +377,21 @@ func (h *PeerOTCGRPCHandler) GetPublicOptionOffers(ctx context.Context, req *sto
 	return &stockpb.GetPublicOptionOffersResponse{Offers: out}, nil
 }
 
-// composePeerSellerID mirrors the cache's helper but lives here so the
-// peer endpoint doesn't import the otccache package.
+// composePeerSellerID builds the conformant SI-TX party id
+// (^(client|employee)-\d+$) a peer bank uses to address this offer's poster
+// when bidding cross-bank. It NEVER returns the legacy literal "bank":
+//   - a BANK-owned offer publishes as "employee-<ActingEmployeeID>" — the
+//     stable wire identity of the employee who originated it. Legacy/seed bank
+//     rows have no acting employee → "" (not exposable cross-bank; the caller
+//     filters these out).
+//   - a CLIENT offer publishes as "client-<InitiatorOwnerID>" (or "" when the
+//     owner id is somehow unset).
 func composePeerSellerID(o *model.OTCOffer) string {
 	if o.InitiatorOwnerType == model.OwnerBank {
-		return "bank"
+		if o.ActingEmployeeID != nil {
+			return "employee-" + strconv.FormatUint(*o.ActingEmployeeID, 10)
+		}
+		return "" // legacy/seed bank offer w/o acting employee — not exposable cross-bank
 	}
 	if o.InitiatorOwnerID == nil {
 		return ""
