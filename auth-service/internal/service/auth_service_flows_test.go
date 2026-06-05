@@ -1004,14 +1004,13 @@ func TestGetLoginHistory_DefaultLimit(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// RevokeAccessToken & hashToken tests
+// Session revocation tests
 // ----------------------------------------------------------------------------
 
-func TestRevokeAccessToken_NoCache_IsNoOp(t *testing.T) {
+func TestBlacklistSession_NoCache_IsNoOp(t *testing.T) {
 	f := newAuthFlowFixture(t)
-	// Cache is nil; should silently succeed.
-	err := f.svc.RevokeAccessToken(context.Background(), "jti-123", time.Minute)
-	assert.NoError(t, err)
+	// Cache is nil; must not panic.
+	assert.NotPanics(t, func() { f.svc.blacklistSession(context.Background(), 123) })
 }
 
 // ----------------------------------------------------------------------------

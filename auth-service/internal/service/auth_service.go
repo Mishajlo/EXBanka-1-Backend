@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -226,42 +227,31 @@ func (s *AuthService) Login(ctx context.Context, email, password, ipAddress, use
 
 	_ = s.loginAttemptRepo.RecordAttempt(email, ipAddress, userAgent, deviceType, true)
 
-	var accessToken string
-	var loginRoles []string
 	systemType := "employee"
 	if account.PrincipalType != model.PrincipalTypeEmployee {
 		systemType = "client"
 	}
 
-	switch account.PrincipalType {
-	case model.PrincipalTypeEmployee:
-		userResp, err := s.userClient.GetEmployee(ctx, &userpb.GetEmployeeRequest{Id: account.PrincipalID})
-		if err != nil {
-			log.Printf("Login get employee underlying: %v", err)
+	// Gather token identity (roles/permissions/profile) WITHOUT signing yet —
+	// the access token is signed after the session row exists so it can carry
+	// that session's sid (enables targeted per-session revocation).
+	var loginRoles []string
+	var permissions []string
+	var firstName, lastName string
+	if account.PrincipalType == model.PrincipalTypeEmployee {
+		userResp, gerr := s.userClient.GetEmployee(ctx, &userpb.GetEmployeeRequest{Id: account.PrincipalID})
+		if gerr != nil {
+			log.Printf("Login get employee underlying: %v", gerr)
 			return "", "", fmt.Errorf("Login get employee: %w", ErrEmployeeRPCFailed)
 		}
 		loginRoles = userResp.Roles
 		if len(loginRoles) == 0 && userResp.Role != "" {
 			loginRoles = []string{userResp.Role}
 		}
-		accessToken, err = s.jwtService.GenerateAccessToken(account.PrincipalID, account.Email, loginRoles, userResp.Permissions, "employee", TokenProfile{
-			FirstName:     userResp.FirstName,
-			LastName:      userResp.LastName,
-			AccountActive: account.Status == model.AccountStatusActive,
-		})
-		if err != nil {
-			log.Printf("Login sign access token underlying: %v", err)
-			return "", "", fmt.Errorf("Login sign access token: %w", ErrTokenSignFailed)
-		}
-	default: // client
+		permissions = userResp.Permissions
+		firstName, lastName = userResp.FirstName, userResp.LastName
+	} else {
 		loginRoles = []string{"client"}
-		accessToken, err = s.jwtService.GenerateAccessToken(account.PrincipalID, account.Email, []string{"client"}, nil, "client", TokenProfile{
-			AccountActive: account.Status == model.AccountStatusActive,
-		})
-		if err != nil {
-			log.Printf("Login sign access token underlying: %v", err)
-			return "", "", fmt.Errorf("Login sign access token: %w", ErrTokenSignFailed)
-		}
 	}
 
 	refreshToken, err := generateToken()
@@ -276,7 +266,7 @@ func (s *AuthService) Login(ctx context.Context, email, password, ipAddress, use
 		userRole = loginRoles[0]
 	}
 
-	// Create session
+	// Create session FIRST so the access token can embed its sid.
 	session := &model.ActiveSession{
 		UserID:       account.PrincipalID,
 		UserRole:     userRole,
@@ -288,7 +278,22 @@ func (s *AuthService) Login(ctx context.Context, email, password, ipAddress, use
 	}
 	if err := s.sessionRepo.Create(session); err != nil {
 		log.Printf("warn: failed to create session: %v", err)
-		// Non-fatal: proceed without session tracking
+		// Non-fatal: proceed without session tracking (token gets no sid).
+	}
+	sid := ""
+	if session.ID != 0 {
+		sid = strconv.FormatInt(session.ID, 10)
+	}
+
+	accessToken, err := s.jwtService.GenerateAccessToken(account.PrincipalID, account.Email, loginRoles, permissions, systemType, TokenProfile{
+		FirstName:     firstName,
+		LastName:      lastName,
+		AccountActive: account.Status == model.AccountStatusActive,
+		Sid:           sid,
+	})
+	if err != nil {
+		log.Printf("Login sign access token underlying: %v", err)
+		return "", "", fmt.Errorf("Login sign access token: %w", ErrTokenSignFailed)
 	}
 
 	rt := &model.RefreshToken{
@@ -332,9 +337,9 @@ func (s *AuthService) ValidateToken(tokenString string) (*Claims, error) {
 	if s.cache != nil {
 		var cached Claims
 		if err := s.cache.Get(context.Background(), cacheKey, &cached); err == nil {
-			// Check if token has been blacklisted by JTI
-			if cached.ID != "" {
-				blacklisted, _ := s.cache.Exists(context.Background(), "blacklist:"+cached.ID)
+			// Hard revocation: the session (sid) was blacklisted (logout / revoke).
+			if cached.Sid != "" {
+				blacklisted, _ := s.cache.Exists(context.Background(), sessionBlacklistKey(cached.Sid))
 				if blacklisted {
 					return nil, fmt.Errorf("access token revoked: %w", ErrTokenRevoked)
 				}
@@ -351,9 +356,9 @@ func (s *AuthService) ValidateToken(tokenString string) (*Claims, error) {
 		return nil, err
 	}
 
-	// Check blacklist by JTI
-	if claims.ID != "" && s.cache != nil {
-		blacklisted, _ := s.cache.Exists(context.Background(), "blacklist:"+claims.ID)
+	// Hard revocation: the session (sid) was blacklisted (logout / revoke).
+	if claims.Sid != "" && s.cache != nil {
+		blacklisted, _ := s.cache.Exists(context.Background(), sessionBlacklistKey(claims.Sid))
 		if blacklisted {
 			return nil, fmt.Errorf("access token revoked: %w", ErrTokenRevoked)
 		}
@@ -380,12 +385,36 @@ func (s *AuthService) SigningKeys() ([]PublicKeyInfo, error) {
 	return s.jwtService.Keys().JWKS()
 }
 
-// RevokeAccessToken adds a JWT JTI to the Redis blacklist until it would naturally expire.
-func (s *AuthService) RevokeAccessToken(ctx context.Context, jti string, remainingTTL time.Duration) error {
-	if s.cache == nil {
-		return nil // gracefully skip if no Redis
+// sessionBlacklistKey is the Redis key the gateway and auth both consult to
+// hard-revoke every access token carrying a given session id (sid). Defined
+// once here and mirrored by the gateway's contract/authredis helper.
+func sessionBlacklistKey(sid string) string { return "blacklist:sid:" + sid }
+
+// blacklistSession hard-revokes every access token tied to a session id. The
+// gateway sees the key on its next local verify and returns 401 unauthorized
+// (the client logs out). TTL = access-token lifetime: after that no token with
+// this sid could still be valid, so the key self-cleans. No-op without Redis.
+func (s *AuthService) blacklistSession(ctx context.Context, sessionID int64) {
+	if s.cache == nil || sessionID == 0 {
+		return
 	}
-	return s.cache.Set(ctx, "blacklist:"+jti, "revoked", remainingTTL)
+	key := sessionBlacklistKey(strconv.FormatInt(sessionID, 10))
+	if err := s.cache.Set(ctx, key, "revoked", s.jwtService.AccessExpiry()); err != nil {
+		log.Printf("warn: failed to blacklist session %d: %v", sessionID, err)
+	}
+}
+
+// hardRevokeUser bumps the per-user revocation epoch so EVERY access token the
+// user currently holds is rejected (used for revoke-all and account-disable,
+// where there is no single session to target). Refresh tokens are revoked
+// separately by the caller, so the net effect is a full logout.
+func (s *AuthService) hardRevokeUser(ctx context.Context, userID int64) {
+	if s.cache == nil || userID == 0 {
+		return
+	}
+	if err := s.cache.SetUserRevokedAt(ctx, userID, time.Now().Unix(), s.jwtService.AccessExpiry()); err != nil {
+		log.Printf("warn: failed to set revocation epoch for user %d: %v", userID, err)
+	}
 }
 
 func hashToken(token string) string {
@@ -442,9 +471,17 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshTokenStr, ipAddre
 
 	var accessToken string
 
+	// Carry the same sid forward so the refreshed access token stays tied to
+	// its session (per-session revocation keeps working across refreshes).
+	sid := ""
+	if rt.SessionID != nil {
+		sid = strconv.FormatInt(*rt.SessionID, 10)
+	}
+
 	if systemType == "client" {
 		accessToken, err = s.jwtService.GenerateAccessToken(acct.PrincipalID, acct.Email, []string{"client"}, nil, "client", TokenProfile{
 			AccountActive: acct.Status == model.AccountStatusActive,
+			Sid:           sid,
 		})
 		if err != nil {
 			return "", "", err
@@ -463,6 +500,7 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshTokenStr, ipAddre
 				FirstName:     userResp.FirstName,
 				LastName:      userResp.LastName,
 				AccountActive: acct.Status == model.AccountStatusActive,
+				Sid:           sid,
 			},
 		)
 		if err != nil {
@@ -630,6 +668,9 @@ func (s *AuthService) Logout(ctx context.Context, refreshTokenStr string) error 
 		if err := s.sessionRepo.Revoke(*rt.SessionID); err != nil {
 			log.Printf("warn: failed to revoke session %d on logout: %v", *rt.SessionID, err)
 		}
+		// Hard-revoke the access token(s) for this session so logout is
+		// immediate at the gateway (not delayed until token expiry).
+		s.blacklistSession(ctx, *rt.SessionID)
 		// Look up session to get UserID for event
 		session, sErr := s.sessionRepo.GetByID(*rt.SessionID)
 		if sErr == nil {
@@ -654,6 +695,9 @@ func (s *AuthService) RevokeAllSessions(ctx context.Context, accountID int64, us
 	if err := s.sessionRepo.RevokeAllForUser(userID); err != nil {
 		return err
 	}
+	// Hard-revoke every access token for the user via the per-user epoch
+	// (there is no single session to target here).
+	s.hardRevokeUser(ctx, userID)
 	// Publish event
 	_ = s.producer.Publish(ctx, kafkamsg.TopicAuthSessionRevoked, kafkamsg.AuthSessionRevokedMessage{
 		SessionID: 0, // 0 indicates all sessions
@@ -901,6 +945,9 @@ func (s *AuthService) SetAccountStatus(ctx context.Context, principalType string
 		if revokeErr := s.tokenRepo.RevokeAllForAccount(acct.ID); revokeErr != nil {
 			return fmt.Errorf("account disabled but failed to revoke sessions: %w", revokeErr)
 		}
+		// Closes the 2.2 gap: a disabled account's still-valid access token kept
+		// working ≤15 min. Bump the epoch so it is rejected immediately.
+		s.hardRevokeUser(ctx, principalID)
 	}
 
 	if err := s.accountRepo.SetStatusByPrincipal(principalType, principalID, status); err != nil {
@@ -1013,6 +1060,8 @@ func (s *AuthService) RevokeSession(ctx context.Context, sessionID int64, caller
 	if err := s.sessionRepo.Revoke(sessionID); err != nil {
 		return fmt.Errorf("failed to revoke session: %w", err)
 	}
+	// Hard-revoke its access token(s) at the gateway immediately.
+	s.blacklistSession(ctx, sessionID)
 
 	_ = s.producer.Publish(ctx, kafkamsg.TopicAuthSessionRevoked, kafkamsg.AuthSessionRevokedMessage{
 		SessionID: sessionID,
@@ -1054,6 +1103,7 @@ func (s *AuthService) RevokeAllSessionsExceptCurrent(ctx context.Context, userID
 			continue
 		}
 		_ = s.tokenRepo.RevokeAllTokensForSession(sess.ID)
+		s.blacklistSession(ctx, sess.ID) // hard-revoke each session's access tokens
 		_ = s.producer.Publish(ctx, kafkamsg.TopicAuthSessionRevoked, kafkamsg.AuthSessionRevokedMessage{
 			SessionID: sess.ID,
 			UserID:    userID,

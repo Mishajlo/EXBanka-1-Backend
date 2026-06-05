@@ -51,6 +51,10 @@ func NewJWTService(keys *KeyManager, accessExpiry time.Duration) *JWTService {
 // Keys exposes the key manager so the handler can serve the public JWKS.
 func (s *JWTService) Keys() *KeyManager { return s.keys }
 
+// AccessExpiry is the access-token lifetime. Used as the TTL for revocation
+// entries — a blacklisted token can never outlive its own expiry.
+func (s *JWTService) AccessExpiry() time.Duration { return s.accessExpiry }
+
 // TokenProfile holds the extra identity fields embedded in every JWT.
 type TokenProfile struct {
 	FirstName     string

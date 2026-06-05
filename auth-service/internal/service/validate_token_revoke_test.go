@@ -40,6 +40,28 @@ func newAuthServiceWithRealCache(t *testing.T) (*AuthService, *cache.RedisCache,
 	return svc, c, jwtSvc
 }
 
+// TestValidateToken_BlacklistedSid_RejectsToken: blacklisting a session's sid
+// must cause ValidateToken to reject a token carrying that sid (hard revoke).
+func TestValidateToken_BlacklistedSid_RejectsToken(t *testing.T) {
+	svc, redis, jwtSvc := newAuthServiceWithRealCache(t)
+
+	tok, err := jwtSvc.GenerateAccessToken(5, "s@id", []string{"EmployeeAgent"}, nil, "employee", TokenProfile{Sid: "777"})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	// Sanity: valid before blacklisting.
+	if _, err := svc.ValidateToken(tok); err != nil {
+		t.Fatalf("expected valid before blacklist, got %v", err)
+	}
+	// Blacklist the session id carried in the token.
+	if err := redis.Set(context.Background(), sessionBlacklistKey("777"), "revoked", 15*time.Minute); err != nil {
+		t.Fatalf("blacklist: %v", err)
+	}
+	if _, err := svc.ValidateToken(tok); err == nil || !strings.Contains(err.Error(), "revoked") {
+		t.Fatalf("expected revoked after sid blacklist, got %v", err)
+	}
+}
+
 // TestValidateToken_RevokedByEpoch_RejectsToken: setting user_revoked_at AFTER
 // the token's iat must cause ValidateToken to reject the token with the
 // "access token has been revoked" error.
