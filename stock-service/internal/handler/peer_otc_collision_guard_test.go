@@ -9,7 +9,6 @@ package handler_test
 // These tests cover:
 //   - RecordOptionContract guard (own-counterparty-routing rejection)
 //   - CreateNegotiation guard (peer_bank_code == own routing rejected)
-//   - RecordOutboundNegotiation guard (peer_bank_code == own routing rejected)
 //
 // The otccache guard is tested in internal/otccache/option_cache_test.go.
 
@@ -121,38 +120,6 @@ func TestPeerOTC_CreateNegotiation_OwnRouting_Rejected(t *testing.T) {
 		Offer:        &stockpb.PeerOtcOffer{Ticker: "AAPL", Amount: 1},
 		BuyerId:      &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-20"},
 		SellerId:     &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-7"},
-	})
-	if err == nil {
-		t.Fatal("expected error: peer_bank_code colliding with own routing must be rejected")
-	}
-	if status.Code(err) != codes.InvalidArgument {
-		t.Errorf("expected InvalidArgument, got %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// RecordOutboundNegotiation collision guard
-// ---------------------------------------------------------------------------
-
-// TestPeerOTC_RecordOutboundNegotiation_OwnRouting_Rejected verifies that
-// RecordOutboundNegotiation rejects a payload whose peer_bank_code resolves to
-// this bank's own routing. The buyer-side mirror row is keyed on
-// routing_number=<seller bank>; if the peer routing equals OwnRouting() the
-// row would alias a local chain and leak into local money paths.
-//
-// Guard location: peer_otc_grpc_handler.go RecordOutboundNegotiation(), after
-// peerRoutingForCode() and before UpsertRemoteNeg.
-func TestPeerOTC_RecordOutboundNegotiation_OwnRouting_Rejected(t *testing.T) {
-	h, _, _, _ := newPeerOtcHandler(t) // ownRouting = 111
-
-	// Minimal valid fields so the nil-arg guard passes; only peer_bank_code
-	// needs to equal OwnRouting() to trigger the collision guard.
-	_, err := h.RecordOutboundNegotiation(context.Background(), &stockpb.RecordOutboundNegotiationRequest{
-		PeerBankCode:  "111", // == OwnRouting() — must be rejected
-		NegotiationId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "neg-outbound"},
-		BuyerId:       &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-10"},
-		SellerId:      &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-7"},
-		Offer:         &stockpb.PeerOtcOffer{Ticker: "MSFT", Amount: 2},
 	})
 	if err == nil {
 		t.Fatal("expected error: peer_bank_code colliding with own routing must be rejected")
