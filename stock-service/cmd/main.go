@@ -847,6 +847,38 @@ func main() {
 	if err != nil {
 		log.Fatalf("invalid OWN_BANK_CODE %q: %v", cfg.OwnBankCode, err)
 	}
+
+	// SP-2a startup assertion: verify no registered peer bank has the same
+	// routing number or bank code as this instance. A pre-existing collision
+	// means cross-bank ingestion would stamp routing_number=OwnRouting on a
+	// "remote" row, making it look local and corrupting money paths. We
+	// fail-fast on an actual collision; on a transient gRPC error we log a
+	// warning and continue (don't block boot on a momentary transaction-service
+	// outage — the T1 registration guard prevents NEW collisions from being
+	// created, so this catches only pre-existing bad data).
+	{
+		startupCtx, startupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		peerListResp, peerListErr := peerBankAdminClient.ListPeerBanks(startupCtx, &transactionpb.ListPeerBanksRequest{ActiveOnly: true})
+		startupCancel()
+		if peerListErr != nil {
+			log.Printf("WARN: startup peer-bank collision check: ListPeerBanks failed (%v) — skipping check; cross-bank ingestion guards remain active per-request", peerListErr)
+		} else if peerListResp != nil {
+			for _, peer := range peerListResp.GetPeerBanks() {
+				peerRouting := int64(0)
+				if rn := peer.GetRoutingNumber(); rn != 0 {
+					peerRouting = rn
+				} else {
+					peerRouting, _ = strconv.ParseInt(peer.GetBankCode(), 10, 64)
+				}
+				if peerRouting == ownRouting || peer.GetBankCode() == cfg.OwnBankCode {
+					log.Fatalf("startup: peer bank %q (routing=%d, code=%s) collides with this bank's own routing/code (%d/%s) — refusing to boot; cross-bank ingestion would masquerade as local. Remove or correct the colliding peer-bank registration before restarting.",
+						peer.GetBankCode(), peerRouting, peer.GetBankCode(), ownRouting, cfg.OwnBankCode)
+				}
+			}
+			log.Printf("startup: peer-bank collision check passed (%d active peers, none collide with own routing %d / code %s)", len(peerListResp.GetPeerBanks()), ownRouting, cfg.OwnBankCode)
+		}
+	}
+
 	// SP-2a: cross-bank (REMOTE) negotiations live in the unified
 	// OTCNegotiation table now, so the peer-OTC handler + reconciler use the
 	// same OTCNegotiationRepository the local negotiation flows use (its

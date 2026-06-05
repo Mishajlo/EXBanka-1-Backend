@@ -1268,6 +1268,23 @@ func (h *PeerOTCGRPCHandler) RecordOptionContract(ctx context.Context, req *stoc
 		return h.recordOptionExercise(ctx, req, opt)
 	}
 
+	// Ingestion collision guard (SP-2a): the remote contract row is keyed on the
+	// COUNTERPARTY routing (the side we do NOT host). If that routing equals our
+	// own, then both buyer and seller are on THIS bank — this is an intra-bank
+	// contract that must go through the local OTC flow, not the cross-bank path.
+	// Persisting it as "remote" would alias a local contract and corrupt the
+	// local-vs-remote invariant. Reject up-front.
+	counterpartyRouting := remoteContractCounterpartyRouting(
+		req.GetDirection(),
+		req.GetBuyerId().GetRoutingNumber(),
+		req.GetSellerId().GetRoutingNumber(),
+	)
+	if counterpartyRouting == h.ownRouting {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"RecordOptionContract: counterparty routing %d equals this bank's own routing (%d) — cross-bank contract must involve a different bank on at least one side",
+			counterpartyRouting, h.ownRouting)
+	}
+
 	row := buildRemoteContract(
 		req.GetCrossbankTxId(), req.GetPostingIndex(), opt, req.GetDirection(),
 		req.GetBuyerId().GetRoutingNumber(), req.GetBuyerId().GetId(),

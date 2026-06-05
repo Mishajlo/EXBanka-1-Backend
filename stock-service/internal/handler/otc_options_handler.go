@@ -108,6 +108,16 @@ func (h *OTCOptionsHandler) WithListings(listings *repository.ListingRepository)
 	return &cp
 }
 
+// kindFor returns the FE provenance label derived from a row's routing.
+// Local rows have routing_number == model.OwnRouting() (stamped by BeforeCreate);
+// remote rows carry the counterparty/peer routing.
+func kindFor(routing int64) string {
+	if routing == model.OwnRouting() {
+		return "local"
+	}
+	return "remote"
+}
+
 // RemoteOfferGetter fetches a folded-in REMOTE OTCOffer row by surrogate id.
 // GetOffer falls back to this when an offer id is not a local OTCOffer
 // (SP-1). Returns gorm.ErrRecordNotFound for a local id (a local offer is
@@ -252,14 +262,14 @@ func (h *OTCOptionsHandler) ListNegotiationHistory(ctx context.Context, in *stoc
 		// History entries are immutable from the caller's perspective so
 		// "unread" is always false — they're explicitly viewing past data.
 		item := h.withOfferMarketRef(&rows[i], toOTCOfferProto(&rows[i], false))
-		item.Kind = "local"
+		item.Kind = kindFor(rows[i].RoutingNumber)
 		item.RoutingNumber = h.ownRouting
 		item.BankCode = h.ownBankCode
 		// me_owner ⇔ the caller posted/originated this offer (initiator side) —
 		// same rule as GetOffer. A bidder/counterparty history row is false.
 		item.MeOwner = otcMeOwner(
 			string(ownerType), model.OwnerIDOrZero(ownerID),
-			"local", sellerIDForOwner(rows[i].InitiatorOwnerType, rows[i].InitiatorOwnerID),
+			item.Kind, sellerIDForOwner(rows[i].InitiatorOwnerType, rows[i].InitiatorOwnerID),
 		)
 		out.Offers = append(out.Offers, item)
 	}
@@ -406,12 +416,12 @@ func (h *OTCOptionsHandler) GetOffer(ctx context.Context, in *stockpb.GetOTCOffe
 		return nil, mapOTCErr(err)
 	}
 	offer := h.withOfferMarketRef(o, toOTCOfferProto(o, false))
-	offer.Kind = "local"
+	offer.Kind = kindFor(o.RoutingNumber)
 	offer.RoutingNumber = h.ownRouting
 	offer.BankCode = h.ownBankCode
 	offer.MeOwner = otcMeOwner(
 		in.GetActingOwnerType(), in.GetActingOwnerId(),
-		"local", sellerIDForOwner(o.InitiatorOwnerType, o.InitiatorOwnerID),
+		offer.Kind, sellerIDForOwner(o.InitiatorOwnerType, o.InitiatorOwnerID),
 	)
 	out := &stockpb.OTCOfferDetailResponse{
 		Offer:     offer,
@@ -571,7 +581,7 @@ func (h *OTCOptionsHandler) ListMyContracts(ctx context.Context, in *stockpb.Lis
 	out := &stockpb.ListContractsResponse{Total: total, Contracts: make([]*stockpb.OptionContractResponse, 0, len(rows))}
 	for i := range rows {
 		item := h.withMarketRef(&rows[i], toContractProto(&rows[i]))
-		item.Kind = "local"
+		item.Kind = kindFor(rows[i].RoutingNumber)
 		item.RoutingNumber = h.ownRouting
 		item.BankCode = h.ownBankCode
 		// me_owner ⇔ the caller is the contract's BUYER/HOLDER (owner of the
@@ -683,7 +693,7 @@ func (h *OTCOptionsHandler) GetContract(ctx context.Context, in *stockpb.GetCont
 		return nil, status.Error(codes.PermissionDenied, "not a participant")
 	}
 	resp := h.withMarketRef(c, toContractProto(c))
-	resp.Kind = "local"
+	resp.Kind = kindFor(c.RoutingNumber)
 	resp.RoutingNumber = h.ownRouting
 	resp.BankCode = h.ownBankCode
 	// me_owner ⇔ the caller is the contract's BUYER/HOLDER (owner of the formed

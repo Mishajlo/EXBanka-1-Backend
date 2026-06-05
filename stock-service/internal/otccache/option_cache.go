@@ -372,11 +372,27 @@ func (r *OptionRefresher) fetchPeer(ctx context.Context, peer *transactionpb.Pee
 // The mirror row is keyed by the POLLED peer's routing so reconcile scope
 // always matches what we upserted.
 func (r *OptionRefresher) buildAndMirrorRemoteOffers(peerBankCode string, peerRouting int64, offers []sitx.PublicOptionOffer) []OptionOffer {
+	// Ingestion collision guard (SP-2a): if the peer's routing matches our own,
+	// ingesting any of its offers would stamp routing_number=OwnRouting() on the
+	// mirror row, making it look LOCAL. Reject the entire peer's payload.
+	if peerRouting == model.OwnRouting() {
+		log.Printf("WARN otccache(options): peer bank_code=%s routing=%d collides with own routing (%d) — skipping entire peer payload",
+			peerBankCode, peerRouting, model.OwnRouting())
+		return nil
+	}
 	now := time.Now().UTC()
 	seen := make([]string, 0, len(offers))
 	out := make([]OptionOffer, 0, len(offers))
 	for i := range offers {
 		o := offers[i]
+		// Per-offer guard: reject any offer claiming our own routing as its id
+		// namespace (defense-in-depth: the per-peer guard above should catch this,
+		// but a malformed payload could mix routings).
+		if o.OfferID.RoutingNumber == model.OwnRouting() {
+			log.Printf("WARN otccache(options): peer=%s offer %s claims own routing (%d) — skipping offer",
+				peerBankCode, o.OfferID.ID, model.OwnRouting())
+			continue
+		}
 		row := OptionOffer{
 			Kind:              "remote",
 			BankCode:          peerBankCode,

@@ -408,7 +408,7 @@ func (h *OTCOptionsHandler) ListMyNegotiations(ctx context.Context, in *stockpb.
 		// LOCAL provenance. These are bidder chains (the service returns
 		// only chains where the caller is the bidder), so me_owner is
 		// false by the strict rule — a bidder is not an owner.
-		item.Kind = "local"
+		item.Kind = kindFor(rows[i].RoutingNumber)
 		item.RoutingNumber = h.ownRouting
 		item.BankCode = h.ownBankCode
 		item.MeOwner = false
@@ -611,7 +611,7 @@ func (h *OTCOptionsHandler) ListNegotiationsByListing(ctx context.Context, in *s
 	out := make([]*stockpb.OTCNegotiationResponse, 0, len(rows))
 	for i := range rows {
 		item := negToProto(&rows[i])
-		item.Kind = "local"
+		item.Kind = kindFor(rows[i].RoutingNumber)
 		item.RoutingNumber = h.ownRouting
 		item.BankCode = h.ownBankCode
 		item.MeOwner = meOwner
@@ -746,12 +746,12 @@ func (h *OTCOptionsHandler) GetOfferTimeline(ctx context.Context, in *stockpb.Ge
 	// OfferTimeline is the poster's cross-chain audit view; all chains belong
 	// to the same listing, so me_owner is uniform and computed once.
 	offerProto := toOTCOfferProto(offer, false)
-	offerProto.Kind = "local"
+	offerProto.Kind = kindFor(offer.RoutingNumber)
 	offerProto.RoutingNumber = h.ownRouting
 	offerProto.BankCode = h.ownBankCode
 	offerProto.MeOwner = otcMeOwner(
 		string(ot), model.OwnerIDOrZero(oid),
-		"local", sellerIDForOwner(offer.InitiatorOwnerType, offer.InitiatorOwnerID),
+		offerProto.Kind, sellerIDForOwner(offer.InitiatorOwnerType, offer.InitiatorOwnerID),
 	)
 	return &stockpb.GetOfferTimelineResponse{
 		Offer:    offerProto,
