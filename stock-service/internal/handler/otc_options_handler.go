@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strconv"
 	"time"
@@ -12,7 +11,6 @@ import (
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
-	contractsitx "github.com/exbanka/contract/sitx"
 	stockpb "github.com/exbanka/contract/stockpb"
 	"github.com/exbanka/stock-service/internal/model"
 	"github.com/exbanka/stock-service/internal/repository"
@@ -335,14 +333,17 @@ func historyPeerStatusSet(requested []string) map[string]struct{} {
 //   - terms come from the parsed sitx.OtcOffer carried in OfferJSON.
 //   - me_owner = WE host the seller/poster side (SellerRoutingNumber ==
 //     our own routing).
+//
+// The ticker is read from the same peerNegToProto decode (second return value)
+// so OfferJSON is only unmarshalled once per row, not twice.
 func peerNegToOfferProto(row *model.PeerOtcNegotiation, ownRouting int64) *stockpb.OTCOfferResponse {
-	neg := peerNegToProto(row, ownRouting)
+	neg, ticker := peerNegToProto(row, ownRouting)
 	if neg == nil {
 		return nil
 	}
 	return &stockpb.OTCOfferResponse{
 		Id:             neg.GetId(),
-		StockTicker:    peerOfferTicker(row),
+		StockTicker:    ticker,
 		Quantity:       neg.GetQuantity(),
 		StrikePrice:    neg.GetStrikePrice(),
 		Premium:        neg.GetPremium(),
@@ -359,16 +360,6 @@ func peerNegToOfferProto(row *model.PeerOtcNegotiation, ownRouting int64) *stock
 			BankCode:    neg.GetBankCode(),
 		},
 	}
-}
-
-// peerOfferTicker pulls the ticker out of a peer negotiation's serialised
-// OtcOffer; "" on decode failure (terms are best-effort, like peerNegToProto).
-func peerOfferTicker(row *model.PeerOtcNegotiation) string {
-	var offer contractsitx.OtcOffer
-	if err := json.Unmarshal([]byte(row.OfferJSON), &offer); err != nil {
-		return ""
-	}
-	return offer.Ticker
 }
 
 // computeUnread returns true if the offer has been touched since the

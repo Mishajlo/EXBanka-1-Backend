@@ -324,4 +324,3 @@ func (h *OTCHandler) ListUnifiedOptionOffers(ctx context.Context, req *pb.ListUn
 		LastRefreshUnix: lastRefreshUnix,
 	}, nil
 }
-

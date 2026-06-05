@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
 	stockpb "github.com/exbanka/contract/stockpb"
@@ -84,8 +86,9 @@ func newListingViewsFixture(t *testing.T, ownRouting int64, remote RemoteOfferGe
 
 // --- ListNegotiationsByListing -------------------------------------------
 
-// TestListingNegotiations_LocalUnchanged_Stamped: a local listing returns all
-// chains as before, now stamped kind=local + me_owner=false.
+// TestListingNegotiations_LocalUnchanged_Stamped: the listing's poster (client
+// 3) views all chains; each item is kind=local, own provenance, and
+// me_owner=true (spec §5: me_owner ⇔ the caller owns the PARENT OFFER).
 func TestListingNegotiations_LocalUnchanged_Stamped(t *testing.T) {
 	const ownRouting int64 = 111
 	h, db := newListingViewsFixture(t, ownRouting, &fakeRemoteOfferGetter{}, &fakePeerNegLister{})
@@ -111,9 +114,60 @@ func TestListingNegotiations_LocalUnchanged_Stamped(t *testing.T) {
 		if n.GetRoutingNumber() != ownRouting {
 			t.Errorf("routing_number = %d want %d", n.GetRoutingNumber(), ownRouting)
 		}
-		if n.GetMeOwner() {
-			t.Errorf("me_owner=true; chain me_owner reflects bidder ownership (false)")
+		// Poster owns the parent offer → me_owner must be true for all chains.
+		if !n.GetMeOwner() {
+			t.Errorf("me_owner=false; poster owns the parent offer so me_owner must be true")
 		}
+	}
+}
+
+// TestListingNegotiations_EmployeeViewer_MeOwnerFalse: an employee viewing a
+// client-owned listing via otc.read.all (owner_type="bank") does NOT own the
+// offer, so me_owner must be false for every returned chain.
+func TestListingNegotiations_EmployeeViewer_MeOwnerFalse(t *testing.T) {
+	const ownRouting int64 = 111
+	h, db := newListingViewsFixture(t, ownRouting, &fakeRemoteOfferGetter{}, &fakePeerNegLister{})
+	// Local offer id 200 posted by client 5; one bidder opens a chain.
+	seedLocalListing(t, db, 200, 5)
+	seedBidderChain(t, db, 9, 200)
+
+	// Employee (owner_type="bank") views chains — gateway already enforced otc.read.all.
+	resp, err := h.ListNegotiationsByListing(context.Background(), &stockpb.ListNegotiationsByListingRequest{
+		ParentOfferId: 200, CallerOwnerType: "bank", CallerOwnerId: 0,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(resp.GetNegotiations()) != 1 {
+		t.Fatalf("want 1 chain, got %d", len(resp.GetNegotiations()))
+	}
+	if resp.GetNegotiations()[0].GetMeOwner() {
+		t.Errorf("me_owner=true; employee viewing a client-owned listing is NOT the owner")
+	}
+}
+
+// TestListingNegotiations_BidderForbidden: a client who is NOT the listing
+// poster must receive PermissionDenied (403) and must NOT be silently routed
+// into the remote-mirror path (Fix 3 test).
+func TestListingNegotiations_BidderForbidden(t *testing.T) {
+	const ownRouting int64 = 111
+	// Wire a fake remote-offer getter that has NO mirrors, so a fallback to
+	// the remote path would return ok=false and then re-surface the error.
+	h, db := newListingViewsFixture(t, ownRouting, &fakeRemoteOfferGetter{}, &fakePeerNegLister{})
+	// Local offer id 300 posted by client 3.
+	seedLocalListing(t, db, 300, 3)
+	// Client 7 is a bidder on this listing (has a chain) but is not the poster.
+	seedBidderChain(t, db, 7, 300)
+
+	_, err := h.ListNegotiationsByListing(context.Background(), &stockpb.ListNegotiationsByListingRequest{
+		ParentOfferId: 300, CallerOwnerType: "client", CallerOwnerId: 7,
+	})
+	if err == nil {
+		t.Fatalf("want PermissionDenied error for bidder, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.PermissionDenied {
+		t.Errorf("want PermissionDenied, got %v", err)
 	}
 }
 

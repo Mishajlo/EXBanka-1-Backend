@@ -427,7 +427,7 @@ func (h *OTCOptionsHandler) ListMyNegotiations(ctx context.Context, in *stockpb.
 		}
 		statusFilter := statusSet(in.GetStatuses())
 		for i := range peerRows {
-			item := peerNegToProto(&peerRows[i], h.ownRouting)
+			item, _ := peerNegToProto(&peerRows[i], h.ownRouting)
 			if item == nil {
 				continue
 			}
@@ -471,9 +471,14 @@ func statusSet(statuses []string) map[string]struct{} {
 //   - terms are read from the parsed sitx.OtcOffer carried in OfferJSON.
 //   - me_owner = WE host the seller/poster side = SellerRoutingNumber
 //     == our own routing — i.e. someone is bidding on a listing we host.
-func peerNegToProto(row *model.PeerOtcNegotiation, ownRouting int64) *stockpb.OTCNegotiationResponse {
+//
+// peerNegToProto maps a cross-bank peer-negotiation mirror row onto the
+// unified OTCNegotiationResponse wire shape (SP-1 Task 7). It also returns
+// the decoded offer's Ticker so callers that need both the proto and the
+// ticker (e.g. peerNegToOfferProto) can avoid a second JSON decode.
+func peerNegToProto(row *model.PeerOtcNegotiation, ownRouting int64) (*stockpb.OTCNegotiationResponse, string) {
 	if row == nil {
-		return nil
+		return nil, ""
 	}
 	var offer contractsitx.OtcOffer
 	if err := json.Unmarshal([]byte(row.OfferJSON), &offer); err != nil {
@@ -511,7 +516,7 @@ func peerNegToProto(row *model.PeerOtcNegotiation, ownRouting int64) *stockpb.OT
 		RoutingNumber:  peerRouting,
 		BankCode:       peerBankCode,
 		MeOwner:        meOwner,
-	}
+	}, offer.Ticker
 }
 
 func (h *OTCOptionsHandler) ListNegotiationRevisions(ctx context.Context, in *stockpb.ListNegotiationRevisionsRequest) (*stockpb.ListNegotiationRevisionsResponse, error) {
@@ -577,7 +582,7 @@ func (h *OTCOptionsHandler) ListNegotiationsByListing(ctx context.Context, in *s
 	if err != nil {
 		return nil, err
 	}
-	rows, err := h.negotiations.ListByParentOffer(ctx, in.GetParentOfferId(), ot, oid)
+	parentOffer, rows, err := h.negotiations.ListByParentOffer(ctx, in.GetParentOfferId(), ot, oid)
 	if err != nil {
 		// Not a local listing — try the cross-bank mirror and surface the
 		// caller's own chain(s) before returning NotFound.
@@ -595,17 +600,23 @@ func (h *OTCOptionsHandler) ListNegotiationsByListing(ctx context.Context, in *s
 		}
 		return nil, err
 	}
+	// me_owner = caller is the parent listing's poster/seller (per spec §5,
+	// a negotiation's me_owner ⇔ the caller owns the PARENT OFFER). All
+	// chains on this listing share the same parent offer, so me_owner is
+	// identical for every item — compute it once from the parent offer's
+	// initiator identity. authorizeListingAudience already fetched the parent
+	// offer and ListByParentOffer now returns it, so no extra DB round-trip.
+	meOwner := otcMeOwner(
+		string(ot), model.OwnerIDOrZero(oid),
+		"local", sellerIDForOwner(parentOffer.InitiatorOwnerType, parentOffer.InitiatorOwnerID),
+	)
 	out := make([]*stockpb.OTCNegotiationResponse, 0, len(rows))
 	for i := range rows {
 		item := negToProto(&rows[i])
 		item.Kind = "local"
 		item.RoutingNumber = h.ownRouting
 		item.BankCode = h.ownBankCode
-		// me_owner reflects the CHAIN's bidder ownership, not the listing's.
-		// On the per-listing path the caller is the poster (or a gated
-		// employee) viewing OTHER parties' bids, so this is false — a bidder
-		// is never the owner.
-		item.MeOwner = false
+		item.MeOwner = meOwner
 		out = append(out, item)
 	}
 	return &stockpb.ListNegotiationsResponse{
@@ -661,7 +672,7 @@ func (h *OTCOptionsHandler) remoteListingOwnChains(
 		if *row.ParentOfferRouting != mirror.PeerRoutingNumber || *row.ParentOfferID != mirror.ForeignOfferID {
 			continue
 		}
-		if item := peerNegToProto(row, h.ownRouting); item != nil {
+		if item, _ := peerNegToProto(row, h.ownRouting); item != nil {
 			out = append(out, item)
 		}
 	}
@@ -729,8 +740,19 @@ func (h *OTCOptionsHandler) GetOfferTimeline(ctx context.Context, in *stockpb.Ge
 			CreatedAt:             r.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
+	// me_owner = caller owns the parent listing (same rule as GetOffer/ListNegotiationsByListing).
+	// OfferTimeline is the poster's cross-chain audit view; all chains belong
+	// to the same listing, so me_owner is uniform and computed once.
+	offerProto := toOTCOfferProto(offer, false)
+	offerProto.Kind = "local"
+	offerProto.RoutingNumber = h.ownRouting
+	offerProto.BankCode = h.ownBankCode
+	offerProto.MeOwner = otcMeOwner(
+		string(ot), model.OwnerIDOrZero(oid),
+		"local", sellerIDForOwner(offer.InitiatorOwnerType, offer.InitiatorOwnerID),
+	)
 	return &stockpb.GetOfferTimelineResponse{
-		Offer:    toOTCOfferProto(offer, false),
+		Offer:    offerProto,
 		Timeline: timeline,
 	}, nil
 }

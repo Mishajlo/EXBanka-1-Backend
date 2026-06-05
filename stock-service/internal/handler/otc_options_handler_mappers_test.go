@@ -178,4 +178,3 @@ func TestToOTCOfferProto_WithCounterparty(t *testing.T) {
 		t.Errorf("got %+v", r.Counterparty)
 	}
 }
-

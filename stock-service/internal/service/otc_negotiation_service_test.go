@@ -576,9 +576,12 @@ func seedTwoChainsWithCounter(t *testing.T, env *negTestEnv) *model.OTCOffer {
 func TestListByParentOffer_PosterAllowed(t *testing.T) {
 	env := newNegTestEnv(t)
 	listing := seedTwoChainsWithCounter(t, env)
-	rows, err := env.svc.ListByParentOffer(context.Background(), listing.ID, model.OwnerClient, u64p(1))
+	parent, rows, err := env.svc.ListByParentOffer(context.Background(), listing.ID, model.OwnerClient, u64p(1))
 	if err != nil {
 		t.Fatalf("poster ListByParentOffer: %v", err)
+	}
+	if parent == nil || parent.ID != listing.ID {
+		t.Errorf("parent offer missing or wrong id: %+v", parent)
 	}
 	if len(rows) != 2 {
 		t.Errorf("want 2 chains, got %d", len(rows))
@@ -590,12 +593,12 @@ func TestListByParentOffer_BidderForbidden(t *testing.T) {
 	listing := seedTwoChainsWithCounter(t, env)
 	// Bidder 7 is a party to one chain but is NOT the listing poster — they
 	// must not see every chain on the offer.
-	rows, err := env.svc.ListByParentOffer(context.Background(), listing.ID, model.OwnerClient, u64p(7))
+	parent, rows, err := env.svc.ListByParentOffer(context.Background(), listing.ID, model.OwnerClient, u64p(7))
 	if !errors.Is(err, ErrOTCListingAudienceForbidden) {
 		t.Fatalf("want ErrOTCListingAudienceForbidden, got %v", err)
 	}
-	if rows != nil {
-		t.Errorf("expected nil rows on forbidden, got %d", len(rows))
+	if parent != nil || rows != nil {
+		t.Errorf("expected nil parent+rows on forbidden")
 	}
 }
 
@@ -604,9 +607,12 @@ func TestListByParentOffer_EmployeeBankAllowed(t *testing.T) {
 	listing := seedTwoChainsWithCounter(t, env)
 	// Employee identity (owner_type="bank"); gateway already enforced
 	// otc.read.all, so the service trusts it.
-	rows, err := env.svc.ListByParentOffer(context.Background(), listing.ID, model.OwnerBank, nil)
+	parent, rows, err := env.svc.ListByParentOffer(context.Background(), listing.ID, model.OwnerBank, nil)
 	if err != nil {
 		t.Fatalf("employee ListByParentOffer: %v", err)
+	}
+	if parent == nil || parent.ID != listing.ID {
+		t.Errorf("parent offer missing or wrong id: %+v", parent)
 	}
 	if len(rows) != 2 {
 		t.Errorf("want 2 chains, got %d", len(rows))
@@ -615,7 +621,7 @@ func TestListByParentOffer_EmployeeBankAllowed(t *testing.T) {
 
 func TestListByParentOffer_OfferNotFound(t *testing.T) {
 	env := newNegTestEnv(t)
-	_, err := env.svc.ListByParentOffer(context.Background(), 999, model.OwnerBank, nil)
+	_, _, err := env.svc.ListByParentOffer(context.Background(), 999, model.OwnerBank, nil)
 	if !errors.Is(err, ErrOTCOfferNotFound) {
 		t.Fatalf("want ErrOTCOfferNotFound, got %v", err)
 	}
