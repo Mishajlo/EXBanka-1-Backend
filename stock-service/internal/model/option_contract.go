@@ -21,9 +21,17 @@ type OptionContract struct {
 	ID uint64 `gorm:"primaryKey;autoIncrement" json:"id"`
 	// RoutingNumber is the bank that owns this row; stamped to OwnRouting on
 	// local create by BeforeCreate. (routing_number, native_id) is the
-	// bank-scoped natural key. Local-vs-remote is `RoutingNumber == OwnRouting()`.
+	// bank-scoped natural key + the which-peer / its-foreign-id remote concern.
+	// It is NO LONGER the local-vs-remote discriminator — see Local below.
 	RoutingNumber int64   `gorm:"not null;default:0;uniqueIndex:ux_oc_native,priority:1" json:"routing_number"`
 	NativeID      *string `gorm:"size:128;uniqueIndex:ux_oc_native,priority:2" json:"native_id,omitempty"`
+	// Local is THE authoritative local-vs-remote discriminator: true ⇔ this bank
+	// hosts the row (RoutingNumber == OwnRouting()), false ⇔ a remote mirror of a
+	// peer's row. Stamped once in BeforeCreate (after routing is finalized) and
+	// never mutated. When true, the remote-only columns (NativeID, Remote*) are
+	// NULL; when false the local-only columns (e.g. OfferID, SagaID) are unused.
+	// Queries discriminate on this column.
+	Local bool `gorm:"not null;default:false;index" json:"local"`
 	// OfferID is the local OTCOffer this contract was minted from. Nullable:
 	// remote contracts (added later) have no local offer and store NULL here.
 	// Postgres treats NULLs as distinct under a unique index, so the
@@ -122,6 +130,10 @@ func (c *OptionContract) BeforeCreate(tx *gorm.DB) error {
 	if c.RoutingNumber == 0 {
 		c.RoutingNumber = OwnRouting()
 	}
+	// Stamp the discriminator AFTER routing is finalized. Must NOT live in
+	// BeforeSave: GORM runs BeforeSave BEFORE BeforeCreate, where routing would
+	// still be 0 and a local row would be mis-stamped false.
+	c.Local = c.RoutingNumber == OwnRouting()
 	return nil
 }
 

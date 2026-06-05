@@ -63,8 +63,8 @@ func (r *OTCOfferRepository) Save(o *model.OTCOffer) error {
 // waits for the first to commit, then sees parent.Status != open and
 // rejects with ErrOTCParentNotOpen.
 //
-// Guard: remote rows (routing_number != OwnRouting()) are treated as
-// not-found so they can never enter the local money/accept paths.
+// Guard: remote rows (local == false) are treated as not-found so they can
+// never enter the local money/accept paths.
 func (r *OTCOfferRepository) LockByIDTx(tx *gorm.DB, id uint64) (*model.OTCOffer, error) {
 	var o model.OTCOffer
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&o, id).Error
@@ -74,7 +74,7 @@ func (r *OTCOfferRepository) LockByIDTx(tx *gorm.DB, id uint64) (*model.OTCOffer
 	if err != nil {
 		return nil, err
 	}
-	if o.RoutingNumber != model.OwnRouting() {
+	if !o.Local {
 		return nil, gorm.ErrRecordNotFound
 	}
 	return &o, nil
@@ -101,9 +101,9 @@ func (r *OTCOfferRepository) SaveTx(tx *gorm.DB, o *model.OTCOffer) error {
 // limit caps the result so a runaway listing pool can't OOM the
 // process; caller can pass a large number to effectively disable it.
 //
-// Guard: only local rows (routing_number == OwnRouting()) are returned.
-// Remote rows folded into the unified table (Tasks 4-6) must not be
-// re-published to peers as if they originated here.
+// Guard: only local rows (local == true) are returned. Remote rows folded
+// into the unified table (Tasks 4-6) must not be re-published to peers as if
+// they originated here.
 func (r *OTCOfferRepository) ListOpenForCache(limit int) ([]model.OTCOffer, error) {
 	if limit <= 0 {
 		limit = 1000
@@ -114,8 +114,8 @@ func (r *OTCOfferRepository) ListOpenForCache(limit int) ([]model.OTCOffer, erro
 		model.OTCOfferStatusCountered,
 	}
 	var out []model.OTCOffer
-	err := r.db.Where("status IN ? AND counterparty_owner_id IS NULL AND routing_number = ?",
-		openStatuses, model.OwnRouting()).
+	err := r.db.Where("status IN ? AND counterparty_owner_id IS NULL AND local = ?",
+		openStatuses, true).
 		Order("created_at DESC").Limit(limit).Find(&out).Error
 	return out, err
 }
@@ -180,15 +180,14 @@ func (r *OTCOfferRepository) ReconcileRemoteNotSeen(peerRouting int64, seenNativ
 }
 
 // GetRemoteByID returns a REMOTE OTCOffer row by surrogate id, or
-// gorm.ErrRecordNotFound. A row whose routing_number == OwnRouting() is a
-// LOCAL offer and is treated as not-found here, so a local id never resolves
-// through the remote-offer path.
+// gorm.ErrRecordNotFound. A LOCAL offer (local == true) is treated as
+// not-found here, so a local id never resolves through the remote-offer path.
 func (r *OTCOfferRepository) GetRemoteByID(id uint64) (*model.OTCOffer, error) {
 	var o model.OTCOffer
 	if err := r.db.First(&o, id).Error; err != nil {
 		return nil, err
 	}
-	if o.RoutingNumber == model.OwnRouting() {
+	if o.Local {
 		return nil, gorm.ErrRecordNotFound
 	}
 	return &o, nil
@@ -264,8 +263,8 @@ type HistoryFilter struct {
 func (r *OTCOfferRepository) ListNegotiationHistory(ownerType model.OwnerType, ownerID *uint64, f HistoryFilter) ([]model.OTCOffer, int64, error) {
 	// Local-only history: a bank/employee caller (OwnerBank, nil id) would
 	// otherwise match folded-in remote offer rows (also OwnerBank/nil), so
-	// scope to our own routing (parity with the other local-only queries).
-	q := r.db.Model(&model.OTCOffer{}).Where("routing_number = ?", model.OwnRouting())
+	// scope to local rows (parity with the other local-only queries).
+	q := r.db.Model(&model.OTCOffer{}).Where("local = ?", true)
 
 	// Caller is one of the two parties — match either side.
 	if ownerID == nil {
@@ -336,12 +335,12 @@ func derefOr0(p *uint64) uint64 {
 // ListExpiringOffers returns up to limit pending/countered offers whose
 // settlement_date is in the past. Used by the expiry cron.
 //
-// Guard: only local rows (routing_number == OwnRouting()) are returned so
-// remote offers folded in by Tasks 4-6 never enter the local expiry path.
+// Guard: only local rows (local == true) are returned so remote offers folded
+// in by Tasks 4-6 never enter the local expiry path.
 func (r *OTCOfferRepository) ListExpiringOffers(today string, limit int) ([]model.OTCOffer, error) {
 	var out []model.OTCOffer
-	err := r.db.Where("status IN ? AND settlement_date < ? AND routing_number = ?",
-		[]string{model.OTCOfferStatusPending, model.OTCOfferStatusCountered}, today, model.OwnRouting()).
+	err := r.db.Where("status IN ? AND settlement_date < ? AND local = ?",
+		[]string{model.OTCOfferStatusPending, model.OTCOfferStatusCountered}, today, true).
 		Order("id ASC").Limit(limit).Find(&out).Error
 	return out, err
 }

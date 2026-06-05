@@ -253,11 +253,11 @@ func (h *OTCOptionsHandler) WithListings(listings *repository.ListingRepository)
 	return &cp
 }
 
-// kindFor returns the FE provenance label derived from a row's routing.
-// Local rows have routing_number == model.OwnRouting() (stamped by BeforeCreate);
-// remote rows carry the counterparty/peer routing.
-func kindFor(routing int64) string {
-	if routing == model.OwnRouting() {
+// kindFromLocal returns the FE provenance label derived from a row's explicit
+// `local` discriminator (stamped once in BeforeCreate). It is THE source of the
+// kind field: local==true → "local", local==false → "remote".
+func kindFromLocal(local bool) string {
+	if local {
 		return "local"
 	}
 	return "remote"
@@ -409,7 +409,7 @@ func (h *OTCOptionsHandler) ListNegotiationHistory(ctx context.Context, in *stoc
 		// History entries are immutable from the caller's perspective so
 		// "unread" is always false — they're explicitly viewing past data.
 		item := h.withOfferMarketRef(&rows[i], toOTCOfferProto(&rows[i], false))
-		item.Kind = kindFor(rows[i].RoutingNumber)
+		item.Kind = kindFromLocal(rows[i].Local)
 		item.RoutingNumber = h.ownRouting
 		item.BankCode = h.ownBankCode
 		// me_owner ⇔ the caller posted/originated this offer (initiator side) —
@@ -587,7 +587,7 @@ func (h *OTCOptionsHandler) GetOffer(ctx context.Context, in *stockpb.GetOTCOffe
 		return nil, mapOTCErr(err)
 	}
 	offer := h.withOfferMarketRef(o, toOTCOfferProto(o, false))
-	offer.Kind = kindFor(o.RoutingNumber)
+	offer.Kind = kindFromLocal(o.Local)
 	offer.RoutingNumber = h.ownRouting
 	offer.BankCode = h.ownBankCode
 	offer.MeOwner = otcMeOwner(
@@ -769,7 +769,7 @@ func (h *OTCOptionsHandler) ListMyContracts(ctx context.Context, in *stockpb.Lis
 	out := &stockpb.ListContractsResponse{Total: total, Contracts: make([]*stockpb.OptionContractResponse, 0, len(rows))}
 	for i := range rows {
 		item := h.withMarketRef(&rows[i], toContractProto(&rows[i]))
-		item.Kind = kindFor(rows[i].RoutingNumber)
+		item.Kind = kindFromLocal(rows[i].Local)
 		item.RoutingNumber = h.ownRouting
 		item.BankCode = h.ownBankCode
 		// me_owner ⇔ the caller is the contract's BUYER/HOLDER (owner of the
@@ -898,7 +898,7 @@ func (h *OTCOptionsHandler) GetContract(ctx context.Context, in *stockpb.GetCont
 		return nil, status.Error(codes.PermissionDenied, "not a participant")
 	}
 	resp := h.withMarketRef(c, toContractProto(c))
-	resp.Kind = kindFor(c.RoutingNumber)
+	resp.Kind = kindFromLocal(c.Local)
 	resp.RoutingNumber = h.ownRouting
 	resp.BankCode = h.ownBankCode
 	// me_owner ⇔ the caller is the contract's BUYER/HOLDER (owner of the formed

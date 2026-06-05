@@ -60,9 +60,17 @@ type OTCOffer struct {
 	ID uint64 `gorm:"primaryKey;autoIncrement" json:"id"`
 	// RoutingNumber is the bank that owns this row; stamped to OwnRouting on
 	// local create by BeforeCreate. (routing_number, native_id) is the
-	// bank-scoped natural key. Local-vs-remote is `RoutingNumber == OwnRouting()`.
+	// bank-scoped natural key + the which-peer / its-foreign-id remote concern.
+	// It is NO LONGER the local-vs-remote discriminator — see Local below.
 	RoutingNumber int64   `gorm:"not null;default:0;uniqueIndex:ux_otc_offer_native,priority:1" json:"routing_number"`
 	NativeID      *string `gorm:"size:128;uniqueIndex:ux_otc_offer_native,priority:2" json:"native_id,omitempty"`
+	// Local is THE authoritative local-vs-remote discriminator: true ⇔ this bank
+	// hosts the row (RoutingNumber == OwnRouting()), false ⇔ a remote mirror of a
+	// peer's row. Stamped once in BeforeCreate (after routing is finalized) and
+	// never mutated. When true, the remote-only columns (NativeID, Remote*, the
+	// peer currencies, LastSeenAt) are NULL; when false, the local-only columns
+	// (e.g. InitiatorAccountID) are unused. Queries discriminate on this column.
+	Local bool `gorm:"not null;default:false;index" json:"local"`
 	InitiatorOwnerType    OwnerType       `gorm:"size:8;not null;index:ix_otc_initiator,priority:1;check:initiator_owner_type IN ('client','bank')" json:"initiator_owner_type"`
 	InitiatorOwnerID      *uint64         `gorm:"index:ix_otc_initiator,priority:2" json:"initiator_owner_id,omitempty"`
 	InitiatorBankCode     *string         `gorm:"size:32" json:"initiator_bank_code,omitempty"`
@@ -124,6 +132,10 @@ func (o *OTCOffer) BeforeCreate(tx *gorm.DB) error {
 	if o.RoutingNumber == 0 {
 		o.RoutingNumber = OwnRouting()
 	}
+	// Stamp the discriminator AFTER routing is finalized. Must NOT live in
+	// BeforeSave: GORM runs BeforeSave BEFORE BeforeCreate, where routing would
+	// still be 0 and a local row would be mis-stamped false.
+	o.Local = o.RoutingNumber == OwnRouting()
 	return nil
 }
 

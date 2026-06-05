@@ -55,6 +55,14 @@ type OTCNegotiation struct {
 	RoutingNumber int64   `gorm:"not null;default:0;uniqueIndex:ux_otcneg_native,priority:1;uniqueIndex:ux_otcneg_chain,priority:1" json:"routing_number"`
 	NativeID      *string `gorm:"size:128;uniqueIndex:ux_otcneg_native,priority:2" json:"native_id,omitempty"`
 
+	// Local is THE authoritative local-vs-remote discriminator: true ⇔ this bank
+	// hosts the row (RoutingNumber == OwnRouting()), false ⇔ a remote mirror of a
+	// peer's row. Stamped once in BeforeCreate (after routing is finalized) and
+	// never mutated. When true, the remote-only columns (NativeID, Remote*,
+	// LastActionAt-side peer fields) are NULL; when false, the local-only columns
+	// (e.g. BidderAccountID) are unused. Queries discriminate on this column.
+	Local bool `gorm:"not null;default:false;index" json:"local"`
+
 	// ParentOfferID points at the OTCOffer listing this chain negotiates
 	// against. Foreign-key not modeled with GORM tags (manual integrity)
 	// — same convention used by OTCOfferRevision.
@@ -144,6 +152,10 @@ func (n *OTCNegotiation) BeforeCreate(tx *gorm.DB) error {
 	if n.RoutingNumber == 0 {
 		n.RoutingNumber = OwnRouting()
 	}
+	// Stamp the discriminator AFTER routing is finalized. Must NOT live in
+	// BeforeSave: GORM runs BeforeSave BEFORE BeforeCreate, where routing would
+	// still be 0 and a local row would be mis-stamped false.
+	n.Local = n.RoutingNumber == OwnRouting()
 	return nil
 }
 
