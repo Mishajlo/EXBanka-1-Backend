@@ -248,6 +248,33 @@ func TestOTCOpt_CreateOffer_Success(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code)
 }
 
+func TestOTCOpt_CreateOffer_EmployeeBank_ForwardsActingEmployee(t *testing.T) {
+	cl := &stubOTCOptionsClient{
+		createFn: func(in *stockpb.CreateOTCOfferRequest) (*stockpb.OTCOfferResponse, error) {
+			// Employee acting as the bank: owner resolves to bank (actor_user_id
+			// 0, actor_system_type "bank") and the originating employee is
+			// forwarded separately so stock-service can capture it.
+			require.Equal(t, int64(0), in.ActorUserId)
+			require.Equal(t, "bank", in.ActorSystemType)
+			require.Equal(t, uint64(17), in.ActingEmployeeId)
+			return &stockpb.OTCOfferResponse{Id: 1}, nil
+		},
+	}
+	// Employees acting as the bank may only bind a bank-owned account.
+	bankAcct := &otcStubAccountClient{getFn: func(in *accountpb.GetAccountRequest) (*accountpb.AccountResponse, error) {
+		return &accountpb.AccountResponse{Id: in.Id, AccountKind: "bank"}, nil
+	}}
+	h := handler.NewOTCOptionsHandler(cl, &otcStubSecurityClient{}, bankAcct)
+	// Route with the employee-bank identity instead of the default client one.
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/otc/offers", setEmployeeBankIdentity(17), h.CreateOffer)
+	body := `{"direction":"buy_initiated","ticker":"AAPL","quantity":"100","strike_price":"5","premium":"1","settlement_date":"2026-12-31","account_id":50}`
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
+	require.Equal(t, http.StatusCreated, rec.Code)
+}
+
 func TestOTCOpt_CreateOffer_UnknownTicker(t *testing.T) {
 	sec := &otcStubSecurityClient{byTickerFn: func(*stockpb.GetStockByTickerRequest) (*stockpb.StockDetail, error) {
 		return nil, status.Error(codes.NotFound, "no stock")

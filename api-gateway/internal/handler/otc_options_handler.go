@@ -82,6 +82,7 @@ func (h *OTCOptionsHandler) CreateOffer(c *gin.Context) {
 	in := &stockpb.CreateOTCOfferRequest{
 		ActorUserId:        int64(ownerToLegacyUserID(identity.OwnerID)),
 		ActorSystemType:    ownerToLegacySystemType(identity.OwnerType),
+		ActingEmployeeId:   derefU64(identity.ActingEmployeeID),
 		Direction:          req.Direction,
 		StockId:            stock.Id,
 		Quantity:           req.Quantity,

@@ -82,7 +82,12 @@ type OTCOffer struct {
 	// principal; the owner remains the client. Audit field only.
 	LastModifiedByPrincipalType string  `gorm:"size:10;not null" json:"last_modified_by_principal_type"`
 	LastModifiedByPrincipalID   uint64  `gorm:"not null" json:"last_modified_by_principal_id"`
-	ActingEmployeeID            *uint64 `gorm:"index" json:"acting_employee_id,omitempty"`
+	// ActingEmployeeID is the employee who ORIGINATED this bank-owned resource.
+	// Non-nil ONLY when the owner is the bank and an employee created it. It is the
+	// STABLE SI-TX wire-identity source: the bank party publishes as
+	// "employee-<ActingEmployeeID>" on every wire action, regardless of which
+	// employee performs later actions. nil for client-owned resources and legacy/seed bank rows.
+	ActingEmployeeID *uint64 `gorm:"index" json:"acting_employee_id,omitempty"`
 	ExternalCorrelationID       *string `gorm:"size:64" json:"external_correlation_id,omitempty"`
 	// InitiatorAccountID is the initiator's account bound at offer creation:
 	// it pays the premium on buy_initiated offers and receives it on
@@ -131,7 +136,7 @@ func (o *OTCOffer) BeforeSave(tx *gorm.DB) error {
 			return err
 		}
 	}
-	return nil
+	return ValidateActingEmployee(o.InitiatorOwnerType, o.ActingEmployeeID)
 }
 
 func (o *OTCOffer) BeforeUpdate(tx *gorm.DB) error {

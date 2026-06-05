@@ -87,6 +87,11 @@ type OTCNegotiation struct {
 	LastActionByOwnerID       *uint64   `json:"last_action_by_owner_id,omitempty"`
 	LastActionAt              time.Time `gorm:"not null" json:"last_action_at"`
 
+	// ActingEmployeeID is the employee who ORIGINATED this bank-owned resource.
+	// Non-nil ONLY when the owner is the bank and an employee created it. It is the
+	// STABLE SI-TX wire-identity source: the bank party publishes as
+	// "employee-<ActingEmployeeID>" on every wire action, regardless of which
+	// employee performs later actions. nil for client-owned resources and legacy/seed bank rows.
 	ActingEmployeeID *uint64 `gorm:"index" json:"acting_employee_id,omitempty"`
 
 	// MintedContractID is set when the negotiation reached `accepted`
@@ -143,7 +148,10 @@ func (n *OTCNegotiation) BeforeCreate(tx *gorm.DB) error {
 }
 
 func (n *OTCNegotiation) BeforeSave(tx *gorm.DB) error {
-	return ValidateOwner(n.BidderOwnerType, n.BidderOwnerID)
+	if err := ValidateOwner(n.BidderOwnerType, n.BidderOwnerID); err != nil {
+		return err
+	}
+	return ValidateActingEmployee(n.BidderOwnerType, n.ActingEmployeeID)
 }
 
 func (n *OTCNegotiation) BeforeUpdate(tx *gorm.DB) error {
