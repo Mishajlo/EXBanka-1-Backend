@@ -214,6 +214,13 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 		PremiumCurrency: premiumCurrency,
 		SettlementDate:  settlementDate,
 		LastModifiedBy:  contractsitx.ForeignBankId{RoutingNumber: h.ownRouting, ID: buyerID},
+		// Retain the bidder's bound account number on OUR OWN mirror too (not just
+		// in the offer dispatched to the seller's bank). On a cross-bank accept the
+		// buyer's bank (this bank) reads this mirror to compose the premium-DEBIT
+		// posting; without it the debit falls back to the participant id, which the
+		// SI-TX executor cannot resolve to an account for a BANK buyer ("employee-N")
+		// → NO_SUCH_ACCOUNT. Pinning it lets the accept debit the exact bound account.
+		BuyerAccountNumber: buyerAccountNumber,
 	}
 	offerJSON, jerr := json.Marshal(offerStruct)
 	if jerr != nil {

@@ -374,6 +374,24 @@ func TestOpenNegotiation_RemoteBankBid_DispatchesAsEmployeeWireID(t *testing.T) 
 	if mirror.RemoteBuyerID == nil || *mirror.RemoteBuyerID != "employee-42" {
 		t.Errorf("mirror RemoteBuyerID: got %v, want employee-42", mirror.RemoteBuyerID)
 	}
+	// The persisted mirror's RemoteOfferJSON MUST retain the buyer's bound
+	// account number. On a cross-bank accept the buyer's bank reads its own
+	// mirror to compose the premium-DEBIT posting; if buyerAccountNumber is lost
+	// it falls back to the participant id ("employee-42"), which the SI-TX
+	// executor cannot resolve to a bank account → NO_SUCH_ACCOUNT (bank-buyer
+	// accept rejected). Pin it so the accept debits the exact bound account.
+	if mirror.RemoteOfferJSON == nil {
+		t.Fatal("mirror RemoteOfferJSON is nil")
+	}
+	var mirrorOffer struct {
+		BuyerAccountNumber string `json:"buyerAccountNumber"`
+	}
+	if jerr := json.Unmarshal([]byte(*mirror.RemoteOfferJSON), &mirrorOffer); jerr != nil {
+		t.Fatalf("decode mirror RemoteOfferJSON: %v", jerr)
+	}
+	if mirrorOffer.BuyerAccountNumber != "111-BANK-USD-01" {
+		t.Errorf("mirror RemoteOfferJSON.buyerAccountNumber: got %q, want 111-BANK-USD-01", mirrorOffer.BuyerAccountNumber)
+	}
 	if resp.GetKind() != "remote" || resp.GetId() != mirror.ID {
 		t.Errorf("response: kind=%q id=%d, want remote id=%d", resp.GetKind(), resp.GetId(), mirror.ID)
 	}
