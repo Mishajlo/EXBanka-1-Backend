@@ -2,10 +2,12 @@ package handler_test
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"testing"
 	"time"
 
+	contractsitx "github.com/exbanka/contract/sitx"
 	stockpb "github.com/exbanka/contract/stockpb"
 	transactionpb "github.com/exbanka/contract/transactionpb"
 	"github.com/exbanka/stock-service/internal/handler"
@@ -233,7 +235,7 @@ func TestPeerOTC_UpdateOffer(t *testing.T) {
 			Currency: "USD", PremiumCurrency: "USD",
 		},
 		BuyerId:  &stockpb.PeerForeignBankId{RoutingNumber: 222, Id: "b"},
-		SellerId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "s"},
+		SellerId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-3"},
 	})
 
 	_, err := h.UpdateNegotiation(ctx, &stockpb.UpdateNegotiationRequest{
@@ -269,7 +271,7 @@ func TestPeerOTC_DeleteNegotiation(t *testing.T) {
 			Currency: "USD", PremiumCurrency: "USD",
 		},
 		BuyerId:  &stockpb.PeerForeignBankId{RoutingNumber: 222, Id: "b"},
-		SellerId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "s"},
+		SellerId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-3"},
 	})
 
 	_, err := h.DeleteNegotiation(ctx, &stockpb.DeleteNegotiationRequest{
@@ -297,30 +299,45 @@ func TestPeerOTC_DeleteNegotiation(t *testing.T) {
 }
 
 func TestPeerOTC_AcceptNegotiation_DispatchesViaPeerTx(t *testing.T) {
-	h, _, peerTx, _ := newPeerOtcHandler(t)
+	h, db, peerTx, _ := newPeerOtcHandler(t)
 	ctx := context.Background()
 
-	createResp, _ := h.CreateNegotiation(ctx, &stockpb.CreateNegotiationRequest{
-		PeerBankCode: "222",
-		Offer: &stockpb.PeerOtcOffer{
-			Ticker: "AAPL", Amount: 100,
-			PricePerStock: "150.00", Currency: "USD",
-			Premium: "10.00", PremiumCurrency: "USD",
-			SettlementDate: "2026-12-31",
-			// Pinned buyer account number (money leg) — DISTINCT from the buyer
-			// participant id (option leg) so the test verifies each leg carries
-			// the right identifier.
-			BuyerAccountNumber: "111000000000000999",
-		},
-		BuyerId:  &stockpb.PeerForeignBankId{RoutingNumber: 222, Id: "client-7"},
-		SellerId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-9"},
-	})
+	// Authoritative accept guard (HOLE 1, fix #2): the inbound /accept is legit
+	// only when the LOCAL side (the seller@111) last proposed the current terms
+	// (we would have written this via the OUTBOUND counter path). The peer (222)
+	// then accepts as the counterparty. Seed the mirror row directly to reflect
+	// that state — the inbound CreateNegotiation/UpdateNegotiation paths can ONLY
+	// ever stamp lastModifiedBy = the peer (forge-proof guard), so a legit
+	// local-last-proposer mirror is produced by our own outbound write, simulated
+	// here as a direct seed.
+	offer := contractsitx.OtcOffer{
+		Ticker: "AAPL", Amount: 100,
+		PricePerStock:   decimal.RequireFromString("150.00"),
+		Currency:        "USD",
+		Premium:         decimal.RequireFromString("10.00"),
+		PremiumCurrency: "USD",
+		SettlementDate:  "2026-12-31",
+		// Pinned buyer account number (money leg) — DISTINCT from the buyer
+		// participant id (option leg) so the test verifies each leg carries the
+		// right identifier.
+		BuyerAccountNumber: "111000000000000999",
+		LastModifiedBy:     contractsitx.ForeignBankId{RoutingNumber: 111, ID: "client-9"},
+	}
+	offerJSON, _ := json.Marshal(offer)
+	seedRepo := repository.NewOTCNegotiationRepository(db)
+	if err := seedRepo.UpsertRemoteNeg(buildRemoteNegForTest(
+		222, "neg-accept", offer, string(offerJSON),
+		222, "client-7", 111, "client-9",
+	)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	negID := &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "neg-accept"}
 
 	peerTx.resp = &transactionpb.SiTxInitiateResponse{TransactionId: "tx-99", Status: "initiated"}
 
 	resp, err := h.AcceptNegotiation(ctx, &stockpb.AcceptNegotiationRequest{
 		PeerBankCode:  "222",
-		NegotiationId: createResp.GetNegotiationId(),
+		NegotiationId: negID,
 	})
 	if err != nil {
 		t.Fatalf("accept: %v", err)
@@ -423,7 +440,7 @@ func TestPeerOTC_AcceptNegotiation_DispatchesViaPeerTx(t *testing.T) {
 	// Status flipped to accepted on the local mirror.
 	getResp, _ := h.GetNegotiation(ctx, &stockpb.GetNegotiationRequest{
 		PeerBankCode:  "222",
-		NegotiationId: createResp.GetNegotiationId(),
+		NegotiationId: negID,
 	})
 	if getResp.GetStatus() != "accepted" {
 		t.Errorf("expected accepted, got %s", getResp.GetStatus())
@@ -436,7 +453,7 @@ func TestPeerOTC_AcceptNegotiation_DispatchesViaPeerTx(t *testing.T) {
 	peerTx.gotReq = nil
 	_, err2 := h.AcceptNegotiation(ctx, &stockpb.AcceptNegotiationRequest{
 		PeerBankCode:  "222",
-		NegotiationId: createResp.GetNegotiationId(),
+		NegotiationId: negID,
 	})
 	if status.Code(err2) != codes.FailedPrecondition {
 		t.Errorf("expected FailedPrecondition on second accept, got %v", err2)

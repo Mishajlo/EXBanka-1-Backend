@@ -7391,10 +7391,11 @@ Peer initiates a cross-bank OTC negotiation against a publicly-listed holding on
 }
 ```
 
-**Participant-id validation (SI-TX §2.3):** `buyerId.id`, `sellerId.id`, and `lastModifiedBy.id` are **opaque `ForeignBankId.id` strings**. The gateway enforces ONLY the §2.3 bound — non-empty and ≤ 64 bytes — and does **NOT** format-check them:
+**Participant-id validation (SI-TX §2.3):** `buyerId.id`, `sellerId.id`, and `lastModifiedBy.id` are **opaque `ForeignBankId.id` strings**. The gateway enforces ONLY the §2.3 bound — non-empty and ≤ 64 bytes — and does **NOT** format-check the BUYER's id:
 
 - `buyerId.id` belongs to the PEER (`routingNumber` = the authenticated peer). Per §2.3 a bank MUST NOT interpret another bank's opaque id, so **any** scheme is accepted (a UUID like `550e8400-…`, `acc-42`, etc.) and stored verbatim. *(Prior to 2.7.0 the gateway wrongly required `client-<N>`/`employee-<N>` here, which rejected spec-conformant peers — fixed.)*
-- `sellerId.id` is OURS (`sellerId.routingNumber` MUST equal this bank). It is resolved downstream to a local seller, accepting the standard forms `client-<N>`, `employee-<N>`, and `bank` (the same value advertised by `GET /public-stock`). A non-resolvable seller surfaces as a clean 4xx, not a gateway format reject.
+- `sellerId.id` is OURS (`sellerId.routingNumber` MUST equal this bank). Because the seller is a local participant — not another bank's opaque id — it MUST be **well-formed**: `bank`, `employee-<digits>`, or `client-<digits>`. *(As of 2.8.0 a malformed seller such as `employee-abc` or `employee-` is rejected `400 validation_error` and **no row is persisted**; previously such an id created an inert junk row — a row-spam vector.)* A `client-<N>` is additionally existence-checked against client-service: a non-existent client → `404 not_found`, no row.
+- `lastModifiedBy.routingNumber` MUST equal the **authenticated peer's** routing (a zero/absent value is tolerated). The authenticated peer may only ever mark **itself** as the last actor. *(As of 2.8.0 a forged `lastModifiedBy` claiming this bank's routing is rejected `403 forbidden`; without this a peer could later self-accept a forged proposal.)* This is authenticating the sender, not interpreting the buyer's opaque id.
 
 **Response 201:** `ForeignBankId` directly (the new negotiation's id, owned by this bank).
 
@@ -7415,6 +7416,8 @@ Counter-offer on an existing negotiation.
 - `id` — peer's negotiation id (string)
 
 **Request Body:** SI-TX `OtcOffer` (same shape as POST).
+
+**`lastModifiedBy` validation (as of 2.8.0):** `lastModifiedBy.routingNumber` MUST equal the authenticated peer's routing (zero/absent tolerated) — the peer making the counter may only ever mark **itself** as the last actor. A forged value claiming this bank's routing → `403 forbidden`. This keeps the stored `lastModifiedBy` trustworthy for the accept guard.
 
 **Response 200:** Empty body on success.
 
@@ -7460,6 +7463,8 @@ Cancel a negotiation. Either side may delete; status flips to `cancelled`.
 Accept a negotiation. Composes a 4-posting `Transaction` (premium money debit-buyer/credit-seller + 1× `OptionDescription` debit-seller/credit-buyer) and dispatches via `PeerTxService.InitiateOutboundTxWithPostings`. The resulting SI-TX TX runs through the normal `NEW_TX` → `COMMIT_TX` flow.
 
 **Authentication:** PeerAuth.
+
+**Authoritative accept guards (as of 2.8.0):** the accept must come from the **counterparty** — per SI-TX §3.6 the accepting party is "the person whose negotiation term it is" (the side that did NOT last propose), and their bank sends this GET. So on the inbound `/accept` the stored `lastModifiedBy.routingNumber` MUST equal **this bank's** routing (the local side last proposed); otherwise → `403 forbidden`, **no settlement SI-TX dispatched, no contract**. Combined with the forge-proof create/counter guards, a peer can never accept its own (or a forged) proposal. Additionally, when this bank hosts the **parent listing**, an accept against a child of a **cancelled/consumed** listing is rejected `409 business_rule_violation` (orphan-accept guard) — authoritatively, regardless of the best-effort sibling cascade-cancel timing.
 
 **Response 200:**
 ```json

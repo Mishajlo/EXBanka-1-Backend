@@ -1002,6 +1002,12 @@ func main() {
 		WithContractFormer(otcOfferSvc).
 		WithNotifier(producer)
 
+	// Inbound orphan-accept guard: wire the local-parent-open check so an inbound
+	// AcceptNegotiation against a child of a CANCELLED/CONSUMED local listing is
+	// rejected authoritatively (HOLE 2). The negotiation service's
+	// LocalParentIsOpen satisfies handler.LocalParentChecker.
+	peerOtcHandler = peerOtcHandler.WithParentChecker(otcNegotiationSvc)
+
 	// Part A 2026-05-16 — best-bid / best-ask aggregator wiring.
 	// Adapters convert the repo's typed map[uint64]ChainAggregate to
 	// the cache / peer-handler's string-shape projection, keeping the

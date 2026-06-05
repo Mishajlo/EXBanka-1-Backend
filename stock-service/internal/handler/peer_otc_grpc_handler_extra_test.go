@@ -15,6 +15,7 @@ import (
 	transactionpb "github.com/exbanka/contract/transactionpb"
 	"github.com/exbanka/stock-service/internal/handler"
 	"github.com/exbanka/stock-service/internal/model"
+	"github.com/exbanka/stock-service/internal/repository"
 	"github.com/exbanka/stock-service/internal/service"
 )
 
@@ -798,20 +799,30 @@ func TestPeerOTC_AcceptNegotiation_NotFound(t *testing.T) {
 }
 
 func TestPeerOTC_AcceptNegotiation_DispatchError(t *testing.T) {
-	h, _, peerTx, _ := newPeerOtcHandler(t)
-	createResp, _ := h.CreateNegotiation(context.Background(), &stockpb.CreateNegotiationRequest{
-		PeerBankCode: "222",
-		Offer: &stockpb.PeerOtcOffer{
-			Ticker: "AAPL", Amount: 1, PricePerStock: "1", Premium: "1",
-			Currency: "USD", PremiumCurrency: "USD",
-		},
-		BuyerId:  &stockpb.PeerForeignBankId{RoutingNumber: 222, Id: "b"},
-		SellerId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "s"},
-	})
+	h, db, peerTx, _ := newPeerOtcHandler(t)
+	// Seed a legit "WE last proposed" mirror so the authoritative accept guard
+	// passes and we exercise the dispatch-error path. (The inbound create/counter
+	// paths can only stamp lastModifiedBy = the peer, so a local-last-proposer
+	// state is produced by our own outbound write, simulated here as a seed.)
+	offer := contractsitx.OtcOffer{
+		Ticker: "AAPL", Amount: 1,
+		PricePerStock:   decimal.RequireFromString("1"),
+		Currency:        "USD",
+		Premium:         decimal.RequireFromString("1"),
+		PremiumCurrency: "USD",
+		LastModifiedBy:  contractsitx.ForeignBankId{RoutingNumber: 111, ID: "client-9"},
+	}
+	offerJSON, _ := json.Marshal(offer)
+	if err := repository.NewOTCNegotiationRepository(db).UpsertRemoteNeg(buildRemoteNegForTest(
+		222, "neg-dispatch-err", offer, string(offerJSON),
+		222, "client-7", 111, "client-9",
+	)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 	peerTx.err = errors.New("peer down")
 	_, err := h.AcceptNegotiation(context.Background(), &stockpb.AcceptNegotiationRequest{
 		PeerBankCode:  "222",
-		NegotiationId: createResp.GetNegotiationId(),
+		NegotiationId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "neg-dispatch-err"},
 	})
 	if status.Code(err) != codes.Internal {
 		t.Errorf("expected Internal on dispatch fail, got %v", err)

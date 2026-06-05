@@ -58,6 +58,19 @@ type LocalSellerValidator interface {
 	SellerExists(ctx context.Context, participantID string) bool
 }
 
+// LocalParentChecker answers "is the LOCAL parent listing with this offer id
+// still open?" for the inbound orphan-accept guard. Satisfied in production by
+// *service.OTCNegotiationService (LocalParentIsOpen). Optional — nil disables
+// the check (legacy/test mode where no parent-listing status is available).
+//
+// It closes the inbound orphan-accept hole: when WE host the listing
+// (remote_parent_routing == ownRouting), an inbound AcceptNegotiation must be
+// rejected if the local parent listing has been cancelled/consumed —
+// authoritatively, regardless of the best-effort cascade timing.
+type LocalParentChecker interface {
+	LocalParentIsOpen(offerID uint64) bool
+}
+
 // PeerOTCGRPCHandler implements stockpb.PeerOTCServiceServer.
 //
 // GetPublicStocks queries the local holdings table for rows flagged
@@ -147,6 +160,11 @@ type PeerOTCGRPCHandler struct {
 	// (legacy/test mode). Wired via WithSellerValidator. Closes the
 	// phantom-seller row loophole.
 	sellerValidator LocalSellerValidator
+
+	// parentChecker gates inbound AcceptNegotiation on the LOCAL parent listing
+	// still being open (when WE host the listing). Optional — nil disables the
+	// check. Wired via WithParentChecker. Closes the inbound orphan-accept hole.
+	parentChecker LocalParentChecker
 }
 
 // PeerCapitalGainRepo is the narrow surface PeerOTCGRPCHandler uses to
@@ -168,6 +186,14 @@ func (h *PeerOTCGRPCHandler) WithCapitalGain(repo PeerCapitalGainRepo) *PeerOTCG
 // chaining. nil leaves the check disabled (legacy/test mode).
 func (h *PeerOTCGRPCHandler) WithSellerValidator(v LocalSellerValidator) *PeerOTCGRPCHandler {
 	h.sellerValidator = v
+	return h
+}
+
+// WithParentChecker wires the local-parent-open check consulted by inbound
+// AcceptNegotiation (closes the inbound orphan-accept hole). Returns the handler
+// for chaining. nil leaves the check disabled (legacy/test mode).
+func (h *PeerOTCGRPCHandler) WithParentChecker(c LocalParentChecker) *PeerOTCGRPCHandler {
+	h.parentChecker = c
 	return h
 }
 
@@ -429,6 +455,38 @@ func composePeerSellerID(o *model.OTCOffer) string {
 	return "client-" + strconv.FormatUint(*o.InitiatorOwnerID, 10)
 }
 
+// isWellFormedLocalSellerID reports whether sellerID is a resolvable LOCAL
+// participant id: "bank", "employee-<digits>", or "client-<digits>". The seller
+// on an inbound bid is OURS — it must address a real local participant, never an
+// arbitrary string. This bounds the junk-row vector (an "employee-<garbage>"
+// seller used to persist an inert row). It does NOT touch the BUYER's opaque id,
+// which stays verbatim per SI-TX §2.3.
+func isWellFormedLocalSellerID(sellerID string) bool {
+	if sellerID == "bank" {
+		return true
+	}
+	for _, prefix := range []string{"client-", "employee-"} {
+		if rest, ok := strings.CutPrefix(sellerID, prefix); ok {
+			n, err := strconv.ParseUint(rest, 10, 64)
+			return err == nil && n != 0
+		}
+	}
+	return false
+}
+
+// peerMayBeLastModifier reports whether an offer's lastModifiedBy is consistent
+// with the authenticated peer acting as itself. The authenticated peer may ONLY
+// ever mark ITSELF as the last actor; a forged lastModifiedBy claiming any other
+// routing (e.g. OUR routing) is rejected. A zero-value lastModifiedBy (absent,
+// routing 0) is tolerated — peers that omit the field can't be forging an
+// identity, and the authoritative accept guard never matches routing 0 anyway.
+func peerMayBeLastModifier(lm *stockpb.PeerForeignBankId, peerRouting int64) bool {
+	if lm == nil || lm.GetRoutingNumber() == 0 {
+		return true
+	}
+	return lm.GetRoutingNumber() == peerRouting
+}
+
 func (h *PeerOTCGRPCHandler) GetPublicStocks(ctx context.Context, req *stockpb.GetPublicStocksRequest) (*stockpb.GetPublicStocksResponse, error) {
 	rows, err := h.holdings.ListPublic()
 	if err != nil {
@@ -520,21 +578,42 @@ func (h *PeerOTCGRPCHandler) CreateNegotiation(ctx context.Context, req *stockpb
 			"seller_id.routing_number (%d) must match this bank's routing (%d) — inbound bids target a seller on this bank only",
 			req.GetSellerId().GetRoutingNumber(), h.ownRouting)
 	}
-	// Phantom-seller guard: the seller routing is ours, but the participant id
-	// must resolve to a REAL local seller. Without this a raw peer could spam
-	// inbound rows naming a non-existent client-<n> (correct routing, bogus id):
-	// they fail closed at accept (NO_SUCH_ACCOUNT) but still persist as inert
-	// junk rows — an unbounded resource-pollution vector. Only client-<n> needs
-	// the existence check; "bank"/"employee-<n>" always resolve to the bank.
-	// Skipped when no validator is wired (legacy/test mode).
+	// Well-formed-seller guard (HOLE 3): the seller is OURS — its id must address
+	// a resolvable LOCAL participant ("bank" / "employee-<digits>" /
+	// "client-<digits>"). An "employee-<garbage>" (or any other free-form id)
+	// used to persist an inert junk row — an unbounded row-spam vector. Reject
+	// before persisting. This validates OUR OWN side; it does NOT interpret the
+	// BUYER's opaque id (kept verbatim per SI-TX §2.3).
+	sellerID := req.GetSellerId().GetId()
+	if !isWellFormedLocalSellerID(sellerID) {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"seller_id.id %q is not a well-formed local participant id (bank, employee-<n>, or client-<n>)", sellerID)
+	}
+	// Phantom-seller guard: the seller routing is ours and the id is well-formed,
+	// but a client-<n> must also resolve to a REAL local client. Without this a
+	// raw peer could spam inbound rows naming a non-existent client-<n> (correct
+	// routing, bogus id): they fail closed at accept (NO_SUCH_ACCOUNT) but still
+	// persist as inert junk rows. Only client-<n> needs the existence check;
+	// "bank"/"employee-<n>" always resolve to a local participant. Skipped when no
+	// validator is wired (legacy/test mode).
 	if h.sellerValidator != nil {
-		sellerID := req.GetSellerId().GetId()
 		if strings.HasPrefix(sellerID, "client-") {
 			if !h.sellerValidator.SellerExists(ctx, sellerID) {
 				return nil, status.Errorf(codes.NotFound,
 					"seller_id.id %q does not resolve to a client on this bank", sellerID)
 			}
 		}
+	}
+	// Forge-proof lastModifiedBy (HOLE 1, fix #1): the authenticated peer may
+	// only ever mark ITSELF as the last actor. A forged lastModifiedBy claiming
+	// our routing would later let the peer's /accept slip past the authoritative
+	// accept guard (which trusts lastModifiedBy to decide who last proposed).
+	// Reject any lastModifiedBy whose routing is not the peer's (zero-value is
+	// tolerated). This makes the stored lastModifiedBy trustworthy.
+	if !peerMayBeLastModifier(req.GetOffer().GetLastModifiedBy(), peerRouting) {
+		return nil, status.Errorf(codes.PermissionDenied,
+			"offer.lastModifiedBy.routingNumber (%d) must be the authenticated peer's routing (%d) — a peer may only mark itself as the last actor",
+			req.GetOffer().GetLastModifiedBy().GetRoutingNumber(), peerRouting)
 	}
 	offer := protoToOffer(req.GetOffer())
 	offerJSON, err := json.Marshal(offer)
@@ -580,11 +659,21 @@ func (h *PeerOTCGRPCHandler) UpdateNegotiation(ctx context.Context, req *stockpb
 	if req.GetOffer() == nil || req.GetNegotiationId() == nil {
 		return nil, status.Error(codes.InvalidArgument, "offer and negotiation_id required")
 	}
+	peerRouting := peerRoutingForCode(req.GetPeerBankCode())
+	// Forge-proof lastModifiedBy (HOLE 1, fix #1): the authenticated peer that
+	// posts a counter may only ever mark ITSELF as the last actor. A forged
+	// lastModifiedBy claiming our routing would let the peer later /accept its own
+	// (forged) proposal past the authoritative accept guard. Reject before
+	// persisting so the stored lastModifiedBy stays trustworthy.
+	if !peerMayBeLastModifier(req.GetOffer().GetLastModifiedBy(), peerRouting) {
+		return nil, status.Errorf(codes.PermissionDenied,
+			"offer.lastModifiedBy.routingNumber (%d) must be the authenticated peer's routing (%d) — a peer may only mark itself as the last actor",
+			req.GetOffer().GetLastModifiedBy().GetRoutingNumber(), peerRouting)
+	}
 	offerJSON, err := json.Marshal(protoToOffer(req.GetOffer()))
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "marshal offer: %v", err)
 	}
-	peerRouting := peerRoutingForCode(req.GetPeerBankCode())
 	if err := h.negRepo.UpdateRemoteNegOffer(peerRouting, req.GetNegotiationId().GetId(), string(offerJSON)); err != nil {
 		return nil, status.Errorf(codes.Internal, "update: %v", err)
 	}
@@ -714,19 +803,39 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	sellerRouting, sellerID := remoteSeller(row)
 	foreignID := remoteNativeIDOf(row)
 
-	// Anti-self-accept (defense-in-depth, inbound). The /accept must come from the
-	// COUNTERPARTY's bank — i.e. the side that did NOT last propose the current
-	// terms. If the calling peer (peerRouting) is the bank whose party last
-	// proposed (lastModifiedBy.routingNumber == peerRouting), it is trying to
-	// accept its OWN terms through us → reject before claiming/dispatching. The
-	// initiating bank's gateway already blocks this for honest peers; this guard
-	// also stops a MALICIOUS peer that crafts a self-accept directly against our
-	// inbound endpoint (forming a contract + settling premium with no agreement
-	// from our local party). A zero/absent lastModifiedBy cannot match a real
-	// peer routing, so it never spuriously blocks a well-formed accept.
-	if lm := offer.LastModifiedBy; lm.RoutingNumber == peerRouting && lm.RoutingNumber != 0 {
+	// Authoritative anti-self-accept guard (HOLE 1, fix #2). Per SI-TX §3.6 the
+	// accepting party is "the person whose negotiation term it is" — i.e. the side
+	// that did NOT last propose — and THEIR bank sends the GET /accept to the
+	// bank of the side that DID last propose. So on an inbound /accept WE receive,
+	// the LOCAL side must be the last proposer: require
+	// lastModifiedBy.routingNumber == ownRouting. The calling peer is the
+	// accepting counterparty; it may NEVER accept terms its own side (or a forged
+	// proposal) last proposed. Combined with the forge-proof create/counter guards
+	// (lastModifiedBy can only ever be the peer itself), a peer can never accept
+	// its own (or a forged) proposal — forming a contract + settling premium with
+	// no agreement from our local party. A zero/absent lastModifiedBy fails this
+	// (we can't prove WE proposed) → rejected, never granting a self-accept.
+	if lm := offer.LastModifiedBy; lm.RoutingNumber != h.ownRouting {
 		return nil, status.Error(codes.PermissionDenied,
-			"accept must come from the counterparty (the side that did not last propose the terms)")
+			"accept must come from the counterparty: the local side must have last proposed the current terms")
+	}
+
+	// Orphan-accept guard (HOLE 2). When WE host the parent listing
+	// (remote_parent_routing == ownRouting), the parent native id is our local
+	// offer id. An inbound accept against a child of a CANCELLED/CONSUMED listing
+	// must be rejected authoritatively — regardless of the best-effort
+	// cascade-cancel timing (a concurrent inbound accept could otherwise win the
+	// ongoing→accepted CAS before the cascade flips the child). Mirrors the
+	// OUTBOUND acceptRemoteNegotiation gate. Skipped when the parent is on a peer
+	// bank (we can't read its status) or when no parent checker is wired.
+	if h.parentChecker != nil && row.RemoteParentRouting != nil &&
+		*row.RemoteParentRouting == h.ownRouting && row.RemoteParentNativeID != nil {
+		if parentID, perr := strconv.ParseUint(*row.RemoteParentNativeID, 10, 64); perr == nil {
+			if !h.parentChecker.LocalParentIsOpen(parentID) {
+				return nil, status.Error(codes.FailedPrecondition,
+					"parent listing is no longer open (cancelled or already consumed)")
+			}
+		}
 	}
 
 	// Atomically claim the negotiation for acceptance (ongoing → accepted) BEFORE

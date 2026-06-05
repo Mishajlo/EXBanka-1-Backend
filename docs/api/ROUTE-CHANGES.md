@@ -283,3 +283,30 @@ none newly rejected within the §2.3 bound). For OUR published catalog the selle
 id string changes value — any cohort bank that *parsed* our old bare-numeric id
 must accept the standard `ForeignBankId.id` opaque form (which the spec already
 requires them to treat as opaque). Version bumped MINOR (2.6.6 → 2.7.0).
+
+## 6. Inbound cross-bank OTC money/authz hardening (2.8.0)
+
+Closes three residual money/authorization holes on the INBOUND (peer-facing)
+`/api/v3/cross-bank-protocol/*` path found by adversarial review. **Wire shapes
+are unchanged** — these are tightenings of inbound validation on already-spec-
+legitimate fields (authenticating the sender + resolving OUR OWN side). The
+peer's **buyer** opaque id is still accepted verbatim ≤ 64 bytes per §2.3.
+
+| Hole | Endpoint | New rule (2.8.0) | Reject |
+|---|---|---|---|
+| 1 — forged `lastModifiedBy` self-accept | `POST` + `PUT /negotiations[/:rid/:id]` | `lastModifiedBy.routingNumber` MUST be the authenticated peer's (zero/absent tolerated). A peer may only mark **itself** as the last actor. | `403 forbidden` (no row on POST) |
+| 1 — authoritative accept guard | `GET /negotiations/:rid/:id/accept` | The stored `lastModifiedBy.routingNumber` MUST equal **this** bank's routing (the local side last proposed; §3.6: the counterparty accepts). | `403 forbidden`; **no settlement SI-TX, no contract** |
+| 2 — orphan accept | `GET /negotiations/:rid/:id/accept` | When this bank hosts the parent listing, an accept against a child of a **cancelled/consumed** listing is rejected authoritatively (independent of cascade timing). | `409 business_rule_violation` |
+| 3 — non-well-formed local seller | `POST /negotiations` | `sellerId.id` (OURS) MUST be `bank`, `employee-<digits>`, or `client-<digits>`. A malformed id (`employee-abc`, `employee-`, …) is rejected — no junk row. | `400 validation_error` (no row) |
+
+**Why this is spec-conformant:** validating that the authenticated peer only acts
+as itself (`lastModifiedBy.routingNumber == peerRouting`) and that OUR OWN seller
+id is a resolvable local participant are sender-authentication and own-side
+resolution — both §-legitimate. The peer's **buyer** opaque id stays verbatim and
+is NOT format-checked (§2.3). The accepting-party rule is exactly SI-TX §3.6 ("the
+person whose negotiation term it is can choose to accept the other party's offer").
+
+**Compatibility:** an honest peer following the protocol is unaffected — it always
+stamps `lastModifiedBy` as itself, addresses a real local seller, and accepts only
+as the counterparty. The change rejects malicious/malformed inbound traffic only.
+Version bumped MINOR (2.7.6 → 2.8.0).
