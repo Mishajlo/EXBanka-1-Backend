@@ -116,10 +116,13 @@ func (idx myNegotiationIndex) remoteFor(routing int64, native string) (myNegStam
 //   - LOCAL chains: only a concrete owner (a client, or the bank) can be a
 //     bidder. ListByBidder returns the caller's chains; they are keyed by
 //     parent_offer_id (the local offer id the chain bids on).
-//   - REMOTE chains: only meaningful for a CLIENT principal — cross-bank party
-//     ids are "client-<N>"; an employee acting AS the bank has no cross-bank
-//     bidder identity here. Keyed by (RemoteParentRouting, RemoteParentNativeID)
-//     — the peer-hosted parent listing the chain bids on.
+//   - REMOTE chains: meaningful for both a CLIENT principal and the BANK.
+//     Client chains are keyed by exact "client-<N>" wire principal via
+//     ListRemoteNegByClient. Bank chains (party id "employee-<N>") are
+//     prefix-matched via ListRemoteNegByBankParty (SP-3 Task 5b), restricted
+//     to the BUYER role so only cross-bank bids the bank placed are indexed.
+//     Keyed by (RemoteParentRouting, RemoteParentNativeID) — the peer-hosted
+//     parent listing the chain bids on.
 //
 // lister/peerNegs may be nil; a nil source contributes no chains (the index
 // stays empty for that source). actingOwnerType is "client" | "bank";

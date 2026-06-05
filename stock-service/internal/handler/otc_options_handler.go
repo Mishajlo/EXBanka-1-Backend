@@ -421,11 +421,26 @@ func (h *OTCOptionsHandler) ListNegotiationHistory(ctx context.Context, in *stoc
 	}
 
 	// REMOTE merge — cross-bank peer negotiation chains in a terminal status
-	// where the caller is a party. Only meaningful for client principals; a
-	// bank/employee caller has no cross-bank negotiation identity.
-	if h.peerNegs != nil && ownerType == model.OwnerClient && ownerID != nil {
-		principal := "client-" + strconv.FormatUint(*ownerID, 10)
-		peerRows, perr := h.peerNegs.ListRemoteNegByClient(h.ownRouting, principal, "")
+	// where the caller is a party. Two principal kinds have a cross-bank identity:
+	//
+	//   - CLIENT (cross-bank party id "client-<N>"): match the exact principal
+	//     via ListRemoteNegByClient. Both buyer + seller chains included — history
+	//     covers all the client's terminal cross-bank activity.
+	//   - BANK (an employee acting AS THE BANK; party id "employee-<N>"): the bank
+	//     has no single wire principal across chains, so match by prefix via
+	//     ListRemoteNegByBankParty(role="") which surfaces both buyer + seller
+	//     chains (SP-3 Task 5b completeness). A client caller never reaches the
+	//     bank lister (and vice versa).
+	if h.peerNegs != nil {
+		var peerRows []model.OTCNegotiation
+		var perr error
+		switch {
+		case ownerType == model.OwnerClient && ownerID != nil:
+			principal := "client-" + strconv.FormatUint(*ownerID, 10)
+			peerRows, perr = h.peerNegs.ListRemoteNegByClient(h.ownRouting, principal, "")
+		case ownerType == model.OwnerBank:
+			peerRows, perr = h.peerNegs.ListRemoteNegByBankParty(h.ownRouting, "")
+		}
 		if perr != nil {
 			return nil, status.Errorf(codes.Internal, "list peer negotiations: %v", perr)
 		}

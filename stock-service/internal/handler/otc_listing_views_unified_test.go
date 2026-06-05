@@ -443,3 +443,97 @@ func TestTimeline_UnknownId_NotFound(t *testing.T) {
 		t.Fatalf("want NotFound error, got nil")
 	}
 }
+
+// TestTimeline_BankCaller_SeesOwnChainOnRemoteListing: the bank (acting as the
+// buyer of a remote listing) sees its own chain in the timeline for that remote
+// listing, correlated by the (RemoteParentRouting, RemoteParentNativeID) lot
+// key. Chains on OTHER remote listings must NOT appear. SP-3 Task 5b.
+func TestTimeline_BankCaller_SeesOwnChainOnRemoteListing(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	remote := &fakeRemoteOfferGetter{byID: map[uint64]*model.OTCOffer{
+		900: remoteMirrorRow(900, peerSellerRouting, "foreign-7", "222", "client-3", "ACME", "open"),
+	}}
+	peer := &fakePeerNegLister{bankRows: []model.OTCNegotiation{
+		// The bank's bid on THIS remote listing (matching lot key).
+		peerRowWithParent(91, ownRouting, "employee-5", peerSellerRouting, "client-3", "ongoing", peerSellerRouting, "foreign-7"),
+		// The bank's bid on a DIFFERENT remote listing — must be excluded.
+		peerRowWithParent(92, ownRouting, "employee-5", peerSellerRouting, "client-9", "ongoing", peerSellerRouting, "foreign-other"),
+	}}
+	h, _ := newListingViewsFixture(t, ownRouting, remote, peer)
+
+	resp, err := h.GetOfferTimeline(context.Background(), &stockpb.GetOfferTimelineRequest{
+		ParentOfferId: 900, CallerOwnerType: "bank", CallerOwnerId: 0,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if resp.GetOffer() == nil || resp.GetOffer().GetKind() != "remote" {
+		t.Fatalf("offer header missing/not remote: %+v", resp.GetOffer())
+	}
+	if len(resp.GetTimeline()) != 1 {
+		t.Fatalf("want exactly 1 timeline entry (bank's chain on THIS listing), got %d", len(resp.GetTimeline()))
+	}
+	if resp.GetTimeline()[0].GetNegotiationId() != 91 {
+		t.Errorf("entry negotiation_id = %d want 91 (bank's matching chain)", resp.GetTimeline()[0].GetNegotiationId())
+	}
+}
+
+// TestTimeline_BankCaller_NoChainOnRemoteListing_HeaderOnly: the bank views a
+// remote listing it has NO chain on — returns offer header + empty timeline,
+// not a 404. SP-3 Task 5b.
+func TestTimeline_BankCaller_NoChainOnRemoteListing_HeaderOnly(t *testing.T) {
+	const ownRouting int64 = 111
+	remote := &fakeRemoteOfferGetter{byID: map[uint64]*model.OTCOffer{
+		900: remoteMirrorRow(900, 222, "foreign-7", "222", "client-3", "ACME", ""),
+	}}
+	h, _ := newListingViewsFixture(t, ownRouting, remote, &fakePeerNegLister{})
+
+	resp, err := h.GetOfferTimeline(context.Background(), &stockpb.GetOfferTimelineRequest{
+		ParentOfferId: 900, CallerOwnerType: "bank", CallerOwnerId: 0,
+	})
+	if err != nil {
+		t.Fatalf("err: %v (want header + empty timeline)", err)
+	}
+	if resp.GetOffer() == nil || resp.GetOffer().GetKind() != "remote" {
+		t.Fatalf("offer header missing/not remote")
+	}
+	if len(resp.GetTimeline()) != 0 {
+		t.Fatalf("want 0 timeline entries, got %d", len(resp.GetTimeline()))
+	}
+}
+
+// TestTimeline_ClientCaller_NoBankChainLeak: a client viewing a remote
+// timeline must only see its OWN exact-principal chains, never the bank's.
+// SP-3 Task 5b no-cross-party-leak guard for the timeline view.
+func TestTimeline_ClientCaller_NoBankChainLeak(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	remote := &fakeRemoteOfferGetter{byID: map[uint64]*model.OTCOffer{
+		900: remoteMirrorRow(900, peerSellerRouting, "foreign-7", "222", "client-3", "ACME", "open"),
+	}}
+	peer := &fakePeerNegLister{
+		// A client chain for client-7 (the caller) on THIS listing — should appear.
+		rows: []model.OTCNegotiation{
+			peerRowWithParent(55, ownRouting, "client-7", peerSellerRouting, "client-3", "ongoing", peerSellerRouting, "foreign-7"),
+		},
+		// A bank chain on the same listing — must NOT leak to the client caller.
+		bankRows: []model.OTCNegotiation{
+			peerRowWithParent(91, ownRouting, "employee-5", peerSellerRouting, "client-3", "ongoing", peerSellerRouting, "foreign-7"),
+		},
+	}
+	h, _ := newListingViewsFixture(t, ownRouting, remote, peer)
+
+	resp, err := h.GetOfferTimeline(context.Background(), &stockpb.GetOfferTimelineRequest{
+		ParentOfferId: 900, CallerOwnerType: "client", CallerOwnerId: 7,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(resp.GetTimeline()) != 1 {
+		t.Fatalf("want exactly 1 timeline entry (client's own chain only), got %d", len(resp.GetTimeline()))
+	}
+	if resp.GetTimeline()[0].GetNegotiationId() != 55 {
+		t.Errorf("negotiation_id = %d want 55 (client's chain); a bank chain leaked", resp.GetTimeline()[0].GetNegotiationId())
+	}
+}

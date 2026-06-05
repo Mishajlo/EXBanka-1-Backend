@@ -251,10 +251,12 @@ func TestHistory_RemoteStatusFilterMapping(t *testing.T) {
 	}
 }
 
-// TestHistory_BankCallerSkipsRemote: an employee acting as the bank has no
-// cross-bank identity → no remote chains merged.
-func TestHistory_BankCallerSkipsRemote(t *testing.T) {
+// TestHistory_BankCallerDoesNotSeeClientChains: an employee acting as the
+// bank must NOT receive CLIENT cross-bank chains (those live in the client
+// lister, keyed by exact "client-<N>" principal). SP-3 Task 5b no-leak guard.
+func TestHistory_BankCallerDoesNotSeeClientChains(t *testing.T) {
 	const ownRouting int64 = 111
+	// A CLIENT remote chain in `rows` — must NEVER appear for a bank caller.
 	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		peerRow(55, ownRouting, "client-7", 222, "client-3", "accepted"),
 	}}
@@ -267,6 +269,104 @@ func TestHistory_BankCallerSkipsRemote(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 	if len(resp.GetOffers()) != 0 {
-		t.Fatalf("want 0 (bank caller has no cross-bank identity), got %d", len(resp.GetOffers()))
+		t.Fatalf("want 0 (bank caller must not see CLIENT chains), got %d", len(resp.GetOffers()))
+	}
+}
+
+// TestHistory_BankCaller_SeesBuyerChain: the bank sees its own terminal
+// cross-bank BID chain (we host the bank as BUYER; party id "employee-<N>").
+// SP-3 Task 5b completeness.
+func TestHistory_BankCaller_SeesBuyerChain(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	// WE host the bank as BUYER (our cross-bank bid on a seller at 222).
+	peer := &fakePeerNegLister{bankRows: []model.OTCNegotiation{
+		peerRow(91, ownRouting, "employee-5", peerSellerRouting, "client-3", "accepted"),
+	}}
+	h, _ := newHistoryFixture(t, ownRouting, "111", peer)
+
+	resp, err := h.ListNegotiationHistory(context.Background(), &stockpb.ListNegotiationHistoryRequest{
+		ActorUserId: 0, ActorSystemType: "bank",
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(resp.GetOffers()) != 1 {
+		t.Fatalf("want 1 bank buyer chain, got %d", len(resp.GetOffers()))
+	}
+	got := resp.GetOffers()[0]
+	if got.GetKind() != "remote" {
+		t.Errorf("kind = %q want remote", got.GetKind())
+	}
+	if got.GetId() != 91 {
+		t.Errorf("id = %d want 91 (bank's buyer chain surrogate id)", got.GetId())
+	}
+	if got.GetStatus() != "accepted" {
+		t.Errorf("status = %q want accepted", got.GetStatus())
+	}
+}
+
+// TestHistory_BankCaller_SeesSellerChain: the bank sees its own terminal
+// cross-bank SELLER chain (we host the bank as SELLER on a listing; a peer
+// bid on it). History covers both buyer + seller chains (role=""). SP-3 T5b.
+func TestHistory_BankCaller_SeesSellerChain(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerBuyerRouting int64 = 333
+	// WE host the bank as SELLER (employee-9); a client at 333 is the buyer.
+	peer := &fakePeerNegLister{bankRows: []model.OTCNegotiation{
+		peerRow(92, peerBuyerRouting, "client-7", ownRouting, "employee-9", "rejected"),
+	}}
+	h, _ := newHistoryFixture(t, ownRouting, "111", peer)
+
+	resp, err := h.ListNegotiationHistory(context.Background(), &stockpb.ListNegotiationHistoryRequest{
+		ActorUserId: 0, ActorSystemType: "bank",
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(resp.GetOffers()) != 1 {
+		t.Fatalf("want 1 bank seller chain, got %d", len(resp.GetOffers()))
+	}
+	got := resp.GetOffers()[0]
+	if got.GetKind() != "remote" {
+		t.Errorf("kind = %q want remote", got.GetKind())
+	}
+	if got.GetId() != 92 {
+		t.Errorf("id = %d want 92 (bank's seller chain surrogate id)", got.GetId())
+	}
+	// Bank is the seller (we host seller routing == ownRouting) → me_owner=true.
+	if !got.GetMeOwner() {
+		t.Errorf("me_owner=false; the bank is the SELLER on this chain, so it must be true")
+	}
+}
+
+// TestHistory_ClientCaller_NoBankChainLeak: a client caller must only ever
+// see its OWN exact-principal chains, never the bank's. SP-3 Task 5b
+// no-cross-party-leak guard for the history view.
+func TestHistory_ClientCaller_NoBankChainLeak(t *testing.T) {
+	const ownRouting int64 = 111
+	peer := &fakePeerNegLister{
+		// A client chain for client-7 (the caller) — should appear.
+		rows: []model.OTCNegotiation{
+			peerRow(55, ownRouting, "client-7", 222, "client-3", "accepted"),
+		},
+		// A bank chain — must NOT leak to the client caller.
+		bankRows: []model.OTCNegotiation{
+			peerRow(91, ownRouting, "employee-5", 222, "client-3", "accepted"),
+		},
+	}
+	h, _ := newHistoryFixture(t, ownRouting, "111", peer)
+
+	resp, err := h.ListNegotiationHistory(context.Background(), &stockpb.ListNegotiationHistoryRequest{
+		ActorUserId: 7, ActorSystemType: "client",
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(resp.GetOffers()) != 1 {
+		t.Fatalf("want exactly 1 (client's own chain only), got %d", len(resp.GetOffers()))
+	}
+	if resp.GetOffers()[0].GetId() != 55 {
+		t.Errorf("id = %d want 55 (client's chain); a bank chain leaked", resp.GetOffers()[0].GetId())
 	}
 }
