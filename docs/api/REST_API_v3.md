@@ -5730,6 +5730,58 @@ a `kind="remote"` projection with `me_owner` = (`direction == "CREDIT"`).
 
 ---
 
+#### POST /api/v3/otc/contracts/:id/exercise (unified local + cross-bank) — SP-2b Task 5
+
+Exercise an option contract by id. The dispatch (LOCAL exercise saga vs cross-bank
+SI-TX exercise) is decided **inside stock-service** from the contract's routing,
+so the frontend uses this **one** route regardless of kind — the retiring
+`POST /api/v3/me/otc/contracts/peer/:id/exercise` is folded in here.
+
+- **LOCAL contract** (routing == own): runs the existing local exercise saga.
+  Strike money moves buyer→seller, the reserved seller shares are consumed and
+  credited to the buyer's holding. Accounts come from the persisted contract;
+  `buyer_account_number` is ignored.
+- **REMOTE contract** (a peer-hosted contract this bank holds the BUYER side of):
+  runs the cross-bank SI-TX option-exercise flow. **Only the buyer/holder** may
+  exercise (the writer/seller side and non-parties get `404` — existence must not
+  leak). Supply `buyer_account_number` — the buyer's currency account that pays
+  the strike; the gateway validates the caller owns it before forwarding (the only
+  client-supplied resource on the money path). The contract terms + counterparty
+  come from the persisted remote row.
+
+**Authentication:** Any JWT + one of `otc.trade.accept`, `securities.trade`. Identity middleware: `OwnerIsBankIfEmployee`.
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | uint64 | Contract id (local surrogate id; serves both local and remote rows) |
+
+**Request Body (optional):**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `buyer_account_number` | string | Cross-bank only | The buyer's currency account that pays the strike. Required for a cross-bank (remote) contract; ignored for a local contract. The caller must own it (else `404`). |
+| `on_behalf_of_client_id` | uint64 | No | Employee acting on behalf of a client. |
+| `on_behalf_of_fund_id` | uint64 | No | *E2, Plan E.* When non-zero, exercises on behalf of an investment fund (local path). The acting employee must be the fund's manager; acquired shares land in `fund_holdings`. |
+
+**Response 201:** Exercise result. For a cross-bank exercise the cross-bank
+transaction id rides in `saga_id` (the correlation handle for polling
+`GET /api/v3/me/otc/transactions/:txid/status`) and `status` reflects the SI-TX
+dispatch state (e.g. `pending`).
+
+**Error Responses:**
+- `400` — invalid `id`, or a remote contract exercised without `buyer_account_number`
+- `403` — `on_behalf_of_fund_id` set but acting employee is not the fund's manager
+- `404` — contract not found, the caller is not the buyer/holder of a remote contract, or the supplied settlement account is not owned by the caller
+- `409` — business rule (e.g. contract not active/expired, insufficient funds on the cross-bank strike)
+
+> Note: the legacy `POST /api/v3/me/otc/contracts/peer/:id/exercise` route is
+> retained for one transition window (it still works identically) and is removed
+> in a follow-up cleanup. New clients should use this unified route.
+
+---
+
 ### GET /api/v3/me/otc/transactions/:txid/status
 
 Status of a **cross-bank** OTC trade's underlying SI-TX transaction, resolved via `PeerTxService.GetTxStatus`. The `:txid` accepts either id a client may hold:

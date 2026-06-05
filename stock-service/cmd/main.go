@@ -1070,7 +1070,8 @@ func main() {
 		WithNegotiations(otcNegotiationSvc).
 		WithRemoteOffers(otcOfferRepo, cfg.OwnBankCode).
 		WithPeerNegotiations(otcNegRepo). // SP-1 Task 7 + SP-2a: unified local+remote negotiation list (REMOTE rows in otc_negotiations)
-		WithPeerOTCDispatch(peerNegDispatcher, otcNegRepo, accountClient) // SP-2b: bid route dispatches cross-bank for remote listings
+		WithPeerOTCDispatch(peerNegDispatcher, otcNegRepo, accountClient). // SP-2b: bid route dispatches cross-bank for remote listings
+		WithCrossBankExerciser(peerOtcHandler) // SP-2b Task 5: exercise route dispatches cross-bank for remote contracts
 
 	// Phase 3: OTC stocks marketplace (sell + buy direction). The
 	// service uses narrow OTCStockListingResolver + OTCStockAccountClient

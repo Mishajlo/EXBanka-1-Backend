@@ -14404,6 +14404,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Exercises an option contract. The dispatch (local saga vs cross-bank SI-TX) is decided in stock-service from the contract's routing — the frontend uses ONE route regardless of kind. For a cross-bank contract, supply buyer_account_number (the buyer's currency account that pays the strike); the gateway validates the caller owns it. For a local contract the accounts come from the persisted contract and buyer_account_number is ignored.",
                 "consumes": [
                     "application/json"
                 ],
@@ -14413,7 +14414,7 @@ const docTemplate = `{
                 "tags": [
                     "OTCOptions"
                 ],
-                "summary": "Exercise an OTC option contract",
+                "summary": "Exercise an OTC option contract (unified local + cross-bank)",
                 "parameters": [
                     {
                         "type": "integer",
@@ -14423,7 +14424,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "optional on-behalf client id; accounts come from the contract",
+                        "description": "optional on-behalf client/fund id; buyer_account_number required only for cross-bank contracts",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -14434,6 +14435,27 @@ const docTemplate = `{
                 "responses": {
                     "201": {
                         "description": "Created",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -16286,6 +16308,10 @@ const docTemplate = `{
         "handler.exerciseRequest": {
             "type": "object",
             "properties": {
+                "buyer_account_number": {
+                    "description": "BuyerAccountNumber is REQUIRED only for cross-bank (remote) contracts: the\nbuyer's currency account that pays the strike. The gateway validates the\ncaller owns it before forwarding (the only client-supplied resource on the\nmoney path). LOCAL contracts ignore it — their accounts come from the\npersisted contract. (SP-2b Task 5 — unified local+cross-bank exercise.)",
+                    "type": "string"
+                },
                 "on_behalf_of_client_id": {
                     "type": "integer"
                 },

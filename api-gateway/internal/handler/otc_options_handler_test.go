@@ -576,6 +576,71 @@ func TestOTCOpt_ExerciseContract_BadID(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+// SP-2b Task 5: the unified ExerciseContract passes buyer_account_number through
+// to the gRPC ExerciseContract (stock-service decides local vs cross-bank). The
+// gateway validates the caller owns the settlement account first.
+func TestOTCOpt_ExerciseContract_CrossBankPassesBuyerAccount(t *testing.T) {
+	cl := &stubOTCOptionsClient{
+		exerciseFn: func(in *stockpb.ExerciseContractRequest) (*stockpb.ExerciseResponse, error) {
+			require.Equal(t, uint64(8), in.ContractId)
+			require.Equal(t, "265-12-13", in.BuyerAccountNumber)
+			return &stockpb.ExerciseResponse{ContractId: 8, Status: "pending", SagaId: "tx-cb"}, nil
+		},
+	}
+	// Account owned by the caller (42) by default.
+	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/contracts/8/exercise", strings.NewReader(`{"buyer_account_number":"265-12-13"}`)))
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Contains(t, rec.Body.String(), "tx-cb")
+}
+
+// The exercise theft vector: a client must NOT pay the strike from an account
+// they don't own. The settlement account's owner (999) differs from the caller
+// (42) → 404, and the gRPC ExerciseContract must NOT be invoked (no money moves).
+func TestOTCOpt_ExerciseContract_CrossBankStrikeAccountNotOwned(t *testing.T) {
+	dispatched := false
+	cl := &stubOTCOptionsClient{
+		exerciseFn: func(*stockpb.ExerciseContractRequest) (*stockpb.ExerciseResponse, error) {
+			dispatched = true
+			return &stockpb.ExerciseResponse{}, nil
+		},
+	}
+	acct := &otcStubAccountClient{getByNumFn: func(in *accountpb.GetAccountByNumberRequest) (*accountpb.AccountResponse, error) {
+		return &accountpb.AccountResponse{AccountNumber: in.AccountNumber, OwnerId: 999, AccountKind: "current"}, nil // not the caller (42)
+	}}
+	h := handler.NewOTCOptionsHandler(cl, &stubPeerOTCExerciseClient{}, &otcStubSecurityClient{}, acct)
+	r := otcOptionsRouter(h)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/contracts/8/exercise", strings.NewReader(`{"buyer_account_number":"111000130146666611"}`)))
+	require.Equal(t, http.StatusNotFound, rec.Code, "expected 404 for strike paid from a non-owned account; body=%s", rec.Body.String())
+	require.False(t, dispatched, "exercise must NOT dispatch when the strike account is not owned by the caller (theft vector)")
+}
+
+// A LOCAL exercise (no buyer_account_number) skips the ownership gate entirely —
+// accounts come from the persisted contract — and forwards an empty
+// buyer_account_number.
+func TestOTCOpt_ExerciseContract_LocalNoAccountGate(t *testing.T) {
+	cl := &stubOTCOptionsClient{
+		exerciseFn: func(in *stockpb.ExerciseContractRequest) (*stockpb.ExerciseResponse, error) {
+			require.Equal(t, uint64(8), in.ContractId)
+			require.Empty(t, in.BuyerAccountNumber)
+			return &stockpb.ExerciseResponse{ContractId: 8, Status: "exercised"}, nil
+		},
+	}
+	// An account client that would 404 if it were ever consulted — proves the
+	// gate is skipped when no settlement account is supplied.
+	acct := &otcStubAccountClient{getByNumFn: func(*accountpb.GetAccountByNumberRequest) (*accountpb.AccountResponse, error) {
+		t.Fatalf("account lookup must NOT happen on the local path")
+		return nil, nil
+	}}
+	h := handler.NewOTCOptionsHandler(cl, &stubPeerOTCExerciseClient{}, &otcStubSecurityClient{}, acct)
+	r := otcOptionsRouter(h)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/contracts/8/exercise", strings.NewReader(`{}`)))
+	require.Equal(t, http.StatusCreated, rec.Code)
+}
+
 func TestOTCOpt_ExercisePeerContract_Success(t *testing.T) {
 	peer := &stubPeerOTCExerciseClient{
 		initiateFn: func(in *stockpb.InitiateOptionExerciseRequest) (*stockpb.InitiateOptionExerciseResponse, error) {

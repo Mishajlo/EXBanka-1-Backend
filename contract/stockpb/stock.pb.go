@@ -13873,8 +13873,13 @@ type ExerciseContractRequest struct {
 	// Strike debit comes from the fund's RSD account; acquired shares land in
 	// fund_holdings. Caller must be the fund's manager.
 	OnBehalfOfFundId uint64 `protobuf:"varint,5,opt,name=on_behalf_of_fund_id,json=onBehalfOfFundId,proto3" json:"on_behalf_of_fund_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// SP-2b: the buyer's currency account that pays the strike, REQUIRED only on
+	// the cross-bank (remote) exercise path. The gateway validates the caller owns
+	// it before forwarding. Ignored for LOCAL contracts (accounts come from the
+	// persisted contract). Empty on the local path.
+	BuyerAccountNumber string `protobuf:"bytes,6,opt,name=buyer_account_number,json=buyerAccountNumber,proto3" json:"buyer_account_number,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ExerciseContractRequest) Reset() {
@@ -13940,6 +13945,13 @@ func (x *ExerciseContractRequest) GetOnBehalfOfFundId() uint64 {
 		return x.OnBehalfOfFundId
 	}
 	return 0
+}
+
+func (x *ExerciseContractRequest) GetBuyerAccountNumber() string {
+	if x != nil {
+		return x.BuyerAccountNumber
+	}
+	return ""
 }
 
 type ExerciseResponse struct {
@@ -20902,14 +20914,15 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\vcontract_id\x18\x01 \x01(\x04R\n" +
 	"contractId\x12\"\n" +
 	"\ractor_user_id\x18\x02 \x01(\x03R\vactorUserId\x12*\n" +
-	"\x11actor_system_type\x18\x03 \x01(\tR\x0factorSystemType\"\xee\x01\n" +
+	"\x11actor_system_type\x18\x03 \x01(\tR\x0factorSystemType\"\xa0\x02\n" +
 	"\x17ExerciseContractRequest\x12\x1f\n" +
 	"\vcontract_id\x18\x01 \x01(\x04R\n" +
 	"contractId\x12\"\n" +
 	"\ractor_user_id\x18\x02 \x01(\x03R\vactorUserId\x12*\n" +
 	"\x11actor_system_type\x18\x03 \x01(\tR\x0factorSystemType\x122\n" +
 	"\x16on_behalf_of_client_id\x18\x04 \x01(\x04R\x12onBehalfOfClientId\x12.\n" +
-	"\x14on_behalf_of_fund_id\x18\x05 \x01(\x04R\x10onBehalfOfFundId\"\xf7\x02\n" +
+	"\x14on_behalf_of_fund_id\x18\x05 \x01(\x04R\x10onBehalfOfFundId\x120\n" +
+	"\x14buyer_account_number\x18\x06 \x01(\tR\x12buyerAccountNumber\"\xf7\x02\n" +
 	"\x10ExerciseResponse\x12\x1f\n" +
 	"\vcontract_id\x18\x01 \x01(\x04R\n" +
 	"contractId\x12\x16\n" +

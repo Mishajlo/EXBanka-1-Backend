@@ -65,6 +65,26 @@ type OTCOptionsHandler struct {
 	// accept). Optional; when unset a remote :nid on those actions falls
 	// through to the local NotFound.
 	remoteNegOps RemoteNegotiationOps
+	// crossBankExerciser backs the SP-2b Task-5 remote branch of
+	// ExerciseContract: when the contract :id resolves to a REMOTE row (a
+	// peer-hosted contract this bank holds the buyer side of), the unified
+	// exercise delegates to the cross-bank SI-TX exercise dispatch instead of
+	// the local saga. Satisfied by *PeerOTCGRPCHandler (its
+	// InitiateOptionExercise composes the 4-posting exercise Transaction and
+	// dispatches it via transaction-service). Optional; when unset a remote :id
+	// on exercise falls through to NotFound (local-only behavior).
+	crossBankExerciser CrossBankExerciser
+}
+
+// CrossBankExerciser dispatches a cross-bank option exercise for a REMOTE
+// contract this bank holds the buyer side of. It composes the spec
+// OPTION-pseudo-account exercise Transaction and dispatches it via
+// transaction-service, claiming the contract (active → exercising) to serialise
+// concurrent exercises. Satisfied by *PeerOTCGRPCHandler.InitiateOptionExercise
+// (SP-2b Task 5 — consolidating the gateway peer-exercise path into the unified
+// ExerciseContract).
+type CrossBankExerciser interface {
+	InitiateOptionExercise(ctx context.Context, req *stockpb.InitiateOptionExerciseRequest) (*stockpb.InitiateOptionExerciseResponse, error)
 }
 
 // PeerNegotiationDispatcher POSTs a composed SI-TX OtcOffer to a peer bank's
@@ -134,6 +154,17 @@ func (h *OTCOptionsHandler) WithPeerOTCDispatch(dispatcher PeerNegotiationDispat
 func (h *OTCOptionsHandler) WithRemoteNegOps(ops RemoteNegotiationOps) *OTCOptionsHandler {
 	cp := *h
 	cp.remoteNegOps = ops
+	return &cp
+}
+
+// WithCrossBankExerciser wires the cross-bank exercise dispatch so the unified
+// ExerciseContract handles a REMOTE (peer-hosted) contract by delegating to the
+// SI-TX option-exercise flow (SP-2b Task 5). In production this is the
+// *PeerOTCGRPCHandler. Without this wire-up, exercising a remote :id falls
+// through to NotFound (local-only behavior).
+func (h *OTCOptionsHandler) WithCrossBankExerciser(e CrossBankExerciser) *OTCOptionsHandler {
+	cp := *h
+	cp.crossBankExerciser = e
 	return &cp
 }
 
@@ -842,7 +873,44 @@ func (h *OTCOptionsHandler) resolveRemoteContract(id uint64, actorUserID int64, 
 	return peerContractToUnifiedProto(p), nil
 }
 
+// ExerciseContract is the UNIFIED exercise entry point: it dispatches LOCAL vs
+// cross-bank (REMOTE) on the contract's routing so the frontend uses ONE route
+// (POST /api/v3/otc/contracts/:id/exercise) regardless of kind (SP-2b Task 5).
+//
+//   - LOCAL (routing == OwnRouting()) → the existing local exercise saga
+//     (svc.ExerciseContract). Unchanged. Accounts come from the persisted
+//     contract; buyer_account_number is ignored on this path.
+//   - REMOTE (routing != OwnRouting(), a peer-hosted contract this bank holds
+//     the BUYER side of) → the cross-bank SI-TX exercise dispatch, folding in
+//     the logic that previously lived behind the gateway's peer-exercise route
+//     (InitiateOptionExercise). The caller must be the contract's BUYER/HOLDER;
+//     a non-holder gets NotFound (existence must not leak). The buyer's
+//     settlement account (buyer_account_number) is the only client-supplied
+//     resource — the counterparty/writer + the contract terms come from the
+//     persisted remote row.
+//
+// Local + remote share the OptionContract table; the dispatch is a single
+// GetByID-then-branch-on-routing. GetByID returns NotFound for a remote row (it
+// is OwnRouting()-guarded), so a NotFound triggers the remote lookup.
 func (h *OTCOptionsHandler) ExerciseContract(ctx context.Context, in *stockpb.ExerciseContractRequest) (*stockpb.ExerciseResponse, error) {
+	if h.contracts != nil {
+		// Resolve the contract to decide local vs cross-bank. A LOCAL hit takes
+		// the existing saga path below; a NotFound means the id is either remote
+		// (handled here) or genuinely missing (falls through to the local saga's
+		// own NotFound, preserving the existing error semantics).
+		if _, err := h.contracts.GetByID(in.GetContractId()); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				if resp, handled, rerr := h.exerciseRemoteContract(ctx, in); handled {
+					return resp, rerr
+				}
+				// Not a remote contract (no remote row / exerciser unwired) — fall
+				// through so the local saga surfaces the canonical NotFound.
+			} else {
+				return nil, status.Errorf(codes.Internal, "load contract: %v", err)
+			}
+		}
+	}
+
 	// E2: on_behalf_of_fund_id validation for exercise — manager-only check.
 	onBehalfOfFundID := in.GetOnBehalfOfFundId()
 	if onBehalfOfFundID != 0 {
@@ -885,6 +953,91 @@ func (h *OTCOptionsHandler) ExerciseContract(ctx context.Context, in *stockpb.Ex
 		BuyerCurrency:         c.StrikeCurrency,
 		SharesTransferred:     c.Quantity.String(),
 	}, nil
+}
+
+// exerciseRemoteContract handles the REMOTE branch of the unified
+// ExerciseContract (SP-2b Task 5). It resolves the cross-bank contract by its
+// surrogate id, AUTHORIZES the caller as the contract's BUYER/HOLDER, then
+// delegates to the cross-bank SI-TX exercise dispatch (CrossBankExerciser,
+// satisfied by *PeerOTCGRPCHandler.InitiateOptionExercise — the same logic the
+// retiring gateway peer-exercise route called directly).
+//
+// Returns (resp, handled, err):
+//   - handled == false  → the id is NOT a remote contract this handler can
+//     drive (the peer-contract repo or the exerciser isn't wired, or no remote
+//     row exists). The caller falls through to the local saga's NotFound so the
+//     error semantics for a genuinely-missing id are unchanged.
+//   - handled == true   → this is a remote contract; resp/err carry the outcome
+//     (including the holder-authorization NotFound for a non-buyer caller).
+//
+// Authorization mirrors resolveRemoteContract + the old ExercisePeerContract:
+// only the BUYER side this bank hosts may exercise. A REMOTE contract is
+// exercisable from this bank only when it carries RemoteDirection=="CREDIT"
+// (this bank holds the buyer/holder side); the caller's SI-TX participant id
+// ("client-<actorUserId>" for client callers) must equal the contract's
+// RemoteBuyerID. A non-buyer/non-holder (the writer, another client, or an
+// employee with no cross-bank identity) gets NotFound — existence must not leak.
+func (h *OTCOptionsHandler) exerciseRemoteContract(ctx context.Context, in *stockpb.ExerciseContractRequest) (*stockpb.ExerciseResponse, bool, error) {
+	if h.peerContracts == nil || h.crossBankExerciser == nil {
+		return nil, false, nil
+	}
+	contract, err := h.peerContracts.GetRemoteContractByID(in.GetContractId())
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Not a remote row either — let the caller surface the local NotFound.
+			return nil, false, nil
+		}
+		return nil, true, status.Errorf(codes.Internal, "load remote contract: %v", err)
+	}
+
+	// AUTHORIZE: only the buyer/holder side this bank hosts may exercise.
+	// Compute the caller's SI-TX participant id from the same identity fields
+	// the local ownership check uses (actor_user_id + actor_system_type). An
+	// employee has no cross-bank participant id and is therefore never the
+	// holder of a remote contract.
+	var callerPartyID string
+	if in.GetActorSystemType() == "client" {
+		callerPartyID = "client-" + strconv.FormatInt(in.GetActorUserId(), 10)
+	}
+	// The exercisable (buyer/holder) side this bank hosts is the CREDIT side.
+	// Only that side carries a buyer participant id we can authorize against;
+	// the seller/DEBIT side may not exercise (the writer never exercises).
+	if remoteContractDirection(contract) != "CREDIT" || callerPartyID == "" || callerPartyID != remoteContractBuyerID(contract) {
+		// NotFound — do not leak existence to non-holders (same policy as
+		// resolveRemoteContract / the gateway's enforceOwnership).
+		return nil, true, status.Error(codes.NotFound, "not_found")
+	}
+
+	// The buyer's settlement account is the only client-supplied resource; the
+	// gateway has already validated the caller owns it. Everything else
+	// (counterparty, terms, routings) comes from the persisted remote row inside
+	// InitiateOptionExercise.
+	if in.GetBuyerAccountNumber() == "" {
+		return nil, true, status.Error(codes.InvalidArgument, "buyer_account_number is required to exercise a cross-bank contract")
+	}
+	resp, err := h.crossBankExerciser.InitiateOptionExercise(ctx, &stockpb.InitiateOptionExerciseRequest{
+		PeerOptionContractId: contract.ID,
+		BuyerAccountNumber:   in.GetBuyerAccountNumber(),
+	})
+	if err != nil {
+		return nil, true, err
+	}
+	// Project the cross-bank dispatch result onto the unified ExerciseResponse.
+	// The SI-TX exercise settles asynchronously, so per-currency strike/shares
+	// figures aren't known synchronously; the transaction id rides in SagaId
+	// (the cross-bank correlation handle the FE polls), mirroring how the old
+	// peer-exercise route surfaced transaction_id + status.
+	strikeAmt := contract.StrikePrice.Mul(decimal.NewFromInt(remoteContractQuantityInt(contract)))
+	return &stockpb.ExerciseResponse{
+		ContractId:            contract.ID,
+		Status:                resp.GetStatus(),
+		SagaId:                resp.GetTransactionId(),
+		StrikeAmountSellerCcy: strikeAmt.String(),
+		StrikeAmountBuyerCcy:  strikeAmt.String(),
+		SellerCurrency:        contract.StrikeCurrency,
+		BuyerCurrency:         contract.StrikeCurrency,
+		SharesTransferred:     strconv.FormatInt(remoteContractQuantityInt(contract), 10),
+	}, true, nil
 }
 
 func toContractProto(c *model.OptionContract) *stockpb.OptionContractResponse {

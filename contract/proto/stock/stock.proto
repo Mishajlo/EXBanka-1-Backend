@@ -1891,6 +1891,11 @@ message ExerciseContractRequest {
   // Strike debit comes from the fund's RSD account; acquired shares land in
   // fund_holdings. Caller must be the fund's manager.
   uint64 on_behalf_of_fund_id = 5;
+  // SP-2b: the buyer's currency account that pays the strike, REQUIRED only on
+  // the cross-bank (remote) exercise path. The gateway validates the caller owns
+  // it before forwarding. Ignored for LOCAL contracts (accounts come from the
+  // persisted contract). Empty on the local path.
+  string buyer_account_number = 6;
 }
 message ExerciseResponse {
   uint64 contract_id = 1;
