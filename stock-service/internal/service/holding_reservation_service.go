@@ -1167,13 +1167,13 @@ func (s *HoldingReservationService) ExerciseBuyerCreditForPeerOption(
 		// Status column (which carries the PEER vocabulary "active"/"exercising"/
 		// "exercised" on remote rows).
 		//
-		// Defense-in-depth: scope the lookup to routing_number != OwnRouting() so
+		// Defense-in-depth: scope the lookup to remote rows (local = false) so
 		// a caller who passes a LOCAL contract's id (e.g. by mistake or via a
 		// confused caller) cannot trigger the buyer-credit path on a local row —
 		// it would be treated as not-found rather than silently exercised.
 		var contract model.OptionContract
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("routing_number != ?", model.OwnRouting()).
+			Where("local = ?", false).
 			First(&contract, peerOptionContractID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return status.Error(codes.FailedPrecondition, "peer option contract not found (must be a remote/cross-bank contract)")
