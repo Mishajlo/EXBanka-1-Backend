@@ -169,6 +169,14 @@ type peerOtcOfferReq struct {
 	SellerID       peerForeignBankIdReq    `json:"sellerId"`
 	Amount         int64                   `json:"amount"`
 	LastModifiedBy peerForeignBankIdReq    `json:"lastModifiedBy"`
+	// Phase 10 — cross-bank cascade-cancel grouping key. The bidder's bank
+	// captures the discovered listing's (routingNumber, native_id) and sends
+	// it here so the seller's bank can (1) correlate the inbound chain to the
+	// listing it bids on — required for surfacing inbound chains on a
+	// BANK-owned listing — and (2) cascade-cancel sibling chains on accept.
+	// Optional; absent (zero routingNumber + empty id) means "no parent group".
+	// Dropping it silently breaks both behaviors, so it MUST be forwarded.
+	ParentOfferID *peerForeignBankIdReq `json:"parentOfferId,omitempty"`
 	// Fix #1 (2026-05-16) — the buyer's 18-digit account number,
 	// optionally pinned by the buyer's bank so the seller's bank uses
 	// this exact account for the buyer-debit posting on accept.
@@ -415,7 +423,7 @@ func parseRidID(c *gin.Context) (int64, string, bool) {
 // internal flat-fielded gRPC PeerOtcOffer (ticker, pricePerStock,
 // currency, premium, premiumCurrency, ...).
 func offerReqToProto(o peerOtcOfferReq) *stockpb.PeerOtcOffer {
-	return &stockpb.PeerOtcOffer{
+	out := &stockpb.PeerOtcOffer{
 		Ticker:          o.Stock.Ticker,
 		Amount:          o.Amount,
 		PricePerStock:   o.PricePerUnit.Amount.Decimal.String(),
@@ -429,6 +437,16 @@ func offerReqToProto(o peerOtcOfferReq) *stockpb.PeerOtcOffer {
 		},
 		BuyerAccountNumber: o.BuyerAccountNumber,
 	}
+	// Forward the cross-bank cascade-cancel grouping key when present. The
+	// receiver treats a zero routing + empty id as "no parent group", so only
+	// set it when the bidder actually supplied one.
+	if o.ParentOfferID != nil && (o.ParentOfferID.RoutingNumber != 0 || o.ParentOfferID.ID != "") {
+		out.ParentOfferId = &stockpb.PeerForeignBankId{
+			RoutingNumber: o.ParentOfferID.RoutingNumber,
+			Id:            o.ParentOfferID.ID,
+		}
+	}
+	return out
 }
 
 // numJSON renders a decimal-string monetary amount as a bare JSON
@@ -461,6 +479,9 @@ func protoOfferToJSON(o *stockpb.PeerOtcOffer) gin.H {
 	}
 	if n := o.GetBuyerAccountNumber(); n != "" {
 		out["buyerAccountNumber"] = n
+	}
+	if p := o.GetParentOfferId(); p != nil && (p.GetRoutingNumber() != 0 || p.GetId() != "") {
+		out["parentOfferId"] = gin.H{"routingNumber": p.GetRoutingNumber(), "id": p.GetId()}
 	}
 	return out
 }

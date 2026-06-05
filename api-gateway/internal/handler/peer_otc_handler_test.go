@@ -168,6 +168,47 @@ func TestPeerOTC_CreateNegotiation(t *testing.T) {
 	}
 }
 
+// TestPeerOTC_CreateNegotiation_ForwardsParentOfferId asserts the inbound
+// parser carries the SI-TX OtcOffer's parentOfferId (the cross-bank
+// cascade-cancel grouping key) through to the gRPC CreateNegotiation request.
+// Without it the seller's bank stores remote_parent_* as NULL and can neither
+// surface the inbound chain on a bank-owned listing nor cascade-cancel siblings
+// on accept.
+func TestPeerOTC_CreateNegotiation_ForwardsParentOfferId(t *testing.T) {
+	var gotParent *stockpb.PeerForeignBankId
+	stub := &stubPeerOTCClient{
+		createFn: func(ctx context.Context, in *stockpb.CreateNegotiationRequest, opts ...grpc.CallOption) (*stockpb.CreateNegotiationResponse, error) {
+			gotParent = in.GetOffer().GetParentOfferId()
+			return &stockpb.CreateNegotiationResponse{NegotiationId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "neg-parent"}}, nil
+		},
+	}
+	r := setupOTCRouter(stub)
+	body, _ := json.Marshal(map[string]any{
+		"stock":          map[string]any{"ticker": "AAPL"},
+		"settlementDate": "2026-12-31",
+		"pricePerUnit":   map[string]any{"amount": "180.50", "currency": "USD"},
+		"premium":        map[string]any{"amount": "700", "currency": "USD"},
+		"buyerId":        map[string]any{"routingNumber": 222, "id": "client-1"},
+		"sellerId":       map[string]any{"routingNumber": 111, "id": "client-3"},
+		"amount":         50,
+		"lastModifiedBy": map[string]any{"routingNumber": 222, "id": "client-1"},
+		"parentOfferId":  map[string]any{"routingNumber": 111, "id": "70"},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/negotiations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+	if gotParent == nil {
+		t.Fatal("parent_offer_id was dropped — gRPC request carried no ParentOfferId")
+	}
+	if gotParent.GetRoutingNumber() != 111 || gotParent.GetId() != "70" {
+		t.Errorf("parent_offer_id = {%d,%q}, want {111,\"70\"}", gotParent.GetRoutingNumber(), gotParent.GetId())
+	}
+}
+
 func TestPeerOTC_GetNegotiation(t *testing.T) {
 	stub := &stubPeerOTCClient{
 		getFn: func(ctx context.Context, in *stockpb.GetNegotiationRequest, opts ...grpc.CallOption) (*stockpb.GetNegotiationResponse, error) {
