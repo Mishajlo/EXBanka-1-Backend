@@ -357,6 +357,12 @@ func main() {
 		PeerOTCClient:        peerOTCClient,
 		AdminCronClients:     adminCronClients,
 		AuditProducer:        auditProducer,
+		RateLimit: router.RateLimitConfig{
+			Redis:        redisClient,
+			GlobalPerMin: cfg.RateLimitGlobalPerMin,
+			LoginPer5Min: cfg.RateLimitLoginPer5Min,
+			ResetPer5Min: cfg.RateLimitResetPer5Min,
+		},
 	}
 	h := router.NewHandlers(deps)
 	router.SetupV3(r, h)

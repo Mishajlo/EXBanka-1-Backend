@@ -36,6 +36,29 @@ Access tokens expire after 15 minutes. Use the refresh token to obtain a new pai
 
 ---
 
+## Rate Limiting
+
+The gateway applies Redis-backed fixed-window rate limits (per client IP):
+
+- **Global ceiling** — a generous per-IP cap across **all** routes
+  (`RATE_LIMIT_GLOBAL_PER_MIN`, default **3000/min**). It is sized well above
+  normal frontend polling and only trips for runaway/abusive clients.
+- **`POST /api/v3/auth/login`** — strict per-IP bucket
+  (`RATE_LIMIT_LOGIN_PER_5MIN`, default **20 per 5 min**).
+- **`POST /api/v3/auth/password/reset-request`** — strict per-IP bucket
+  (`RATE_LIMIT_RESET_PER_5MIN`, default **5 per 5 min**).
+
+Exceeding any bucket returns **HTTP 429** with body
+`{"error":{"code":"rate_limited","message":"too many requests, slow down"}}` and a
+`Retry-After` header (seconds). This is an additive failure mode — no success-path
+contract changed. The limiter **fails open**: if Redis is unavailable, requests are
+allowed through rather than blocked.
+
+Every response carries an **`X-Request-Id`** header (echoing an inbound
+`X-Request-Id` if present, else a fresh UUID) for log correlation.
+
+---
+
 ## Table of Contents
 
 1. [Auth](#1-auth)

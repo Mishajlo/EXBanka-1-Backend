@@ -3,6 +3,7 @@ package router
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -20,17 +21,32 @@ import (
 // Per-version pattern: each version is an explicit, self-contained router
 // file. There is no transparent fallback. See router_versioning.md.
 func NewRouter() *gin.Engine {
-	r := gin.Default()
+	// gin.New() (not gin.Default()) so we use our own structured RequestLogger
+	// instead of gin's text Logger, while keeping panic Recovery.
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(middleware.RequestLogger())
 	r.Use(apimetrics.GinMiddleware())
 	r.Use(cors.New(cors.Config{
 		AllowAllOrigins:  true,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "X-Request-Id", "X-Device-Id", "X-Device-Signature"},
+		ExposeHeaders:    []string{"Content-Length", "X-Request-Id"},
 		AllowCredentials: false,
 	}))
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	return r
+}
+
+// strictLimiter returns the strict per-IP+route rate-limit middleware for a
+// sensitive auth route, or nil (no limiter) when rate limiting is disabled.
+func (h *Handlers) strictLimiter(name string, per5min int) []gin.HandlerFunc {
+	if h.RateLimit.Redis == nil || per5min <= 0 {
+		return nil
+	}
+	return []gin.HandlerFunc{middleware.RateLimit(h.RateLimit.Redis,
+		middleware.RateLimitRule{Name: name, Limit: per5min, Window: 5 * time.Minute},
+		middleware.RouteIPKey)}
 }
 
 // SetupV3 registers every /api/v3 route on the given engine. v3 is the
@@ -48,18 +64,29 @@ func NewRouter() *gin.Engine {
 func SetupV3(r *gin.Engine, h *Handlers) {
 	v3 := r.Group("/api/v3")
 
+	// Generous per-IP safety ceiling across every v3 route. Sized well above
+	// the frontend's ~1s multi-route polling (default 3000/min) — it only
+	// catches runaway/abusive clients. Disabled when RateLimit.Redis is nil.
+	if h.RateLimit.Redis != nil && h.RateLimit.GlobalPerMin > 0 {
+		v3.Use(middleware.RateLimit(h.RateLimit.Redis,
+			middleware.RateLimitRule{Name: "global", Limit: h.RateLimit.GlobalPerMin, Window: time.Minute},
+			middleware.ClientIPKey))
+	}
+
 	// Forward X-Saga-* fault-injection headers to downstream saga executors.
 	// No-op in production builds (saga.FaultsEnabled == false); active only in
 	// the fault-enabled test image used by the SG-* saga integration suite.
 	v3.Use(middleware.FaultHeaderForwarder())
 
 	// ── Public auth routes (no middleware) ───────────────────────
+	// login + password reset-request carry strict per-IP buckets (brute-force
+	// surface); the rest are covered by the global ceiling only.
 	auth := v3.Group("/auth")
 	{
-		auth.POST("/login", h.Auth.Login)
+		auth.POST("/login", append(h.strictLimiter("login", h.RateLimit.LoginPer5Min), h.Auth.Login)...)
 		auth.POST("/refresh", h.Auth.RefreshToken)
 		auth.POST("/logout", h.Auth.Logout)
-		auth.POST("/password/reset-request", h.Auth.RequestPasswordReset)
+		auth.POST("/password/reset-request", append(h.strictLimiter("reset", h.RateLimit.ResetPer5Min), h.Auth.RequestPasswordReset)...)
 		auth.POST("/password/reset", h.Auth.ResetPassword)
 		auth.POST("/activate", h.Auth.ActivateAccount)
 		auth.POST("/resend-activation", h.Auth.ResendActivationEmail)

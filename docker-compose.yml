@@ -688,6 +688,9 @@ services:
       REDIS_ADDR: "redis:6379"
       OWN_BANK_CODE: "${OWN_BANK_CODE:-111}"
       OWN_BANK_NAME: "${OWN_BANK_NAME:-EXBanka}"
+      RATE_LIMIT_GLOBAL_PER_MIN: "${RATE_LIMIT_GLOBAL_PER_MIN:-3000}"
+      RATE_LIMIT_LOGIN_PER_5MIN: "${RATE_LIMIT_LOGIN_PER_5MIN:-20}"
+      RATE_LIMIT_RESET_PER_5MIN: "${RATE_LIMIT_RESET_PER_5MIN:-5}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
