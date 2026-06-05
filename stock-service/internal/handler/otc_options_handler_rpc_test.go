@@ -44,7 +44,6 @@ func newOTCOptionsHandlerFixture(t *testing.T) *otcOptionsHandlerFixture {
 		&model.OTCOfferRevision{},
 		&model.OptionContract{},
 		&model.OTCOfferReadReceipt{},
-		&model.PeerOptionContract{},
 		&model.Listing{},
 		&model.Stock{},
 	); err != nil {
@@ -519,7 +518,7 @@ func TestOTCOptionsHandler_ListMyContracts_HappyPath(t *testing.T) {
 // fix: remote contracts appear only in Contracts[] with kind=remote).
 func TestOTCOptionsHandler_ListMyContracts_WithPeerContracts(t *testing.T) {
 	fx := newOTCOptionsHandlerFixture(t)
-	peerRepo := repository.NewPeerOptionContractRepository(fx.db)
+	peerRepo := repository.NewOptionContractRepository(fx.db)
 	h := fx.h.WithPeerContracts(peerRepo, 111)
 	resp, err := h.ListMyContracts(context.Background(), &stockpb.ListMyContractsRequest{
 		ActorUserId: 7, ActorSystemType: "client",

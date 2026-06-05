@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -21,14 +22,45 @@ import (
 // sqlite fixture, additionally wiring the peer-contracts repo (so remote
 // contracts merge into ListMyContracts / resolve in GetContract) and own
 // routing / bank-code provenance the same way main.go does.
+//
+// SP-2a: remote contracts are folded into the unified OptionContract table, so
+// the "peer" repo is just the OptionContractRepository (its remote-scoped
+// methods). OwnRouting is set to ownRouting so the remote rows (routing !=
+// ownRouting) are recognised as remote.
 func newUnifiedContractFixture(t *testing.T, ownRouting int64, ownBankCode string) (*OTCOptionsHandler, *otcOptionsHandlerFixture) {
 	t.Helper()
+	model.SetOwnRouting(strconvFormatInt(ownRouting))
 	fx := newOTCOptionsHandlerFixture(t)
-	peerRepo := repository.NewPeerOptionContractRepository(fx.db)
+	peerRepo := repository.NewOptionContractRepository(fx.db)
 	h := fx.h.
 		WithPeerContracts(peerRepo, ownRouting).
 		WithRemoteOffers(nil, ownBankCode)
 	return h, fx
+}
+
+func strconvFormatInt(n int64) string { return strconv.FormatInt(n, 10) }
+
+// peerContractSeed is a test-local descriptor for a cross-bank option contract,
+// mirroring the retired PeerOptionContract fields the unified-read tests assert
+// on. seedPeerContract maps it to a REMOTE model.OptionContract row.
+type peerContractSeed struct {
+	ID                  uint64
+	CrossbankTxID       string
+	PostingIndex        int32
+	NegotiationRouting  int64
+	NegotiationID       string
+	BuyerRoutingNumber  int64
+	BuyerID             string
+	SellerRoutingNumber int64
+	SellerID            string
+	Ticker              string
+	Quantity            int64
+	StrikePrice         decimal.Decimal
+	Currency            string
+	SettlementDate      string
+	Direction           string
+	Status              string
+	CreatedAt           time.Time
 }
 
 // seedLocalContract inserts a LOCAL OptionContract with the given buyer/seller
@@ -63,10 +95,68 @@ func seedLocalContract(t *testing.T, fx *otcOptionsHandlerFixture, buyerID, sell
 	return c
 }
 
-// seedPeerContract inserts a cross-bank PeerOptionContract row.
-func seedPeerContract(t *testing.T, fx *otcOptionsHandlerFixture, p *model.PeerOptionContract) {
+// seedPeerContract inserts a cross-bank (REMOTE) option contract row into the
+// unified table from a peerContractSeed descriptor. The remote row's
+// routing_number is the COUNTERPARTY (the side this bank does NOT host):
+// CREDIT → we host the buyer → counterparty=seller's bank; DEBIT → we host the
+// seller → counterparty=buyer's bank. native_id = "<crossbank_tx_id>:<posting>".
+func seedPeerContract(t *testing.T, fx *otcOptionsHandlerFixture, s *peerContractSeed) {
 	t.Helper()
-	if err := fx.db.Create(p).Error; err != nil {
+	counterparty := s.BuyerRoutingNumber
+	if s.Direction == "CREDIT" {
+		counterparty = s.SellerRoutingNumber
+	}
+	native := s.CrossbankTxID + ":" + strconv.FormatInt(int64(s.PostingIndex), 10)
+	bbc := strconv.FormatInt(s.BuyerRoutingNumber, 10)
+	sbc := strconv.FormatInt(s.SellerRoutingNumber, 10)
+	cbTx := s.CrossbankTxID
+	pIdx := s.PostingIndex
+	negRouting := s.NegotiationRouting
+	negNative := s.NegotiationID
+	dir := s.Direction
+	bID := s.BuyerID
+	sID := s.SellerID
+	settle := time.Now().UTC()
+	if s.SettlementDate != "" {
+		if tt, e := time.Parse("2006-01-02", s.SettlementDate); e == nil {
+			settle = tt
+		} else if tt, e := time.Parse(time.RFC3339, s.SettlementDate); e == nil {
+			settle = tt
+		}
+	}
+	created := s.CreatedAt
+	if created.IsZero() {
+		created = time.Now().UTC()
+	}
+	row := &model.OptionContract{
+		ID:                        s.ID,
+		RoutingNumber:             counterparty,
+		NativeID:                  &native,
+		BuyerOwnerType:            model.OwnerBank,
+		BuyerBankCode:             &bbc,
+		SellerOwnerType:           model.OwnerBank,
+		SellerBankCode:            &sbc,
+		Ticker:                    s.Ticker,
+		Quantity:                  decimal.NewFromInt(s.Quantity),
+		StrikePrice:               s.StrikePrice,
+		PremiumPaid:               decimal.Zero,
+		PremiumCurrency:           s.Currency,
+		StrikeCurrency:            s.Currency,
+		SettlementDate:            settle,
+		Status:                    s.Status,
+		SagaID:                    s.CrossbankTxID,
+		PremiumPaidAt:             created,
+		CrossbankTxID:             &cbTx,
+		RemotePostingIndex:        &pIdx,
+		RemoteNegotiationRouting:  &negRouting,
+		RemoteNegotiationNativeID: &negNative,
+		RemoteDirection:           &dir,
+		RemoteBuyerID:             &bID,
+		RemoteSellerID:            &sID,
+		CreatedAt:                 created,
+		UpdatedAt:                 created,
+	}
+	if err := fx.db.Create(row).Error; err != nil {
 		t.Fatalf("seed peer contract: %v", err)
 	}
 }
@@ -139,7 +229,7 @@ func TestListMyContracts_RemoteCreditWeHoldBuyer(t *testing.T) {
 	const ownRouting int64 = 111
 	const peerSellerRouting int64 = 222
 	h, fx := newUnifiedContractFixture(t, ownRouting, "111")
-	seedPeerContract(t, fx, &model.PeerOptionContract{
+	seedPeerContract(t, fx, &peerContractSeed{
 		ID:                 55,
 		CrossbankTxID:      "tx-1",
 		PostingIndex:       0,
@@ -203,7 +293,7 @@ func TestListMyContracts_RemoteDebitWeHoldSeller(t *testing.T) {
 	const ownRouting int64 = 111
 	const peerBuyerRouting int64 = 333
 	h, fx := newUnifiedContractFixture(t, ownRouting, "111")
-	seedPeerContract(t, fx, &model.PeerOptionContract{
+	seedPeerContract(t, fx, &peerContractSeed{
 		ID:                 77,
 		CrossbankTxID:      "tx-2",
 		PostingIndex:       0,
@@ -249,7 +339,7 @@ func TestListMyContracts_RemoteDebitWeHoldSeller(t *testing.T) {
 func TestListMyContracts_BankCallerSkipsRemote(t *testing.T) {
 	const ownRouting int64 = 111
 	h, fx := newUnifiedContractFixture(t, ownRouting, "111")
-	seedPeerContract(t, fx, &model.PeerOptionContract{
+	seedPeerContract(t, fx, &peerContractSeed{
 		ID:                 55,
 		CrossbankTxID:      "tx-1",
 		PostingIndex:       0,
@@ -289,7 +379,7 @@ func TestGetContract_RemoteResolve_Credit(t *testing.T) {
 	const ownRouting int64 = 111
 	const peerSellerRouting int64 = 222
 	h, fx := newUnifiedContractFixture(t, ownRouting, "111")
-	seedPeerContract(t, fx, &model.PeerOptionContract{
+	seedPeerContract(t, fx, &peerContractSeed{
 		ID:                 900,
 		CrossbankTxID:      "tx-9",
 		PostingIndex:       0,
@@ -334,7 +424,7 @@ func TestGetContract_Remote_ParticipantCheck(t *testing.T) {
 	const peerSellerRouting int64 = 222
 	h, fx := newUnifiedContractFixture(t, ownRouting, "111")
 	// CREDIT row → this bank holds the BUYER side (client-9).
-	seedPeerContract(t, fx, &model.PeerOptionContract{
+	seedPeerContract(t, fx, &peerContractSeed{
 		ID:                 800,
 		CrossbankTxID:      "tx-800",
 		PostingIndex:       0,
@@ -395,14 +485,15 @@ func TestGetContract_RemoteMiss_NotFound(t *testing.T) {
 func TestGetContract_RemoteError_SurfacesInternal(t *testing.T) {
 	const ownRouting int64 = 111
 	// Build a fixture whose peer-contracts repo points at a DB that has NOT
-	// migrated peer_option_contracts, so GetByID returns a non-NotFound DB
-	// error ("no such table") rather than gorm.ErrRecordNotFound.
+	// migrated option_contracts, so GetRemoteContractByID returns a non-NotFound
+	// DB error ("no such table") rather than gorm.ErrRecordNotFound.
+	model.SetOwnRouting(strconvFormatInt(ownRouting))
 	fx := newOTCOptionsHandlerFixture(t)
 	emptyDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatalf("open empty db: %v", err)
 	}
-	brokenPeerRepo := repository.NewPeerOptionContractRepository(emptyDB)
+	brokenPeerRepo := repository.NewOptionContractRepository(emptyDB)
 	h := fx.h.WithPeerContracts(brokenPeerRepo, ownRouting).WithRemoteOffers(nil, "111")
 
 	_, gerr := h.GetContract(context.Background(), &stockpb.GetContractRequest{

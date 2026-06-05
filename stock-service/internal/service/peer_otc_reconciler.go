@@ -69,15 +69,16 @@ type peerOtcNegRepo interface {
 }
 
 // peerContractChecker is the narrow interface the reconciler uses to determine
-// whether a local peer_option_contract row exists for a given negotiation.
-// When the peer reports isOngoing=false, a contract row proves the negotiation
-// was ACCEPTED (not cancelled) — so we reconcile our row to "accepted" instead
-// of "cancelled". Satisfied by *repository.PeerOptionContractRepository.
+// whether a remote option-contract row exists for a given negotiation. When the
+// peer reports isOngoing=false, a contract row proves the negotiation was
+// ACCEPTED (not cancelled) — so we reconcile our row to "accepted" instead of
+// "cancelled". Satisfied by *repository.OptionContractRepository (the unified
+// table; remote contracts folded in by SP-2a).
 type peerContractChecker interface {
-	// HasContractForNegotiation returns true if any peer_option_contracts row
-	// exists with the given negotiation_routing_number + negotiation_id.
+	// HasRemoteContractForNegotiation returns true if any remote option-contract
+	// row exists with the given negotiation routing + native id.
 	// A DB error is returned as (false, err); not-found is (false, nil).
-	HasContractForNegotiation(negotiationRoutingNumber int64, negotiationID string) (bool, error)
+	HasRemoteContractForNegotiation(negRouting int64, negNative string) (bool, error)
 }
 
 // PeerOTCNegotiationReconciler polls every active peer bank for the current
@@ -322,10 +323,10 @@ func (r *PeerOTCNegotiationReconciler) reconcileRow(
 	// An accepted negotiation must never be reconciled to "cancelled".
 	targetStatus := "cancelled"
 	if r.contractChecker != nil {
-		// The NegotiationRoutingNumber in peer_option_contracts is the
-		// routing number of the bank that issued the negotiation ForeignID,
-		// which is the peer routing number for this row.
-		hasContract, checkErr := r.contractChecker.HasContractForNegotiation(peerRouting, foreignID)
+		// The remote contract's negotiation routing is the routing number of
+		// the bank that issued the negotiation ForeignID, which is the peer
+		// routing number for this row.
+		hasContract, checkErr := r.contractChecker.HasRemoteContractForNegotiation(peerRouting, foreignID)
 		if checkErr != nil {
 			// False-cancel guard: contract check error ⇒ skip this row.
 			return fmt.Errorf("contract check peer=%s fid=%s: %w", peerBankCode, foreignID, checkErr)

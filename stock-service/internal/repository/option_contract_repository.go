@@ -2,9 +2,11 @@ package repository
 
 import (
 	"errors"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/exbanka/stock-service/internal/model"
 )
@@ -158,8 +160,8 @@ func (r *OptionContractRepository) ListByOwner(ownerType model.OwnerType, ownerI
 // ListExpiring returns up to limit ACTIVE contracts past settlement_date.
 //
 // Guard: only local contracts (routing_number == OwnRouting()) are returned.
-// Remote contracts folded in by Tasks 4-6 have their own expiry path via
-// PeerOptionContractRepository and must not enter the local expiry saga.
+// Remote contracts (folded into this table by SP-2a) have their own expiry path
+// via ListRemoteContractsExpiring and must not enter the local expiry saga.
 func (r *OptionContractRepository) ListExpiring(today string, limit int) ([]model.OptionContract, error) {
 	var out []model.OptionContract
 	err := r.db.Where("status = ? AND settlement_date < ? AND routing_number = ?",
@@ -180,4 +182,198 @@ func (r *OptionContractRepository) ListExpiringOn(day time.Time, limit int) ([]m
 		model.OptionContractStatusActive, start, end).
 		Order("id ASC").Limit(limit).Find(&out).Error
 	return out, err
+}
+
+// ---------------------------------------------------------------------------
+// REMOTE (cross-bank) contract rows (SP-2a).
+//
+// These methods are the unified-table replacement for the retired
+// peer-option-contract mirror repository. A remote contract lives in
+// option_contracts with routing_number = <peer routing> (the COUNTERPARTY — the
+// side this bank does NOT host) and native_id = "<crossbank_tx_id>:<posting_index>"
+// (preserving the retired mirror's natural key so UpsertRemoteContract stays
+// idempotent on the (routing_number, native_id) unique index). The cross-bank
+// party/negotiation/direction data lives in the Remote* columns + the shared
+// columns (Quantity/StrikePrice/Ticker/StrikeCurrency/SettlementDate/Status/
+// CrossbankTxID/BuyerBankCode/SellerBankCode).
+//
+// EVERY method below scopes to routing_number != OwnRouting(). This is the SAME
+// guarantee the local-path queries get from their routing_number == OwnRouting()
+// guards: a local row can NEVER satisfy a remote query, and a remote row can
+// NEVER satisfy a local one — so folding the two tables together does not leak
+// remote contracts into the local exercise/expiry sagas.
+// ---------------------------------------------------------------------------
+
+// UpsertRemoteContract inserts the remote contract if its natural key
+// (routing_number, native_id) is new, or returns the existing row unchanged.
+// Idempotent by design (ON CONFLICT DO NOTHING, never SELECT-then-INSERT per the
+// Concurrency requirement) so transaction-service can safely retry COMMIT_TX
+// without producing duplicate option contracts. The caller MUST have set
+// RoutingNumber to the COUNTERPARTY routing and NativeID to
+// "<crossbank_tx_id>:<posting_index>". On a conflict the persisted row (with its
+// surrogate ID) is loaded back into c so the caller has the contract id.
+func (r *OptionContractRepository) UpsertRemoteContract(c *model.OptionContract) error {
+	res := r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "routing_number"}, {Name: "native_id"}},
+		DoNothing: true,
+	}).Create(c)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		// Row already exists — load it so the caller has the persisted ID.
+		var existing model.OptionContract
+		err := r.db.Where("routing_number = ? AND native_id = ? AND routing_number != ?",
+			c.RoutingNumber, c.NativeID, model.OwnRouting()).First(&existing).Error
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return err
+		}
+		*c = existing
+	}
+	return nil
+}
+
+// GetRemoteContractByNegotiationAndDirection locates the remote contract row for
+// a given negotiation reference and direction. Used by the exercise / money-leg
+// validation flows where each bank looks up its own row by the embedded
+// OptionDescription.negotiationId + this side's direction. Returns the row
+// regardless of status; callers check status before transitioning. Scoped to
+// routing_number != OwnRouting() so a local row can never be returned.
+func (r *OptionContractRepository) GetRemoteContractByNegotiationAndDirection(
+	negRouting int64, negNative, direction string,
+) (*model.OptionContract, error) {
+	var c model.OptionContract
+	err := r.db.Where(
+		"remote_negotiation_routing = ? AND remote_negotiation_native_id = ? AND remote_direction = ? AND routing_number != ?",
+		negRouting, negNative, direction, model.OwnRouting(),
+	).First(&c).Error
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// GetRemoteContractByID loads a remote contract by primary key. Returns
+// gorm.ErrRecordNotFound when the matched row is LOCAL (routing == own), so the
+// remote read paths can never surface a local contract.
+func (r *OptionContractRepository) GetRemoteContractByID(id uint64) (*model.OptionContract, error) {
+	var c model.OptionContract
+	err := r.db.First(&c, id).Error
+	if err != nil {
+		return nil, err
+	}
+	if c.RoutingNumber == model.OwnRouting() {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &c, nil
+}
+
+// SetRemoteContractStatus transitions a remote contract to a new status. Scoped
+// to routing_number != OwnRouting(). SkipHooks: this is a targeted column UPDATE
+// on a REMOTE row — the model's BeforeSave runs ValidateOwner against the
+// (zero-value) struct's owner columns and BeforeUpdate adds a version guard,
+// neither meaningful for a column-scoped remote-row flip; BeforeSave would
+// spuriously reject with "invalid owner_type" (the Task-5 hazard).
+func (r *OptionContractRepository) SetRemoteContractStatus(id uint64, newStatus string) error {
+	return r.db.Session(&gorm.Session{SkipHooks: true}).
+		Model(&model.OptionContract{}).
+		Where("id = ? AND routing_number != ?", id, model.OwnRouting()).
+		Updates(map[string]any{"status": newStatus, "updated_at": time.Now().UTC()}).Error
+}
+
+// CompareAndSetRemoteContractStatus atomically transitions a remote contract
+// from `from` to `to` in one guarded UPDATE, returning true iff exactly one row
+// matched. Same semantics as the retired CompareAndSetStatus: it claims a
+// contract for exercise (active → exercising) so of two concurrent exercise
+// attempts only one observes a match and dispatches the strike payment — the
+// loser is rejected, preventing a double charge. The WHERE status guard IS the
+// concurrency control. SkipHooks for the same reason as SetRemoteContractStatus.
+func (r *OptionContractRepository) CompareAndSetRemoteContractStatus(id uint64, from, to string) (bool, error) {
+	res := r.db.Session(&gorm.Session{SkipHooks: true}).
+		Model(&model.OptionContract{}).
+		Where("id = ? AND status = ? AND routing_number != ?", id, from, model.OwnRouting()).
+		Updates(map[string]any{"status": to, "updated_at": time.Now().UTC()})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// HasRemoteContractForNegotiation returns true if at least one remote contract
+// row exists for the given negotiation reference. Used by the reconciler to
+// distinguish an ACCEPTED negotiation (contract formed) from a CANCELLED one
+// (no contract). Scoped to routing_number != OwnRouting().
+func (r *OptionContractRepository) HasRemoteContractForNegotiation(negRouting int64, negNative string) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.OptionContract{}).
+		Where("remote_negotiation_routing = ? AND remote_negotiation_native_id = ? AND routing_number != ?",
+			negRouting, negNative, model.OwnRouting()).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// ListRemoteContractsExpiring returns up to limit ACTIVE remote contracts whose
+// settlement_date is strictly before `today` (a "YYYY-MM-DD" date string; the
+// SettlementDate date column compares correctly against it in Postgres). Used by
+// the daily expiry cron's cross-bank pass. Scoped to routing_number !=
+// OwnRouting() so remote rows are processed ONLY here and never enter the local
+// expiry saga (and vice-versa). Status filtered on the PEER vocabulary "active".
+func (r *OptionContractRepository) ListRemoteContractsExpiring(today string, limit int) ([]model.OptionContract, error) {
+	var out []model.OptionContract
+	err := r.db.Where("status = ? AND settlement_date < ? AND routing_number != ?",
+		"active", today, model.OwnRouting()).
+		Order("id ASC").Limit(limit).Find(&out).Error
+	return out, err
+}
+
+// ListRemoteContractsByLocalParticipant returns remote rows where the user is a
+// participant on THIS bank's side of the contract: a CREDIT row keyed on the
+// user when this bank holds the buyer, or a DEBIT row keyed on the user when
+// this bank holds the seller. participantID is the SI-TX participant identifier
+// (e.g. "client-1"); ownRouting is the local bank's routing used as the side
+// discriminator (matched against the COUNTERPARTY routing stored in
+// buyer_bank_code/seller_bank_code). role can be "buyer", "seller", or anything
+// else (= "either"). Pagination is 1-based; pageSize <= 0 disables the limit.
+// Scoped to routing_number != OwnRouting().
+func (r *OptionContractRepository) ListRemoteContractsByLocalParticipant(
+	participantID string, ownRouting int64, role string, page, pageSize int,
+) ([]model.OptionContract, int64, error) {
+	own := strconv.FormatInt(ownRouting, 10)
+	q := r.db.Model(&model.OptionContract{}).Where("routing_number != ?", model.OwnRouting())
+	switch role {
+	case "buyer":
+		q = q.Where("remote_direction = ? AND buyer_bank_code = ? AND remote_buyer_id = ?", "CREDIT", own, participantID)
+	case "seller":
+		q = q.Where("remote_direction = ? AND seller_bank_code = ? AND remote_seller_id = ?", "DEBIT", own, participantID)
+	default:
+		q = q.Where(
+			"(remote_direction = ? AND buyer_bank_code = ? AND remote_buyer_id = ?) OR (remote_direction = ? AND seller_bank_code = ? AND remote_seller_id = ?)",
+			"CREDIT", own, participantID,
+			"DEBIT", own, participantID,
+		)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if pageSize > 0 {
+		offset := (page - 1) * pageSize
+		if offset < 0 {
+			offset = 0
+		}
+		q = q.Order("id DESC").Offset(offset).Limit(pageSize)
+	} else {
+		q = q.Order("id DESC")
+	}
+	var rows []model.OptionContract
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
 }

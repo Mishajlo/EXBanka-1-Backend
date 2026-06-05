@@ -62,10 +62,50 @@ type OptionContract struct {
 	// The fund's manager is the acting employee. On exercise, the acquired
 	// shares are credited to fund_holdings instead of the buyer's personal
 	// holdings.
-	OnBehalfOfFundID *uint64   `gorm:"index" json:"on_behalf_of_fund_id,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	Version          int64     `gorm:"not null;default:0" json:"-"`
+	OnBehalfOfFundID *uint64 `gorm:"index" json:"on_behalf_of_fund_id,omitempty"`
+
+	// Remote-mirror columns (SP-2a). Populated ONLY on REMOTE rows
+	// (routing_number != OwnRouting()), folded in from the retired
+	// peer_option_contract mirror. NULL/zero on local rows. The cross-bank
+	// option-formation / exercise / expiry flows (RecordOptionContract,
+	// InitiateOptionExercise, the SI-TX validators, the daily expiry cron)
+	// read & write ONLY these columns + the shared Status column; the local
+	// money paths are routing-guarded (Task 3) so they never observe them.
+	//
+	//   RemotePostingIndex          — the SI-TX posting ordinal that produced
+	//                                 this row. (crossbank_tx_id, posting_index)
+	//                                 was the retired mirror's natural key; it is
+	//                                 preserved inside native_id as
+	//                                 "<crossbank_tx_id>:<posting_index>" so
+	//                                 UpsertRemoteContract stays idempotent on the
+	//                                 (routing_number, native_id) unique index.
+	//   RemoteNegotiationRouting /
+	//   RemoteNegotiationNativeID   — the originating negotiation reference
+	//                                 (OptionDescription.negotiationId). The
+	//                                 exercise / money-leg validators look the
+	//                                 contract up by this + RemoteDirection.
+	//   RemoteDirection             — "DEBIT" (this bank holds the SELLER) or
+	//                                 "CREDIT" (this bank holds the BUYER).
+	//   RemoteBuyerID / RemoteSellerID — SI-TX participant ids ("client-<n>" /
+	//                                 "bank"); the buyer/seller routing live in
+	//                                 BuyerBankCode/SellerBankCode (as strings).
+	//
+	// The shared columns carry the rest: Quantity (decimal of the int qty),
+	// StrikePrice, Ticker, StrikeCurrency (the option currency), SettlementDate
+	// (parsed time), CrossbankTxID, BuyerBankCode/SellerBankCode (peer routings
+	// as strings) and Status (the PEER status vocabulary "active"/"exercised"/
+	// "exercising"/"expired" as-is — the SP-1 read shaping tolerates it; local
+	// guarded code only ever sees the local uppercase statuses).
+	RemotePostingIndex        *int32  `json:"-"`
+	RemoteNegotiationRouting  *int64  `gorm:"index:idx_oc_remote_neg,priority:1" json:"-"`
+	RemoteNegotiationNativeID *string `gorm:"size:128;index:idx_oc_remote_neg,priority:2" json:"-"`
+	RemoteDirection           *string `gorm:"size:8" json:"-"`
+	RemoteBuyerID             *string `gorm:"size:128" json:"-"`
+	RemoteSellerID            *string `gorm:"size:128" json:"-"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Version   int64     `gorm:"not null;default:0" json:"-"`
 }
 
 // BeforeCreate stamps the own routing number on local rows. Remote rows

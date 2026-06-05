@@ -90,7 +90,7 @@ type contractCheckCall struct {
 	negID   string
 }
 
-func (f *fakeContractChecker) HasContractForNegotiation(routing int64, negID string) (bool, error) {
+func (f *fakeContractChecker) HasRemoteContractForNegotiation(routing int64, negID string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, contractCheckCall{routing, negID})

@@ -1161,7 +1161,12 @@ func (s *HoldingReservationService) ExerciseBuyerCreditForPeerOption(
 		return status.Error(codes.InvalidArgument, "qty must be > 0")
 	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		var contract model.PeerOptionContract
+		// The cross-bank contract now lives in the unified option_contracts table
+		// as a REMOTE row (routing_number != ownRouting); peerOptionContractID is
+		// its surrogate primary key. Lock the row, read status off the shared
+		// Status column (which carries the PEER vocabulary "active"/"exercising"/
+		// "exercised" on remote rows).
+		var contract model.OptionContract
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&contract, peerOptionContractID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return status.Error(codes.FailedPrecondition, "peer option contract not found")
@@ -1179,9 +1184,13 @@ func (s *HoldingReservationService) ExerciseBuyerCreditForPeerOption(
 		if err := creditBuyerHoldingTx(tx, ownerType, ownerID, ticker, qty, strikePrice); err != nil {
 			return err
 		}
-		return tx.Model(&model.PeerOptionContract{}).
+		// SkipHooks: targeted status flip on a REMOTE row — BeforeSave's
+		// ValidateOwner would reject the zero-value struct's owner columns and
+		// BeforeUpdate's version guard is irrelevant for this column-scoped update.
+		return tx.Session(&gorm.Session{SkipHooks: true}).
+			Model(&model.OptionContract{}).
 			Where("id = ?", contract.ID).
-			Update("status", "exercised").Error
+			Updates(map[string]any{"status": "exercised", "updated_at": time.Now().UTC()}).Error
 	})
 }
 

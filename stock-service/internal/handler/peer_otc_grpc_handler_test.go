@@ -2,7 +2,9 @@ package handler_test
 
 import (
 	"context"
+	"strconv"
 	"testing"
+	"time"
 
 	stockpb "github.com/exbanka/contract/stockpb"
 	transactionpb "github.com/exbanka/contract/transactionpb"
@@ -90,16 +92,76 @@ func newPeerOtcHandler(t *testing.T) (*handler.PeerOTCGRPCHandler, *gorm.DB, *fa
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	// SP-2a: remote negotiations live in the unified otc_negotiations table.
+	// SP-2a: remote negotiations AND remote option contracts live in the
+	// unified otc_negotiations / option_contracts tables.
 	model.SetOwnRouting("111")
-	if err := db.AutoMigrate(&model.OTCNegotiation{}, &model.PeerOptionContract{}); err != nil {
+	if err := db.AutoMigrate(&model.OTCNegotiation{}, &model.OptionContract{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	repo := repository.NewOTCNegotiationRepository(db)
-	optRepo := repository.NewPeerOptionContractRepository(db)
+	optRepo := repository.NewOptionContractRepository(db)
 	holdings := &fakeHoldingReader{}
 	peerTx := &fakePeerTxClient{}
 	return handler.NewPeerOTCGRPCHandler(repo, optRepo, holdings, peerTx, 111), db, peerTx, holdings
+}
+
+// seedRemoteContractRow builds a REMOTE model.OptionContract for handler tests
+// (SP-2a fold). routing is the COUNTERPARTY (peer) routing; native_id is
+// "<crossbank_tx_id>:<posting_index>". qty is the int amount (stored as a
+// decimal). All NOT-NULL / CHECK / ValidateOwner constraints are satisfied
+// (OwnerBank + nil owner ids).
+func seedRemoteContractRow(
+	routing int64, crossbankTxID string, postingIndex int32, direction string,
+	negRouting int64, negNative string,
+	buyerRouting int64, buyerID string, sellerRouting int64, sellerID string,
+	ticker string, qty int64, strike decimal.Decimal, currency, settle, status string,
+) *model.OptionContract {
+	native := crossbankTxID + ":" + strconv.FormatInt(int64(postingIndex), 10)
+	bbc := strconv.FormatInt(buyerRouting, 10)
+	sbc := strconv.FormatInt(sellerRouting, 10)
+	cbTx := crossbankTxID
+	pIdx := postingIndex
+	nr := negRouting
+	nn := negNative
+	dir := direction
+	bID := buyerID
+	sID := sellerID
+	settleTime := time.Now().UTC()
+	if settle != "" {
+		if tt, e := time.Parse(time.RFC3339, settle); e == nil {
+			settleTime = tt
+		} else if tt, e := time.Parse("2006-01-02", settle); e == nil {
+			settleTime = tt
+		}
+	}
+	now := time.Now().UTC()
+	return &model.OptionContract{
+		RoutingNumber:             routing,
+		NativeID:                  &native,
+		BuyerOwnerType:            model.OwnerBank,
+		BuyerBankCode:             &bbc,
+		SellerOwnerType:           model.OwnerBank,
+		SellerBankCode:            &sbc,
+		Ticker:                    ticker,
+		Quantity:                  decimal.NewFromInt(qty),
+		StrikePrice:               strike,
+		PremiumPaid:               decimal.Zero,
+		PremiumCurrency:           currency,
+		StrikeCurrency:            currency,
+		SettlementDate:            settleTime,
+		Status:                    status,
+		SagaID:                    crossbankTxID,
+		PremiumPaidAt:             now,
+		CrossbankTxID:             &cbTx,
+		RemotePostingIndex:        &pIdx,
+		RemoteNegotiationRouting:  &nr,
+		RemoteNegotiationNativeID: &nn,
+		RemoteDirection:           &dir,
+		RemoteBuyerID:             &bID,
+		RemoteSellerID:            &sID,
+		CreatedAt:                 now,
+		UpdatedAt:                 now,
+	}
 }
 
 func TestPeerOTC_CreateAndGet(t *testing.T) {
@@ -390,16 +452,14 @@ func TestPeerOTC_AcceptNegotiation_DispatchesViaPeerTx(t *testing.T) {
 // and accept-intent legs are not (yet) enforced.
 func TestValidatePeerOptionMoneyLeg_ForgedStrike(t *testing.T) {
 	h, db, _, _ := newPeerOtcHandler(t) // ownRouting 111
-	// Stored seller-side contract: 2 MA @ strike 250 RSD → honest exercise pays 500.
-	if err := db.Create(&model.PeerOptionContract{
-		CrossbankTxID: "seed:1", PostingIndex: 0,
-		NegotiationRoutingNumber: 111, NegotiationID: "neg-1",
-		BuyerRoutingNumber: 222, BuyerID: "client-9",
-		SellerRoutingNumber: 111, SellerID: "client-1",
-		Ticker: "MA", Quantity: 2, StrikePrice: decimal.NewFromInt(250),
-		Currency: "RSD", SettlementDate: "2028-06-30T00:00:00Z",
-		Direction: "DEBIT", Status: "active",
-	}).Error; err != nil {
+	// Stored seller-side REMOTE contract: 2 MA @ strike 250 RSD → honest exercise
+	// pays 500. We host the seller (111, DEBIT); the buyer's bank (222) is the
+	// counterparty, so the remote row's routing_number=222.
+	if err := db.Create(seedRemoteContractRow(
+		222, "seed:1", 0, "DEBIT", 111, "neg-1",
+		222, "client-9", 111, "client-1",
+		"MA", 2, decimal.NewFromInt(250), "RSD", "2028-06-30T00:00:00Z", "active",
+	)).Error; err != nil {
 		t.Fatalf("seed contract: %v", err)
 	}
 	base := func(money string) *stockpb.ValidatePeerOptionMoneyLegRequest {
@@ -433,7 +493,7 @@ func TestValidatePeerOptionMoneyLeg_ForgedStrike(t *testing.T) {
 	}
 	// Replay defense: once the contract is exercised, even an honest-amount
 	// exercise must be denied (a forged second exercise would double-charge).
-	if err := db.Model(&model.PeerOptionContract{}).Where("negotiation_id = ?", "neg-1").Update("status", "exercised").Error; err != nil {
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Model(&model.OptionContract{}).Where("remote_negotiation_native_id = ?", "neg-1").Update("status", "exercised").Error; err != nil {
 		t.Fatalf("mark exercised: %v", err)
 	}
 	if r, _ := h.ValidatePeerOptionMoneyLeg(ctx, base("500")); r.GetOk() {

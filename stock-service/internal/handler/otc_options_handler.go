@@ -28,8 +28,8 @@ type OTCOptionsHandler struct {
 	stockpb.UnimplementedOTCOptionsServiceServer
 	svc           *service.OTCOfferService
 	contracts     *repository.OptionContractRepository
-	peerContracts *repository.PeerOptionContractRepository // optional; surfaces cross-bank contracts in /me/otc/contracts
-	listings      *repository.ListingRepository            // optional; populates market_reference_price
+	peerContracts *repository.OptionContractRepository // optional; surfaces cross-bank (remote) contracts in /me/otc/contracts
+	listings      *repository.ListingRepository        // optional; populates market_reference_price
 	ownRouting    int64
 	ratings       *service.OTCRatingService      // optional; backs SubmitRating / GetTraderProfile / ListReceivedRatings
 	negotiations  *service.OTCNegotiationService // optional; backs Phase-2 parallel-chain RPCs (Open/Counter/AcceptChain/Reject/Cancel/List*)
@@ -81,10 +81,10 @@ func (h *OTCOptionsHandler) WithRatings(r *service.OTCRatingService) *OTCOptions
 	return &cp
 }
 
-// WithPeerContracts wires the cross-bank option-contracts repository
-// and this bank's routing number so ListMyContracts can also return
-// peer_option_contracts rows where the caller is a participant.
-func (h *OTCOptionsHandler) WithPeerContracts(peer *repository.PeerOptionContractRepository, ownRouting int64) *OTCOptionsHandler {
+// WithPeerContracts wires the option-contracts repository and this bank's
+// routing number so ListMyContracts can also return cross-bank (remote)
+// option_contracts rows where the caller is a participant.
+func (h *OTCOptionsHandler) WithPeerContracts(peer *repository.OptionContractRepository, ownRouting int64) *OTCOptionsHandler {
 	cp := *h
 	cp.peerContracts = peer
 	cp.ownRouting = ownRouting
@@ -591,7 +591,7 @@ func (h *OTCOptionsHandler) ListMyContracts(ctx context.Context, in *stockpb.Lis
 	// Contracts[] is the single source of truth (SP-1 double-listing fix).
 	if h.peerContracts != nil && ownerType == model.OwnerClient && ownerID != nil {
 		participantID := "client-" + strconv.FormatUint(*ownerID, 10)
-		peerRows, _, perr := h.peerContracts.ListByLocalParticipant(participantID, h.ownRouting, in.Role, int(in.Page), int(in.PageSize))
+		peerRows, _, perr := h.peerContracts.ListRemoteContractsByLocalParticipant(participantID, h.ownRouting, in.Role, int(in.Page), int(in.PageSize))
 		if perr != nil {
 			return nil, status.Errorf(codes.Internal, "list peer contracts: %v", perr)
 		}
@@ -603,43 +603,43 @@ func (h *OTCOptionsHandler) ListMyContracts(ctx context.Context, in *stockpb.Lis
 	return out, nil
 }
 
-// peerContractToUnifiedProto maps a cross-bank PeerOptionContract row onto the
-// unified OptionContractResponse wire shape (SP-1 Task 8).
+// peerContractToUnifiedProto maps a cross-bank (remote) OptionContract row onto
+// the unified OptionContractResponse wire shape (SP-1 Task 8).
 //
-//   - Id is the local surrogate primary key of the mirror row (so callers can
+//   - Id is the surrogate primary key of the remote row (so callers can
 //     correlate within THIS bank's namespace).
 //   - kind = "remote"; routing_number + bank_code identify the COUNTERPARTY
-//     peer bank — the side WE do NOT host. When Direction=="CREDIT" we host the
-//     buyer, so the counterparty is the SELLER's bank (SellerRoutingNumber);
-//     otherwise (DEBIT) we host the seller, so the counterparty is the BUYER's
-//     bank (BuyerRoutingNumber).
-//   - bank_code is the counterparty's routing number formatted as a string —
-//     PeerOptionContract carries NO separate bank-code field, so the routing
-//     number is the only available code here.
-//   - me_owner = Direction=="CREDIT": a CREDIT row means this bank holds the
-//     BUYER side, and the buyer/holder owns the formed option asset.
-func peerContractToUnifiedProto(p *model.PeerOptionContract) *stockpb.OptionContractResponse {
-	meOwner := p.Direction == "CREDIT"
-	// Counterparty is the side we do NOT host: seller when we host the buyer,
-	// buyer when we host the seller.
-	counterpartyRouting := p.BuyerRoutingNumber
-	if meOwner {
-		counterpartyRouting = p.SellerRoutingNumber
-	}
+//     peer bank — the side WE do NOT host. When RemoteDirection=="CREDIT" we
+//     host the buyer, so the counterparty is the SELLER's bank; otherwise
+//     (DEBIT) we host the seller, so the counterparty is the BUYER's bank. The
+//     remote row already stamps its RoutingNumber as the counterparty, so we use
+//     it directly.
+//   - The buyer/seller routings live in the BuyerBankCode/SellerBankCode columns
+//     (peer routings as strings); the participant ids live in the Remote* columns.
+//   - me_owner = RemoteDirection=="CREDIT": a CREDIT row means this bank holds
+//     the BUYER side, and the buyer/holder owns the formed option asset.
+func peerContractToUnifiedProto(p *model.OptionContract) *stockpb.OptionContractResponse {
+	direction := remoteContractDirection(p)
+	meOwner := direction == "CREDIT"
+	// The remote row's RoutingNumber IS the counterparty (the side we do NOT
+	// host) by construction (buildRemoteContract).
+	counterpartyRouting := p.RoutingNumber
+	buyerRouting := remoteContractBuyerRouting(p)
+	sellerRouting := remoteContractSellerRouting(p)
 	return &stockpb.OptionContractResponse{
 		Id:             p.ID,
 		StockTicker:    p.Ticker,
-		Quantity:       strconv.FormatInt(p.Quantity, 10),
+		Quantity:       strconv.FormatInt(remoteContractQuantityInt(p), 10),
 		StrikePrice:    p.StrikePrice.String(),
-		StrikeCurrency: p.Currency,
-		SettlementDate: p.SettlementDate,
+		StrikeCurrency: p.StrikeCurrency,
+		SettlementDate: remoteContractSettlementString(p),
 		Status:         p.Status,
 		CreatedAt:      p.CreatedAt.UTC().Format(time.RFC3339),
 		// Cross-bank parties carry no local user_id/system_type. Surface the
 		// SI-TX participant id as the display name and the routing-derived code
 		// as bank_code (the wire shape has no separate routing field on PartyRef).
-		Buyer:         &stockpb.PartyRef{DisplayName: p.BuyerID, BankCode: strconv.FormatInt(p.BuyerRoutingNumber, 10)},
-		Seller:        &stockpb.PartyRef{DisplayName: p.SellerID, BankCode: strconv.FormatInt(p.SellerRoutingNumber, 10)},
+		Buyer:         &stockpb.PartyRef{DisplayName: remoteContractBuyerID(p), BankCode: strconv.FormatInt(buyerRouting, 10)},
+		Seller:        &stockpb.PartyRef{DisplayName: remoteContractSellerID(p), BankCode: strconv.FormatInt(sellerRouting, 10)},
 		Kind:          "remote",
 		RoutingNumber: counterpartyRouting,
 		BankCode:      strconv.FormatInt(counterpartyRouting, 10),
@@ -707,7 +707,7 @@ func (h *OTCOptionsHandler) resolveRemoteContract(id uint64, actorUserID int64, 
 	if h.peerContracts == nil {
 		return nil, gorm.ErrRecordNotFound
 	}
-	p, err := h.peerContracts.GetByID(id)
+	p, err := h.peerContracts.GetRemoteContractByID(id)
 	if err != nil {
 		return nil, err
 	}
@@ -728,12 +728,12 @@ func (h *OTCOptionsHandler) resolveRemoteContract(id uint64, actorUserID int64, 
 	// "" means the caller has no SI-TX identity → never a participant.
 
 	var localContractPartyID string
-	if p.Direction == "CREDIT" {
+	if remoteContractDirection(p) == "CREDIT" {
 		// This bank hosts the BUYER side.
-		localContractPartyID = p.BuyerID
+		localContractPartyID = remoteContractBuyerID(p)
 	} else {
 		// This bank hosts the SELLER side.
-		localContractPartyID = p.SellerID
+		localContractPartyID = remoteContractSellerID(p)
 	}
 
 	if localPartyID == "" || localPartyID != localContractPartyID {

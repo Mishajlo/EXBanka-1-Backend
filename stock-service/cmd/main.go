@@ -132,13 +132,13 @@ func main() {
 		&model.PriceAlert{},
 		&model.RecurringOrder{},
 		&model.RecurringFundInvestment{},
-		// SP-2a: cross-bank (REMOTE) OTC negotiations are folded into the
-		// unified OTCNegotiation table (routing_number=<peer>, native_id=
-		// <peer foreign id>) — the dedicated peer_otc_negotiation mirror
-		// was retired. PeerOTCGRPCHandler writes the Remote* columns.
-		// Cross-bank option contracts written at COMMIT_TX time
-		// when transaction-service finalises an OTC accept TX.
-		&model.PeerOptionContract{},
+		// SP-2a: cross-bank (REMOTE) OTC negotiations AND option contracts are
+		// folded into the unified OTCNegotiation / OptionContract tables
+		// (routing_number=<peer/counterparty>, native_id=<peer key>) — the
+		// dedicated peer_otc_negotiation + peer_option_contract mirrors were
+		// retired. PeerOTCGRPCHandler writes the Remote* columns; remote contract
+		// rows are written at COMMIT_TX time when transaction-service finalises an
+		// OTC accept TX.
 		// Outbox: durable queue for Kafka events published from inside
 		// sagas. The drainer goroutine (started below) reads pending rows
 		// and publishes them, so a crash between business commit and
@@ -852,7 +852,13 @@ func main() {
 	// same OTCNegotiationRepository the local negotiation flows use (its
 	// remote-scoped methods key on routing_number != OwnRouting()).
 	otcNegRepo := repository.NewOTCNegotiationRepository(db)
-	peerOptionRepo := repository.NewPeerOptionContractRepository(db)
+	// SP-2a: cross-bank (REMOTE) option contracts are folded into the unified
+	// OptionContract table (routing_number=<counterparty>, native_id=
+	// "<crossbank_tx_id>:<posting_index>") — the dedicated peer_option_contract
+	// mirror was retired. The peer-OTC handler / reconciler / expiry cron /
+	// stale-scan all use the same OptionContractRepository the local contract
+	// flows use (its remote-scoped methods key on routing_number != OwnRouting()).
+	peerOptionRepo := optionContractRepo
 
 	// SP-1 Task 9 — safety-net reconciler for missed cross-bank negotiation
 	// state changes. Polls each active peer's GET /negotiations/{rid}/{id}
@@ -925,11 +931,11 @@ func main() {
 	otcExpiry.Start(ctx)
 
 	// Fix R8 (2026-05-16) — daily safety-net scan: any holding_reservation
-	// stuck `active` past 24h whose linked entity (Order / OptionContract /
-	// PeerOptionContract) is in a terminal state gets logged at WARN for
-	// operator follow-up. Does NOT auto-release (risk of yanking the lock
-	// out from under a long-running saga). Run in a background goroutine
-	// that honors ctx cancellation.
+	// stuck `active` past 24h whose linked entity (Order / local or remote
+	// OptionContract) is in a terminal state gets logged at WARN for operator
+	// follow-up. Does NOT auto-release (risk of yanking the lock out from under
+	// a long-running saga). Run in a background goroutine that honors ctx
+	// cancellation.
 	staleScan := service.NewStaleReservationScanner(db, holdingReservationRepo, orderRepo, optionContractRepo, 24*time.Hour, 24*time.Hour, cronRegistry).
 		WithPeerContracts(peerOptionRepo)
 	go staleScan.Run(ctx)
