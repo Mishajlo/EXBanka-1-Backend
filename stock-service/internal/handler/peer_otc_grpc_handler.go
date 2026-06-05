@@ -1813,6 +1813,17 @@ func (h *PeerOTCGRPCHandler) InitiateOptionExercise(ctx context.Context, req *st
 	if remoteContractDirection(contract) != contractsitx.DirectionCredit {
 		return nil, status.Error(codes.FailedPrecondition, "this bank does not hold the buyer side of the contract; only the buyer's bank can initiate exercise")
 	}
+	// Expiry pre-check (mirrors the LOCAL exercise path). Reject an exercise on
+	// an expired contract BEFORE claiming it. Without this, the buyer's bank
+	// claimed (active → exercising) and dispatched the SI-TX; the seller's bank
+	// correctly votes NO (optionExpired) so no money moves, but the NO vote is a
+	// valid protocol outcome (not a transport error), so the claim was never
+	// reverted and the buyer-side contract was left stuck in "exercising"
+	// (verified live 2026-06-05). Gating here keeps the contract "active" and
+	// returns a clean 409. settlement_date <= today => expired.
+	if !contract.SettlementDate.After(time.Now().UTC().Truncate(24 * time.Hour)) {
+		return nil, status.Error(codes.FailedPrecondition, "contract has expired (settlement_date <= today)")
+	}
 	contractQty := remoteContractQuantityInt(contract)
 	// Atomically claim the contract for exercise (active → exercising). This is
 	// the concurrency guard: of two simultaneous exercise attempts only one wins
