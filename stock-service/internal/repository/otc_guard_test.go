@@ -1,0 +1,592 @@
+// Package repository — routing-number guard tests.
+//
+// Every method that feeds LOCAL-ONLY money paths (accept, cascade, expiry,
+// exercise) must filter to routing_number == OwnRouting() so remote rows
+// that land in the unified tables (Tasks 4-6) can NEVER enter those paths.
+//
+// Setup: sqlite :memory:, OwnRouting = 111.
+// Seed one LOCAL offer/negotiation/contract (routing 111 via BeforeCreate)
+// and one REMOTE offer/negotiation/contract (routing 222, set explicitly).
+package repository
+
+import (
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/shopspring/decimal"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+
+	"github.com/exbanka/stock-service/internal/model"
+)
+
+// newGuardTestDB opens a sqlite :memory: DB and auto-migrates the three
+// models under test. It also calls model.SetOwnRouting("111") so that
+// BeforeCreate hooks stamp local rows with routing_number = 111.
+func newGuardTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	model.SetOwnRouting("111")
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("guard test: open sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&model.OTCOffer{},
+		&model.OTCNegotiation{},
+		&model.OptionContract{},
+	); err != nil {
+		t.Fatalf("guard test: migrate: %v", err)
+	}
+	return db
+}
+
+// seedGuardFixtures inserts:
+//   - localOffer  — routing 111 (via BeforeCreate), status open
+//   - remoteOffer — routing 222 (explicit), status open, distinct NativeID
+//   - localNeg    — routing 111, bidder=client/1, status open
+//   - remoteNeg   — routing 222, bidder=client/2, status open, distinct NativeID
+//   - localContract  — routing 111, status ACTIVE
+//   - remoteContract — routing 222, status ACTIVE, distinct NativeID
+//
+// Returns the IDs in that order so tests can reference them directly.
+func seedGuardFixtures(t *testing.T, db *gorm.DB) (
+	localOfferID, remoteOfferID uint64,
+	localNegID, remoteNegID uint64,
+	localContractID, remoteContractID uint64,
+) {
+	t.Helper()
+
+	futureDate := time.Now().UTC().AddDate(0, 3, 0)
+	pastDate := time.Now().UTC().AddDate(0, -1, -1) // already past → eligible for expiry
+
+	bidder1 := uint64(1)
+	bidder2 := uint64(2)
+	stockID := uint64(99)
+
+	// ---- OTCOffer: LOCAL (BeforeCreate stamps 111) ----
+	localOffer := &model.OTCOffer{
+		InitiatorOwnerType:          model.OwnerClient,
+		InitiatorOwnerID:            &bidder1,
+		Direction:                   model.OTCDirectionSellInitiated,
+		StockID:                     stockID,
+		Ticker:                      "TST",
+		Quantity:                    decimal.NewFromInt(10),
+		StrikePrice:                 decimal.NewFromFloat(100),
+		Premium:                     decimal.NewFromFloat(5),
+		SettlementDate:              pastDate, // past → eligible for ListExpiringOffers
+		Status:                      model.OTCOfferStatusPending,
+		LastModifiedByPrincipalType: "client",
+		LastModifiedByPrincipalID:   1,
+	}
+	if err := db.Create(localOffer).Error; err != nil {
+		t.Fatalf("seed localOffer: %v", err)
+	}
+	localOfferID = localOffer.ID
+
+	// ---- OTCOffer: REMOTE (explicit routing 222) ----
+	remoteNativeID := "remote-offer-1"
+	remoteOffer := &model.OTCOffer{
+		RoutingNumber:               222,
+		NativeID:                    &remoteNativeID,
+		InitiatorOwnerType:          model.OwnerClient,
+		InitiatorOwnerID:            &bidder2,
+		Direction:                   model.OTCDirectionSellInitiated,
+		StockID:                     stockID,
+		Ticker:                      "TST",
+		Quantity:                    decimal.NewFromInt(10),
+		StrikePrice:                 decimal.NewFromFloat(100),
+		Premium:                     decimal.NewFromFloat(5),
+		SettlementDate:              pastDate, // also past → should be EXCLUDED by guarded ListExpiringOffers
+		Status:                      model.OTCOfferStatusPending,
+		LastModifiedByPrincipalType: "client",
+		LastModifiedByPrincipalID:   2,
+	}
+	if err := db.Create(remoteOffer).Error; err != nil {
+		t.Fatalf("seed remoteOffer: %v", err)
+	}
+	remoteOfferID = remoteOffer.ID
+
+	// Also insert an open-status offer for the ListOpenForCache tests.
+	// Use same local/remote distinction.
+	localOpenNativeID := "local-open-offer"
+	localOpenOffer := &model.OTCOffer{
+		NativeID:                    &localOpenNativeID,
+		InitiatorOwnerType:          model.OwnerClient,
+		InitiatorOwnerID:            &bidder1,
+		Direction:                   model.OTCDirectionSellInitiated,
+		StockID:                     stockID,
+		Ticker:                      "TST",
+		Quantity:                    decimal.NewFromInt(10),
+		StrikePrice:                 decimal.NewFromFloat(100),
+		Premium:                     decimal.NewFromFloat(5),
+		SettlementDate:              futureDate,
+		Status:                      model.OTCOfferStatusOpen,
+		LastModifiedByPrincipalType: "client",
+		LastModifiedByPrincipalID:   1,
+	}
+	if err := db.Create(localOpenOffer).Error; err != nil {
+		t.Fatalf("seed localOpenOffer: %v", err)
+	}
+
+	remoteOpenNativeID := "remote-open-offer"
+	remoteOpenOffer := &model.OTCOffer{
+		RoutingNumber:               222,
+		NativeID:                    &remoteOpenNativeID,
+		InitiatorOwnerType:          model.OwnerClient,
+		InitiatorOwnerID:            &bidder2,
+		Direction:                   model.OTCDirectionSellInitiated,
+		StockID:                     stockID,
+		Ticker:                      "TST",
+		Quantity:                    decimal.NewFromInt(10),
+		StrikePrice:                 decimal.NewFromFloat(100),
+		Premium:                     decimal.NewFromFloat(5),
+		SettlementDate:              futureDate,
+		Status:                      model.OTCOfferStatusOpen,
+		LastModifiedByPrincipalType: "client",
+		LastModifiedByPrincipalID:   2,
+	}
+	if err := db.Create(remoteOpenOffer).Error; err != nil {
+		t.Fatalf("seed remoteOpenOffer: %v", err)
+	}
+
+	// ---- OTCNegotiation: LOCAL (BeforeCreate stamps 111) ----
+	localNeg := &model.OTCNegotiation{
+		ParentOfferID:             localOffer.ID,
+		BidderOwnerType:           model.OwnerClient,
+		BidderOwnerID:             &bidder1,
+		BidderAccountID:           10,
+		Quantity:                  decimal.NewFromInt(10),
+		StrikePrice:               decimal.NewFromFloat(100),
+		Premium:                   decimal.NewFromFloat(5),
+		SettlementDate:            futureDate,
+		Status:                    model.OTCNegotiationStatusOpen,
+		LastActionByPrincipalType: "client",
+		LastActionByPrincipalID:   1,
+		LastActionByOwnerType:     "client",
+		LastActionByOwnerID:       &bidder1,
+		LastActionAt:              time.Now().UTC(),
+	}
+	if err := db.Create(localNeg).Error; err != nil {
+		t.Fatalf("seed localNeg: %v", err)
+	}
+	localNegID = localNeg.ID
+
+	// ---- OTCNegotiation: REMOTE (explicit routing 222) ----
+	// Uses a different NativeID to avoid the unique index on (routing, native_id).
+	remoteNegNativeID := "remote-neg-1"
+	remoteNeg := &model.OTCNegotiation{
+		RoutingNumber:             222,
+		NativeID:                  &remoteNegNativeID,
+		ParentOfferID:             localOffer.ID, // same parent so cascade tests work
+		BidderOwnerType:           model.OwnerClient,
+		BidderOwnerID:             &bidder2,
+		BidderAccountID:           20,
+		Quantity:                  decimal.NewFromInt(10),
+		StrikePrice:               decimal.NewFromFloat(100),
+		Premium:                   decimal.NewFromFloat(5),
+		SettlementDate:            futureDate,
+		Status:                    model.OTCNegotiationStatusOpen,
+		LastActionByPrincipalType: "client",
+		LastActionByPrincipalID:   2,
+		LastActionByOwnerType:     "client",
+		LastActionByOwnerID:       &bidder2,
+		LastActionAt:              time.Now().UTC(),
+	}
+	if err := db.Create(remoteNeg).Error; err != nil {
+		t.Fatalf("seed remoteNeg: %v", err)
+	}
+	remoteNegID = remoteNeg.ID
+
+	// ---- OptionContract: LOCAL (BeforeCreate stamps 111) ----
+	localOfferIDPtr := localOffer.ID
+	localContract := &model.OptionContract{
+		OfferID:         &localOfferIDPtr,
+		BuyerOwnerType:  model.OwnerClient,
+		BuyerOwnerID:    &bidder1,
+		SellerOwnerType: model.OwnerClient,
+		SellerOwnerID:   &bidder2,
+		StockID:         stockID,
+		Ticker:          "TST",
+		Quantity:        decimal.NewFromInt(10),
+		StrikePrice:     decimal.NewFromFloat(100),
+		PremiumPaid:     decimal.NewFromFloat(5),
+		PremiumCurrency: "RSD",
+		StrikeCurrency:  "RSD",
+		SettlementDate:  pastDate, // past → eligible for ListExpiring
+		BuyerAccountID:  10,
+		SellerAccountID: 20,
+		Status:          model.OptionContractStatusActive,
+		SagaID:          "saga-local-1",
+		PremiumPaidAt:   time.Now().UTC(),
+	}
+	if err := db.Create(localContract).Error; err != nil {
+		t.Fatalf("seed localContract: %v", err)
+	}
+	localContractID = localContract.ID
+
+	// ---- OptionContract: REMOTE (explicit routing 222) ----
+	remoteContractNativeID := "remote-contract-1"
+	remoteContract := &model.OptionContract{
+		RoutingNumber:   222,
+		NativeID:        &remoteContractNativeID,
+		BuyerOwnerType:  model.OwnerClient,
+		BuyerOwnerID:    &bidder1,
+		SellerOwnerType: model.OwnerClient,
+		SellerOwnerID:   &bidder2,
+		StockID:         stockID,
+		Ticker:          "TST",
+		Quantity:        decimal.NewFromInt(10),
+		StrikePrice:     decimal.NewFromFloat(100),
+		PremiumPaid:     decimal.NewFromFloat(5),
+		PremiumCurrency: "RSD",
+		StrikeCurrency:  "RSD",
+		SettlementDate:  pastDate, // also past → should be EXCLUDED by guarded ListExpiring
+		BuyerAccountID:  30,
+		SellerAccountID: 40,
+		Status:          model.OptionContractStatusActive,
+		SagaID:          "saga-remote-1",
+		PremiumPaidAt:   time.Now().UTC(),
+	}
+	if err := db.Create(remoteContract).Error; err != nil {
+		t.Fatalf("seed remoteContract: %v", err)
+	}
+	remoteContractID = remoteContract.ID
+
+	return
+}
+
+// ---------------------------------------------------------------------------
+// OTCOfferRepository guards
+// ---------------------------------------------------------------------------
+
+// TestGuard_ListOpenForCache_ExcludesRemote verifies that ListOpenForCache
+// only returns offers whose routing_number == OwnRouting() (111).
+func TestGuard_ListOpenForCache_ExcludesRemote(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOTCOfferRepository(db)
+	seedGuardFixtures(t, db)
+
+	rows, err := r.ListOpenForCache(1000)
+	if err != nil {
+		t.Fatalf("ListOpenForCache: %v", err)
+	}
+	for _, o := range rows {
+		if o.RoutingNumber != model.OwnRouting() {
+			t.Errorf("ListOpenForCache returned remote row id=%d routing=%d", o.ID, o.RoutingNumber)
+		}
+	}
+	// Must still return the local open offer (sanity check it's not empty).
+	if len(rows) == 0 {
+		t.Errorf("ListOpenForCache returned nothing — local row missing from result")
+	}
+}
+
+// TestGuard_ListExpiringOffers_ExcludesRemote verifies that ListExpiringOffers
+// only returns offers whose routing_number == OwnRouting() (111).
+func TestGuard_ListExpiringOffers_ExcludesRemote(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOTCOfferRepository(db)
+	seedGuardFixtures(t, db)
+
+	today := time.Now().UTC().Format("2006-01-02")
+	rows, err := r.ListExpiringOffers(today, 1000)
+	if err != nil {
+		t.Fatalf("ListExpiringOffers: %v", err)
+	}
+	for _, o := range rows {
+		if o.RoutingNumber != model.OwnRouting() {
+			t.Errorf("ListExpiringOffers returned remote row id=%d routing=%d", o.ID, o.RoutingNumber)
+		}
+	}
+	// Sanity: at least the local expired offer is returned.
+	if len(rows) == 0 {
+		t.Errorf("ListExpiringOffers returned nothing — local expired row missing")
+	}
+}
+
+// TestGuard_LockByIDTx_RemoteOffer_NotFound verifies that LockByIDTx returns
+// gorm.ErrRecordNotFound when the locked row is remote (routing != own).
+func TestGuard_LockByIDTx_RemoteOffer_NotFound(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOTCOfferRepository(db)
+	_, remoteOfferID, _, _, _, _ := seedGuardFixtures(t, db)
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		_, err := r.LockByIDTx(tx, remoteOfferID)
+		return err
+	})
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Errorf("LockByIDTx(remote): want ErrRecordNotFound, got %v", err)
+	}
+}
+
+// TestGuard_LockByIDTx_LocalOffer_Succeeds verifies that LockByIDTx still
+// works for local rows (routing == own).
+func TestGuard_LockByIDTx_LocalOffer_Succeeds(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOTCOfferRepository(db)
+	localOfferID, _, _, _, _, _ := seedGuardFixtures(t, db)
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		o, err := r.LockByIDTx(tx, localOfferID)
+		if err != nil {
+			return err
+		}
+		if o.RoutingNumber != model.OwnRouting() {
+			t.Errorf("LockByIDTx(local): routing=%d want %d", o.RoutingNumber, model.OwnRouting())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("LockByIDTx(local) unexpectedly failed: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OTCNegotiationRepository guards
+// ---------------------------------------------------------------------------
+
+// TestGuard_ListOpenByParentOfferForUpdate_ExcludesRemote verifies that the
+// cascade-cancel query only locks LOCAL chains.
+func TestGuard_ListOpenByParentOfferForUpdate_ExcludesRemote(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOTCNegotiationRepository(db)
+	localOfferID, _, _, _, _, _ := seedGuardFixtures(t, db)
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		rows, err := r.ListOpenByParentOfferForUpdate(tx, localOfferID)
+		if err != nil {
+			return err
+		}
+		for _, n := range rows {
+			if n.RoutingNumber != model.OwnRouting() {
+				t.Errorf("ListOpenByParentOfferForUpdate returned remote row id=%d routing=%d", n.ID, n.RoutingNumber)
+			}
+		}
+		if len(rows) == 0 {
+			t.Errorf("ListOpenByParentOfferForUpdate returned nothing — local row missing")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("tx: %v", err)
+	}
+}
+
+// TestGuard_LockByID_RemoteNeg_NotFound verifies that LockByID (negotiation)
+// returns gorm.ErrRecordNotFound for a remote row.
+func TestGuard_LockByID_RemoteNeg_NotFound(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOTCNegotiationRepository(db)
+	_, _, _, remoteNegID, _, _ := seedGuardFixtures(t, db)
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		_, err := r.LockByID(tx, remoteNegID)
+		return err
+	})
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Errorf("LockByID(remote neg): want ErrRecordNotFound, got %v", err)
+	}
+}
+
+// TestGuard_LockByID_LocalNeg_Succeeds verifies local negotiation lock still works.
+func TestGuard_LockByID_LocalNeg_Succeeds(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOTCNegotiationRepository(db)
+	_, _, localNegID, _, _, _ := seedGuardFixtures(t, db)
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		n, err := r.LockByID(tx, localNegID)
+		if err != nil {
+			return err
+		}
+		if n.RoutingNumber != model.OwnRouting() {
+			t.Errorf("LockByID(local neg): routing=%d want %d", n.RoutingNumber, model.OwnRouting())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("LockByID(local neg) unexpectedly failed: %v", err)
+	}
+}
+
+// TestGuard_ListByBidder_ExcludesRemote verifies that ListByBidder only
+// returns negotiations with routing_number == OwnRouting().
+func TestGuard_ListByBidder_ExcludesRemote(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOTCNegotiationRepository(db)
+	bidder1 := uint64(1)
+	seedGuardFixtures(t, db)
+
+	// bidder1 has a local negotiation; the remote has bidder2 so results are
+	// scoped by routing even when using bidder1 only.
+	rows, _, err := r.ListByBidder(model.OwnerClient, &bidder1, nil, 1, 1000)
+	if err != nil {
+		t.Fatalf("ListByBidder: %v", err)
+	}
+	for _, n := range rows {
+		if n.RoutingNumber != model.OwnRouting() {
+			t.Errorf("ListByBidder returned remote row id=%d routing=%d", n.ID, n.RoutingNumber)
+		}
+	}
+}
+
+// TestGuard_ListByParentOffer_ExcludesRemote verifies that ListByParentOffer
+// (used by cascade-cancel) only returns LOCAL chains.
+func TestGuard_ListByParentOffer_ExcludesRemote(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOTCNegotiationRepository(db)
+	localOfferID, _, _, _, _, _ := seedGuardFixtures(t, db)
+
+	rows, err := r.ListByParentOffer(localOfferID)
+	if err != nil {
+		t.Fatalf("ListByParentOffer: %v", err)
+	}
+	for _, n := range rows {
+		if n.RoutingNumber != model.OwnRouting() {
+			t.Errorf("ListByParentOffer returned remote row id=%d routing=%d", n.ID, n.RoutingNumber)
+		}
+	}
+	if len(rows) == 0 {
+		t.Errorf("ListByParentOffer returned nothing — local row missing")
+	}
+}
+
+// TestGuard_FindChainByBidder_RemoteOnly_NotFound verifies that when only a
+// remote chain matches (parent, bidder), findChainByBidder returns
+// ErrRecordNotFound (the remote row must not trigger false chain-exists).
+func TestGuard_FindChainByBidder_RemoteOnly_NotFound(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOTCNegotiationRepository(db)
+	localOfferID, _, _, _, _, _ := seedGuardFixtures(t, db)
+
+	// bidder2 has only a REMOTE negotiation under localOfferID (routing 222).
+	// FindChainByBidder must return ErrRecordNotFound for it.
+	bidder2 := uint64(2)
+	_, err := r.FindChainByBidder(localOfferID, model.OwnerClient, &bidder2)
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Errorf("FindChainByBidder(remote-only bidder): want ErrRecordNotFound, got %v", err)
+	}
+}
+
+// TestGuard_FindChainByBidder_LocalExists_Found verifies that when a LOCAL
+// chain matches the local bidder, it is still returned correctly.
+func TestGuard_FindChainByBidder_LocalExists_Found(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOTCNegotiationRepository(db)
+	localOfferID, _, localNegID, _, _, _ := seedGuardFixtures(t, db)
+
+	bidder1 := uint64(1)
+	got, err := r.FindChainByBidder(localOfferID, model.OwnerClient, &bidder1)
+	if err != nil {
+		t.Fatalf("FindChainByBidder(local): %v", err)
+	}
+	if got.ID != localNegID {
+		t.Errorf("FindChainByBidder(local): got id=%d want %d", got.ID, localNegID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OptionContractRepository guards
+// ---------------------------------------------------------------------------
+
+// TestGuard_ListExpiring_ExcludesRemote verifies that ListExpiring (used by
+// the expiry cron on LOCAL contracts) only returns rows with routing == own.
+func TestGuard_ListExpiring_ExcludesRemote(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOptionContractRepository(db)
+	seedGuardFixtures(t, db)
+
+	today := time.Now().UTC().Format("2006-01-02")
+	rows, err := r.ListExpiring(today, 1000)
+	if err != nil {
+		t.Fatalf("ListExpiring: %v", err)
+	}
+	for _, c := range rows {
+		if c.RoutingNumber != model.OwnRouting() {
+			t.Errorf("ListExpiring returned remote row id=%d routing=%d", c.ID, c.RoutingNumber)
+		}
+	}
+	if len(rows) == 0 {
+		t.Errorf("ListExpiring returned nothing — local expired contract missing")
+	}
+}
+
+// TestGuard_ContractGetByID_RemoteRow_NotFound verifies that GetByID returns
+// ErrRecordNotFound for a remote contract (routing != own).
+func TestGuard_ContractGetByID_RemoteRow_NotFound(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOptionContractRepository(db)
+	_, _, _, _, _, remoteContractID := seedGuardFixtures(t, db)
+
+	_, err := r.GetByID(remoteContractID)
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Errorf("GetByID(remote contract): want ErrRecordNotFound, got %v", err)
+	}
+}
+
+// TestGuard_ContractGetByID_LocalRow_Succeeds verifies that GetByID still
+// works for local contracts.
+func TestGuard_ContractGetByID_LocalRow_Succeeds(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOptionContractRepository(db)
+	_, _, _, _, localContractID, _ := seedGuardFixtures(t, db)
+
+	c, err := r.GetByID(localContractID)
+	if err != nil {
+		t.Fatalf("GetByID(local contract): %v", err)
+	}
+	if c.RoutingNumber != model.OwnRouting() {
+		t.Errorf("GetByID(local contract): routing=%d want %d", c.RoutingNumber, model.OwnRouting())
+	}
+}
+
+// TestGuard_ContractGetByOfferID_RemoteRow_NotFound verifies that
+// GetByOfferID returns ErrRecordNotFound when the matched contract is remote.
+func TestGuard_ContractGetByOfferID_RemoteRow_NotFound(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOptionContractRepository(db)
+
+	// Seed a remote contract with an explicit offer_id so GetByOfferID can
+	// match it. Use a fresh DB to control the offer_id cleanly.
+	model.SetOwnRouting("111")
+	remoteNativeID := "roc-offer-guard"
+	remoteOfferID := uint64(9999)
+	buyerID := uint64(77)
+	sellerID := uint64(88)
+	remoteContract := &model.OptionContract{
+		RoutingNumber:   222,
+		NativeID:        &remoteNativeID,
+		OfferID:         &remoteOfferID,
+		BuyerOwnerType:  model.OwnerClient,
+		BuyerOwnerID:    &buyerID,
+		SellerOwnerType: model.OwnerClient,
+		SellerOwnerID:   &sellerID,
+		StockID:         1,
+		Ticker:          "X",
+		Quantity:        decimal.NewFromInt(1),
+		StrikePrice:     decimal.NewFromFloat(10),
+		PremiumPaid:     decimal.NewFromFloat(1),
+		PremiumCurrency: "RSD",
+		StrikeCurrency:  "RSD",
+		SettlementDate:  time.Now().UTC().AddDate(1, 0, 0),
+		BuyerAccountID:  1,
+		SellerAccountID: 2,
+		Status:          model.OptionContractStatusActive,
+		SagaID:          "sg-roc",
+		PremiumPaidAt:   time.Now().UTC(),
+	}
+	if err := db.Create(remoteContract).Error; err != nil {
+		t.Fatalf("seed remote contract for offer: %v", err)
+	}
+
+	_, err := r.GetByOfferID(remoteOfferID)
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Errorf("GetByOfferID(remote contract): want ErrRecordNotFound, got %v", err)
+	}
+}

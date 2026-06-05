@@ -21,13 +21,23 @@ func (r *OptionContractRepository) Create(c *model.OptionContract) error {
 	return r.db.Create(c).Error
 }
 
+// GetByID fetches a local option contract by primary key.
+//
+// Guard: remote rows (routing_number != OwnRouting()) are treated as
+// not-found so they can never enter the local exercise/expiry paths.
 func (r *OptionContractRepository) GetByID(id uint64) (*model.OptionContract, error) {
 	var c model.OptionContract
 	err := r.db.First(&c, id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
-	return &c, err
+	if err != nil {
+		return nil, err
+	}
+	if c.RoutingNumber != model.OwnRouting() {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &c, nil
 }
 
 // GetBySagaID returns the contract minted by a given accept saga, or
@@ -47,13 +57,23 @@ func (r *OptionContractRepository) GetBySagaID(sagaID string) (*model.OptionCont
 	return &c, err
 }
 
+// GetByOfferID fetches the local contract minted from a given OTCOffer.
+//
+// Guard: remote rows (routing_number != OwnRouting()) are treated as
+// not-found so they never enter the local accept/exercise/saga paths.
 func (r *OptionContractRepository) GetByOfferID(offerID uint64) (*model.OptionContract, error) {
 	var c model.OptionContract
 	err := r.db.Where("offer_id = ?", offerID).First(&c).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
-	return &c, err
+	if err != nil {
+		return nil, err
+	}
+	if c.RoutingNumber != model.OwnRouting() {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &c, nil
 }
 
 func (r *OptionContractRepository) Delete(id uint64) error {
@@ -136,10 +156,14 @@ func (r *OptionContractRepository) ListByOwner(ownerType model.OwnerType, ownerI
 }
 
 // ListExpiring returns up to limit ACTIVE contracts past settlement_date.
+//
+// Guard: only local contracts (routing_number == OwnRouting()) are returned.
+// Remote contracts folded in by Tasks 4-6 have their own expiry path via
+// PeerOptionContractRepository and must not enter the local expiry saga.
 func (r *OptionContractRepository) ListExpiring(today string, limit int) ([]model.OptionContract, error) {
 	var out []model.OptionContract
-	err := r.db.Where("status = ? AND settlement_date < ?",
-		model.OptionContractStatusActive, today).
+	err := r.db.Where("status = ? AND settlement_date < ? AND routing_number = ?",
+		model.OptionContractStatusActive, today, model.OwnRouting()).
 		Order("id ASC").Limit(limit).Find(&out).Error
 	return out, err
 }

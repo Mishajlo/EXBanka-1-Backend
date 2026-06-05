@@ -56,13 +56,22 @@ func (r *OTCNegotiationRepository) GetByID(id uint64) (*model.OTCNegotiation, er
 // LockByID does SELECT FOR UPDATE inside an active transaction. Required
 // before any state mutation (counter/accept/reject/cancel) so concurrent
 // operations on the same chain serialize correctly.
+//
+// Guard: remote rows (routing_number != OwnRouting()) are treated as
+// not-found so they can never enter the local accept/cancel/reject paths.
 func (r *OTCNegotiationRepository) LockByID(tx *gorm.DB, id uint64) (*model.OTCNegotiation, error) {
 	var n model.OTCNegotiation
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&n, id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
-	return &n, err
+	if err != nil {
+		return nil, err
+	}
+	if n.RoutingNumber != model.OwnRouting() {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &n, nil
 }
 
 // Save persists a modified negotiation. Optimistic-locked via the
@@ -92,9 +101,12 @@ func (r *OTCNegotiationRepository) SaveTx(tx *gorm.DB, n *model.OTCNegotiation) 
 // ListByParentOffer returns all chains against a given parent listing.
 // Used to surface "current bids" on an offer detail view, AND to drive
 // the cascade-cancel step when one chain accepts.
+//
+// Guard: only local chains (routing_number == OwnRouting()) are returned.
+// Remote chains must not be cascade-cancelled by a local accept.
 func (r *OTCNegotiationRepository) ListByParentOffer(parentOfferID uint64) ([]model.OTCNegotiation, error) {
 	var out []model.OTCNegotiation
-	err := r.db.Where("parent_offer_id = ?", parentOfferID).
+	err := r.db.Where("parent_offer_id = ? AND routing_number = ?", parentOfferID, model.OwnRouting()).
 		Order("created_at ASC").Find(&out).Error
 	return out, err
 }
@@ -102,6 +114,10 @@ func (r *OTCNegotiationRepository) ListByParentOffer(parentOfferID uint64) ([]mo
 // ListOpenByParentOfferForUpdate locks every still-open chain on the
 // parent. Used by the accept transaction to cascade-cancel siblings
 // after the winning chain transitions to "accepted".
+//
+// Guard: only local chains (routing_number == OwnRouting()) are locked.
+// Remote chains under a shared parent_offer_id must not be affected by a
+// local cascade-cancel.
 func (r *OTCNegotiationRepository) ListOpenByParentOfferForUpdate(tx *gorm.DB, parentOfferID uint64) ([]model.OTCNegotiation, error) {
 	var out []model.OTCNegotiation
 	openStatuses := []string{
@@ -109,7 +125,8 @@ func (r *OTCNegotiationRepository) ListOpenByParentOfferForUpdate(tx *gorm.DB, p
 		model.OTCNegotiationStatusCountered,
 	}
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("parent_offer_id = ? AND status IN ?", parentOfferID, openStatuses).
+		Where("parent_offer_id = ? AND status IN ? AND routing_number = ?",
+			parentOfferID, openStatuses, model.OwnRouting()).
 		Find(&out).Error
 	return out, err
 }
@@ -123,12 +140,16 @@ func (r *OTCNegotiationRepository) ListOpenByParentOfferForUpdate(tx *gorm.DB, p
 // path ever writes bidder_bank_code, this query stays safe by excluding
 // foreign-bank rows (it would NOT silently leak Bank B's client-1 to
 // Bank A's client-1 with the same numeric id).
+//
+// Guard: routing_number == OwnRouting() ensures remote rows folded into
+// the unified table (Tasks 4-6) never appear in a local bidder's view.
 func (r *OTCNegotiationRepository) ListByBidder(
 	ownerType model.OwnerType, ownerID *uint64, statuses []string, page, pageSize int,
 ) ([]model.OTCNegotiation, int64, error) {
 	q := r.db.Model(&model.OTCNegotiation{}).
 		Where("bidder_owner_type = ?", ownerType).
-		Where("bidder_bank_code IS NULL")
+		Where("bidder_bank_code IS NULL").
+		Where("routing_number = ?", model.OwnRouting())
 	if ownerType == model.OwnerClient {
 		q = q.Where("bidder_owner_id = ?", ownerID)
 	} else {
@@ -179,8 +200,11 @@ func (r *OTCNegotiationRepository) findChainByBidder(
 	db *gorm.DB, parentOfferID uint64, bidderOwnerType model.OwnerType, bidderOwnerID *uint64,
 ) (*model.OTCNegotiation, error) {
 	var n model.OTCNegotiation
-	q := db.Where("parent_offer_id = ? AND bidder_owner_type = ?",
-		parentOfferID, bidderOwnerType)
+	// Guard: restrict to local chains (routing_number == OwnRouting()) so a
+	// remote chain for the same (parent, bidder) tuple can never trigger a
+	// false "one chain already exists" rejection for a local bidder.
+	q := db.Where("parent_offer_id = ? AND bidder_owner_type = ? AND routing_number = ?",
+		parentOfferID, bidderOwnerType, model.OwnRouting())
 	if bidderOwnerType == model.OwnerClient {
 		q = q.Where("bidder_owner_id = ?", bidderOwnerID)
 	} else {
