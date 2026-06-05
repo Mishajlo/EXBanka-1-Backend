@@ -29,7 +29,7 @@ NativeID      string `gorm:"uniqueIndex:ux_<tbl>_native,priority:2;size:128;not 
 
 Because `RoutingNumber == own` ⇒ treated as **local** (and entered into local accept/settlement logic), a peer sharing our routing/bank code would let peer-originated rows masquerade as local. Defense-in-depth:
 
-1. **Registration guard (primary):** `POST /api/v3/peer-banks` (and the `PeerBankAdminService` create/update path) MUST reject a peer whose `routing_number` or `bank_code` equals `OWN_BANK_CODE`/`OWN_ROUTING` → HTTP 400 `validation_error`.
+1. **Registration guard (primary, RUNTIME):** peers are added dynamically by an admin, so the check is at runtime on **every** add/update — `POST /api/v3/peer-banks` and the `PeerBankAdminService` create+update path MUST reject a peer whose `routing_number` or `bank_code` equals `OWN_BANK_CODE`/`OWN_ROUTING` → HTTP 400 `validation_error` ("peer bank code/routing must differ from this bank's own").
 2. **Ingestion guards (defense-in-depth):** the offer refresher and every inbound `/cross-bank-protocol/*` write handler (CreateNegotiation, UpdateNegotiation, DeleteNegotiation, AcceptNegotiation, the public-offer ingestion) MUST reject/skip any payload whose claimed routing/bank-code equals our own — log at WARN and refuse; never persist it as a (local-looking) row.
 3. **Startup assertion:** on boot, if any registered peer has `routing == own`, log at ERROR and disable cross-bank ingestion (do not silently ingest). (A fail-fast boot error is acceptable if simpler.)
 
@@ -44,7 +44,7 @@ For each entity, migrate the remote store's rows into the local table as remote 
 | `peer_option_contract` | option contract table | `RoutingNumber`=negotiation issuing routing, `NativeID`=`NegotiationID`/contract foreign id; buyer/seller, ticker/qty/strike/currency/settlement, `Direction` (CREDIT/DEBIT), status. |
 
 - **Nullable local-only columns:** remote rows can't satisfy local FKs (`StockID`→`Stock`, `InitiatorAccountID`, etc.). Make those nullable; remote rows leave them null. (GORM: `*uint64`/pointer + no hard FK constraint enforced at DB level, matching how the codebase already handles optional refs.)
-- **Migration:** `AutoMigrate` adds the new columns; a one-time backfill (a) stamps every existing local row with `RoutingNumber=own, NativeID=strconv(id)`, and (b) copies each remote-store row into the unified table as a remote row, then the old tables are dropped. Backfill is idempotent (keyed on the natural key via `ON CONFLICT`). For offers (a rebuildable cache) a drop+repopulate-on-next-poll is acceptable; **negotiations and contracts hold real cross-bank state and MUST be migrated, not dropped.**
+- **NO data migration (fresh start — decided 2026-06-05).** Not a production system; we do not preserve existing rows. `AutoMigrate` creates the unified schema with the new columns; the retired tables are simply removed from `AutoMigrate` (and dropped) — **no backfill, no row copying.** Existing dev data is discarded; remote offers repopulate via the next poll, remote negotiations/contracts via fresh cross-bank activity. Going forward the **create/ingest paths populate `(routing_number, native_id)`**: local creation stamps `routing=own` and `native_id=strconv(id)` in an `AfterCreate` hook (the surrogate id isn't known until insert); inbound webhook ingestion stamps `routing=<peer>` and `native_id=<foreign id>`.
 - After the fold, the SP-1 offer refresher upserts/reconciles remote offers as `OTCOffer` rows (remote), and `RemoteOTCOfferRepository` is retired (its upsert/reconcile/get move onto the `OTCOffer` repository, scoped to remote rows).
 
 ## 5. Money-path guards (the risk — `routing==own` local-only filters)
@@ -71,7 +71,7 @@ No client-facing route changes; `/me/peer-otc/*` and `POST /me/otc/contracts/pee
 
 ## 8. Testing
 
-- **Identity/migration:** backfill stamps local rows (`routing=own`, `native_id=id`); remote-store rows fold into the unified table as remote rows with the right natural key; idempotent re-run; unique-natural-key enforced.
+- **Identity (fresh start, no migration):** creating a local offer/negotiation/contract stamps `routing=own` + `native_id=strconv(id)` (AfterCreate); inbound webhook ingestion stamps `routing=<peer>` + `native_id=<foreign id>`; the `UNIQUE(routing_number, native_id)` constraint is enforced (duplicate ingest is rejected/idempotent). No backfill of pre-existing rows is tested (there are none — fresh DB).
 - **Collision prevention:** registration rejects a peer with `bank_code==own` (400); inbound webhook rejects a payload claiming `routing==own`; refresher skips a peer offer claiming `routing==own`; startup assertion fires when a colliding peer exists.
 - **Money-path guards (one per guarded op):** a remote `OTCOffer`/`OTCNegotiation` row is never returned/locked/mutated by `OpenNegotiation`/`Accept`/cascade/`CancelListing`/expiry/local-cache fetch.
 - **Reads unchanged:** SP-1 read integration tests still pass against the unified tables (same response shapes incl. `kind`/`me_owner`).
