@@ -11664,13 +11664,34 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Returns the caller's formed option contracts, LOCAL and REMOTE merged into one contracts[] array. Each item carries kind/routing_number/bank_code and me_owner (true when the caller is the buyer/holder). peer_contracts[] has been removed — remote contracts appear in contracts[] with kind=remote. (SP-1 Task 8)",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "OTCOptions"
                 ],
-                "summary": "List the caller's OTC contracts",
+                "summary": "List the caller's OTC contracts (unified local + remote)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "buyer|seller|either",
+                        "name": "role",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "page (default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "page size (default 20)",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -11914,14 +11935,14 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns chains where the caller is the bidder. Filter with ` + "`" + `?statuses=open,countered,accepted,rejected,cancelled,expired` + "`" + `.",
+                "description": "Returns a unified list of the caller's LOCAL (intra-bank bidder) and REMOTE (cross-bank peer) negotiation chains. Each item carries ` + "`" + `kind` + "`" + ` (local|remote), ` + "`" + `routing_number` + "`" + `/` + "`" + `bank_code` + "`" + ` provenance, and ` + "`" + `me_owner` + "`" + ` (true only when the caller is the parent listing's poster/seller). Filter with ` + "`" + `?statuses=open,countered,accepted,rejected,cancelled,expired` + "`" + ` (applied to both sets).",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "OTCOptions"
                 ],
-                "summary": "List the caller's OTC option negotiation chains",
+                "summary": "List the caller's OTC option negotiation chains (local + remote, merged)",
                 "parameters": [
                     {
                         "type": "string",
@@ -14334,13 +14355,14 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Resolves an option contract by id. A LOCAL contract is returned with kind=local + own provenance + me_owner (true when caller is the buyer/holder). A non-local id falls back to the cross-bank mirror and returns kind=remote (me_owner=direction==CREDIT). 404 only when neither exists. (SP-1 Task 8)",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "OTCOptions"
                 ],
-                "summary": "Get an OTC contract",
+                "summary": "Get an OTC contract (unified local + remote)",
                 "parameters": [
                     {
                         "type": "integer",
@@ -14353,6 +14375,20 @@ const docTemplate = `{
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -14477,17 +14513,18 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Resolves an OTC option offer by its stable surrogate id (the local_id from the discovery feed). Local offers return the {offer,revisions} body decorated with kind=\"local\" + me_owner. If the id is not a local offer it is resolved from the remote (cross-bank) mirror and returned as a flat body with kind=\"remote\" + me_owner=false.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "OTCOptions"
                 ],
-                "summary": "Get an OTC offer with revisions",
+                "summary": "Get an OTC option offer by surrogate id (local or remote)",
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "offer id",
+                        "description": "surrogate offer id",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -14496,6 +14533,20 @@ const docTemplate = `{
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true

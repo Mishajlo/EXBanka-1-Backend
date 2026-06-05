@@ -283,6 +283,8 @@ func (h *OTCHandler) ListUnifiedOptionOffers(ctx context.Context, req *pb.ListUn
 	if end > len(filtered) {
 		end = len(filtered)
 	}
+	actingOwnerType := req.GetActingOwnerType()
+	actingOwnerID := req.GetActingOwnerId()
 	out := make([]*pb.UnifiedOptionOffer, 0, end-start)
 	for _, o := range filtered[start:end] {
 		out = append(out, &pb.UnifiedOptionOffer{
@@ -304,6 +306,8 @@ func (h *OTCHandler) ListUnifiedOptionOffers(ctx context.Context, req *pb.ListUn
 			BestBid:           o.BestBid,
 			BestAsk:           o.BestAsk,
 			ActiveChainsCount: o.ActiveChainsCount,
+			LocalId:           o.LocalID,
+			MeOwner:           otcMeOwner(actingOwnerType, actingOwnerID, o.Kind, o.SellerID),
 		})
 	}
 	var lastRefreshUnix int64

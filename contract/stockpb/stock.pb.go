@@ -6106,8 +6106,16 @@ type UnifiedOptionOffer struct {
 	BestBid           string `protobuf:"bytes,16,opt,name=best_bid,json=bestBid,proto3" json:"best_bid,omitempty"`
 	BestAsk           string `protobuf:"bytes,17,opt,name=best_ask,json=bestAsk,proto3" json:"best_ask,omitempty"`
 	ActiveChainsCount int32  `protobuf:"varint,18,opt,name=active_chains_count,json=activeChainsCount,proto3" json:"active_chains_count,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Stable local surrogate id for this offer (RemoteOTCOffer.ID for remote;
+	// equals the numeric offer_id for local). The frontend addresses any
+	// offer — local or remote — by this id on the unified routes. (SP-1)
+	LocalId uint64 `protobuf:"varint,19,opt,name=local_id,json=localId,proto3" json:"local_id,omitempty"`
+	// me_owner is true when the acting caller (acting_owner_type/id on the
+	// request) owns this listing. Always false for remote rows. Computed in
+	// the stock-service from the caller identity. (SP-1)
+	MeOwner       bool `protobuf:"varint,20,opt,name=me_owner,json=meOwner,proto3" json:"me_owner,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UnifiedOptionOffer) Reset() {
@@ -6266,6 +6274,20 @@ func (x *UnifiedOptionOffer) GetActiveChainsCount() int32 {
 	return 0
 }
 
+func (x *UnifiedOptionOffer) GetLocalId() uint64 {
+	if x != nil {
+		return x.LocalId
+	}
+	return 0
+}
+
+func (x *UnifiedOptionOffer) GetMeOwner() bool {
+	if x != nil {
+		return x.MeOwner
+	}
+	return false
+}
+
 type ListUnifiedOptionOffersRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Ticker    string                 `protobuf:"bytes,1,opt,name=ticker,proto3" json:"ticker,omitempty"`
@@ -6282,8 +6304,13 @@ type ListUnifiedOptionOffersRequest struct {
 	// shape. Implies kind=local since cross-bank listings can never be
 	// ours.
 	OwnerOnlySellerId string `protobuf:"bytes,7,opt,name=owner_only_seller_id,json=ownerOnlySellerId,proto3" json:"owner_only_seller_id,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Caller identity used to stamp me_owner on each row (SP-1).
+	// acting_owner_type is "client" | "bank"; acting_owner_id is 0 when
+	// acting as the bank.
+	ActingOwnerType string `protobuf:"bytes,8,opt,name=acting_owner_type,json=actingOwnerType,proto3" json:"acting_owner_type,omitempty"`
+	ActingOwnerId   uint64 `protobuf:"varint,9,opt,name=acting_owner_id,json=actingOwnerId,proto3" json:"acting_owner_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ListUnifiedOptionOffersRequest) Reset() {
@@ -6363,6 +6390,20 @@ func (x *ListUnifiedOptionOffersRequest) GetOwnerOnlySellerId() string {
 		return x.OwnerOnlySellerId
 	}
 	return ""
+}
+
+func (x *ListUnifiedOptionOffersRequest) GetActingOwnerType() string {
+	if x != nil {
+		return x.ActingOwnerType
+	}
+	return ""
+}
+
+func (x *ListUnifiedOptionOffersRequest) GetActingOwnerId() uint64 {
+	if x != nil {
+		return x.ActingOwnerId
+	}
+	return 0
 }
 
 type ListUnifiedOptionOffersResponse struct {
@@ -9136,8 +9177,26 @@ type OTCNegotiationResponse struct {
 	// terminal status, or accepted but formation saga failed). Non-zero
 	// only on status="accepted" rows where the contract formed successfully.
 	MintedContractId uint64 `protobuf:"varint,17,opt,name=minted_contract_id,json=mintedContractId,proto3" json:"minted_contract_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// SP-1 unified-list provenance. ListMyNegotiations merges the caller's
+	// LOCAL (intra-bank) and REMOTE (cross-bank peer) negotiation chains
+	// into one list; each item carries where it lives and whether the
+	// caller is the parent listing's poster/seller.
+	//
+	//	kind            — "local" | "remote"
+	//	routing_number  — owning bank's routing (own for local; the
+	//	                  counterparty/peer bank's for remote)
+	//	bank_code       — owning bank's 3-digit code (own for local;
+	//	                  the peer bank's for remote)
+	//	me_owner        — true ONLY when the caller is the parent offer's
+	//	                  poster/seller (someone is bidding on MY listing);
+	//	                  a chain the caller opened AS the bidder is false.
+	//	                  For remote: true iff WE host the seller side.
+	Kind          string `protobuf:"bytes,18,opt,name=kind,proto3" json:"kind,omitempty"`
+	RoutingNumber int64  `protobuf:"varint,19,opt,name=routing_number,json=routingNumber,proto3" json:"routing_number,omitempty"`
+	BankCode      string `protobuf:"bytes,20,opt,name=bank_code,json=bankCode,proto3" json:"bank_code,omitempty"`
+	MeOwner       bool   `protobuf:"varint,21,opt,name=me_owner,json=meOwner,proto3" json:"me_owner,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *OTCNegotiationResponse) Reset() {
@@ -9287,6 +9346,34 @@ func (x *OTCNegotiationResponse) GetMintedContractId() uint64 {
 		return x.MintedContractId
 	}
 	return 0
+}
+
+func (x *OTCNegotiationResponse) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *OTCNegotiationResponse) GetRoutingNumber() int64 {
+	if x != nil {
+		return x.RoutingNumber
+	}
+	return 0
+}
+
+func (x *OTCNegotiationResponse) GetBankCode() string {
+	if x != nil {
+		return x.BankCode
+	}
+	return ""
+}
+
+func (x *OTCNegotiationResponse) GetMeOwner() bool {
+	if x != nil {
+		return x.MeOwner
+	}
+	return false
 }
 
 // OTCNegotiationRevisionResponse is one entry in the revision chain.
@@ -12269,8 +12356,17 @@ type OTCOfferResponse struct {
 	UpdatedAt            string                 `protobuf:"bytes,15,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	Version              int64                  `protobuf:"varint,16,opt,name=version,proto3" json:"version,omitempty"`
 	Unread               bool                   `protobuf:"varint,17,opt,name=unread,proto3" json:"unread,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Provenance + ownership for the unified offer read (SP-1). kind is
+	// "local" (this bank holds the listing) or "remote" (resolved from a
+	// peer-bank mirror). routing_number / bank_code identify the hosting
+	// bank. me_owner is true only when the acting caller owns the listing
+	// (always false for remote). Computed in stock-service.
+	Kind          string `protobuf:"bytes,18,opt,name=kind,proto3" json:"kind,omitempty"`
+	RoutingNumber int64  `protobuf:"varint,19,opt,name=routing_number,json=routingNumber,proto3" json:"routing_number,omitempty"`
+	BankCode      string `protobuf:"bytes,20,opt,name=bank_code,json=bankCode,proto3" json:"bank_code,omitempty"`
+	MeOwner       bool   `protobuf:"varint,21,opt,name=me_owner,json=meOwner,proto3" json:"me_owner,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *OTCOfferResponse) Reset() {
@@ -12418,6 +12514,34 @@ func (x *OTCOfferResponse) GetVersion() int64 {
 func (x *OTCOfferResponse) GetUnread() bool {
 	if x != nil {
 		return x.Unread
+	}
+	return false
+}
+
+func (x *OTCOfferResponse) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *OTCOfferResponse) GetRoutingNumber() int64 {
+	if x != nil {
+		return x.RoutingNumber
+	}
+	return 0
+}
+
+func (x *OTCOfferResponse) GetBankCode() string {
+	if x != nil {
+		return x.BankCode
+	}
+	return ""
+}
+
+func (x *OTCOfferResponse) GetMeOwner() bool {
+	if x != nil {
+		return x.MeOwner
 	}
 	return false
 }
@@ -12723,6 +12847,11 @@ type GetOTCOfferRequest struct {
 	OfferId         uint64                 `protobuf:"varint,1,opt,name=offer_id,json=offerId,proto3" json:"offer_id,omitempty"`
 	ActorUserId     int64                  `protobuf:"varint,2,opt,name=actor_user_id,json=actorUserId,proto3" json:"actor_user_id,omitempty"`
 	ActorSystemType string                 `protobuf:"bytes,3,opt,name=actor_system_type,json=actorSystemType,proto3" json:"actor_system_type,omitempty"`
+	// Caller identity used to stamp me_owner on the resolved offer (SP-1).
+	// acting_owner_type is "client" | "bank"; acting_owner_id is 0 when
+	// acting as the bank.
+	ActingOwnerType string `protobuf:"bytes,4,opt,name=acting_owner_type,json=actingOwnerType,proto3" json:"acting_owner_type,omitempty"`
+	ActingOwnerId   uint64 `protobuf:"varint,5,opt,name=acting_owner_id,json=actingOwnerId,proto3" json:"acting_owner_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -12776,6 +12905,20 @@ func (x *GetOTCOfferRequest) GetActorSystemType() string {
 		return x.ActorSystemType
 	}
 	return ""
+}
+
+func (x *GetOTCOfferRequest) GetActingOwnerType() string {
+	if x != nil {
+		return x.ActingOwnerType
+	}
+	return ""
+}
+
+func (x *GetOTCOfferRequest) GetActingOwnerId() uint64 {
+	if x != nil {
+		return x.ActingOwnerId
+	}
+	return 0
 }
 
 type CounterOTCOfferRequest struct {
@@ -13116,8 +13259,20 @@ type OptionContractResponse struct {
 	CreatedAt            string                 `protobuf:"bytes,18,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt            string                 `protobuf:"bytes,19,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	Version              int64                  `protobuf:"varint,20,opt,name=version,proto3" json:"version,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Provenance + ownership for the unified contract read (SP-1 Task 8).
+	// kind is "local" (intra-bank contract) or "remote" (cross-bank
+	// peer_option_contracts mirror). routing_number / bank_code identify the
+	// OWNING/HOSTING bank: own for local; the COUNTERPARTY peer bank for remote
+	// (the side this bank does NOT host). me_owner is true ONLY when the acting
+	// caller is the contract's BUYER/HOLDER — a formed option is the buyer's
+	// owned asset, so the seller/writer is never the owner (DIFFERENT from
+	// offers/negotiations where the poster/seller is the owner).
+	Kind          string `protobuf:"bytes,21,opt,name=kind,proto3" json:"kind,omitempty"`
+	RoutingNumber int64  `protobuf:"varint,22,opt,name=routing_number,json=routingNumber,proto3" json:"routing_number,omitempty"`
+	BankCode      string `protobuf:"bytes,23,opt,name=bank_code,json=bankCode,proto3" json:"bank_code,omitempty"`
+	MeOwner       bool   `protobuf:"varint,24,opt,name=me_owner,json=meOwner,proto3" json:"me_owner,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *OptionContractResponse) Reset() {
@@ -13288,6 +13443,34 @@ func (x *OptionContractResponse) GetVersion() int64 {
 		return x.Version
 	}
 	return 0
+}
+
+func (x *OptionContractResponse) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *OptionContractResponse) GetRoutingNumber() int64 {
+	if x != nil {
+		return x.RoutingNumber
+	}
+	return 0
+}
+
+func (x *OptionContractResponse) GetBankCode() string {
+	if x != nil {
+		return x.BankCode
+	}
+	return ""
+}
+
+func (x *OptionContractResponse) GetMeOwner() bool {
+	if x != nil {
+		return x.MeOwner
+	}
+	return false
 }
 
 type ListMyContractsRequest struct {
@@ -19974,7 +20157,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	"peersTotal\x12#\n" +
 	"\rpeers_reached\x18\x04 \x01(\x05R\fpeersReached\x12\x18\n" +
 	"\apartial\x18\x05 \x01(\bR\apartial\x12*\n" +
-	"\x11last_refresh_unix\x18\x06 \x01(\x03R\x0flastRefreshUnix\"\xd2\x04\n" +
+	"\x11last_refresh_unix\x18\x06 \x01(\x03R\x0flastRefreshUnix\"\x88\x05\n" +
 	"\x12UnifiedOptionOffer\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x1b\n" +
 	"\tbank_code\x18\x02 \x01(\tR\bbankCode\x12%\n" +
@@ -19996,7 +20179,9 @@ const file_stock_stock_proto_rawDesc = "" +
 	"created_at\x18\x0f \x01(\tR\tcreatedAt\x12\x19\n" +
 	"\bbest_bid\x18\x10 \x01(\tR\abestBid\x12\x19\n" +
 	"\bbest_ask\x18\x11 \x01(\tR\abestAsk\x12.\n" +
-	"\x13active_chains_count\x18\x12 \x01(\x05R\x11activeChainsCount\"\xe9\x01\n" +
+	"\x13active_chains_count\x18\x12 \x01(\x05R\x11activeChainsCount\x12\x19\n" +
+	"\blocal_id\x18\x13 \x01(\x04R\alocalId\x12\x19\n" +
+	"\bme_owner\x18\x14 \x01(\bR\ameOwner\"\xbd\x02\n" +
 	"\x1eListUnifiedOptionOffersRequest\x12\x16\n" +
 	"\x06ticker\x18\x01 \x01(\tR\x06ticker\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x1b\n" +
@@ -20004,7 +20189,9 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\tdirection\x18\x04 \x01(\tR\tdirection\x12\x12\n" +
 	"\x04page\x18\x05 \x01(\x05R\x04page\x12\x1b\n" +
 	"\tpage_size\x18\x06 \x01(\x05R\bpageSize\x12/\n" +
-	"\x14owner_only_seller_id\x18\a \x01(\tR\x11ownerOnlySellerId\"\x81\x02\n" +
+	"\x14owner_only_seller_id\x18\a \x01(\tR\x11ownerOnlySellerId\x12*\n" +
+	"\x11acting_owner_type\x18\b \x01(\tR\x0factingOwnerType\x12&\n" +
+	"\x0facting_owner_id\x18\t \x01(\x04R\ractingOwnerId\"\x81\x02\n" +
 	"\x1fListUnifiedOptionOffersResponse\x121\n" +
 	"\x06offers\x18\x01 \x03(\v2\x19.stock.UnifiedOptionOfferR\x06offers\x12\x1f\n" +
 	"\vtotal_count\x18\x02 \x01(\x03R\n" +
@@ -20261,7 +20448,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	"employeeId\x12\x1b\n" +
 	"\tfull_name\x18\x02 \x01(\tR\bfullName\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12.\n" +
-	"\x13realized_profit_rsd\x18\x04 \x01(\tR\x11realizedProfitRsd\"\x86\x05\n" +
+	"\x13realized_profit_rsd\x18\x04 \x01(\tR\x11realizedProfitRsd\"\xf9\x05\n" +
 	"\x16OTCNegotiationResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12&\n" +
 	"\x0fparent_offer_id\x18\x02 \x01(\x04R\rparentOfferId\x12*\n" +
@@ -20282,7 +20469,11 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\x0f \x01(\tR\tupdatedAt\x12\x18\n" +
 	"\aversion\x18\x10 \x01(\x03R\aversion\x12,\n" +
-	"\x12minted_contract_id\x18\x11 \x01(\x04R\x10mintedContractId\"\xa7\x03\n" +
+	"\x12minted_contract_id\x18\x11 \x01(\x04R\x10mintedContractId\x12\x12\n" +
+	"\x04kind\x18\x12 \x01(\tR\x04kind\x12%\n" +
+	"\x0erouting_number\x18\x13 \x01(\x03R\rroutingNumber\x12\x1b\n" +
+	"\tbank_code\x18\x14 \x01(\tR\bbankCode\x12\x19\n" +
+	"\bme_owner\x18\x15 \x01(\bR\ameOwner\"\xa7\x03\n" +
 	"\x1eOTCNegotiationRevisionResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12%\n" +
 	"\x0enegotiation_id\x18\x02 \x01(\x04R\rnegotiationId\x12'\n" +
@@ -20550,7 +20741,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	"account_id\x18\n" +
 	" \x01(\x04R\taccountId\x122\n" +
 	"\x16on_behalf_of_client_id\x18\v \x01(\x04R\x12onBehalfOfClientId\x12\x16\n" +
-	"\x06ticker\x18\f \x01(\tR\x06ticker\"\xdd\x04\n" +
+	"\x06ticker\x18\f \x01(\tR\x06ticker\"\xd0\x05\n" +
 	"\x10OTCOfferResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x1c\n" +
 	"\tdirection\x18\x02 \x01(\tR\tdirection\x12\x19\n" +
@@ -20571,7 +20762,11 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\x0f \x01(\tR\tupdatedAt\x12\x18\n" +
 	"\aversion\x18\x10 \x01(\x03R\aversion\x12\x16\n" +
-	"\x06unread\x18\x11 \x01(\bR\x06unread\"\xaa\x02\n" +
+	"\x06unread\x18\x11 \x01(\bR\x06unread\x12\x12\n" +
+	"\x04kind\x18\x12 \x01(\tR\x04kind\x12%\n" +
+	"\x0erouting_number\x18\x13 \x01(\x03R\rroutingNumber\x12\x1b\n" +
+	"\tbank_code\x18\x14 \x01(\tR\bbankCode\x12\x19\n" +
+	"\bme_owner\x18\x15 \x01(\bR\ameOwner\"\xaa\x02\n" +
 	"\x14OTCOfferRevisionItem\x12'\n" +
 	"\x0frevision_number\x18\x01 \x01(\x05R\x0erevisionNumber\x12\x1a\n" +
 	"\bquantity\x18\x02 \x01(\tR\bquantity\x12!\n" +
@@ -20596,11 +20791,13 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\tpage_size\x18\a \x01(\x05R\bpageSize\"`\n" +
 	"\x17ListMyOTCOffersResponse\x12/\n" +
 	"\x06offers\x18\x01 \x03(\v2\x17.stock.OTCOfferResponseR\x06offers\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x03R\x05total\"\x7f\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\"\xd3\x01\n" +
 	"\x12GetOTCOfferRequest\x12\x19\n" +
 	"\boffer_id\x18\x01 \x01(\x04R\aofferId\x12\"\n" +
 	"\ractor_user_id\x18\x02 \x01(\x03R\vactorUserId\x12*\n" +
-	"\x11actor_system_type\x18\x03 \x01(\tR\x0factorSystemType\"\xb9\x02\n" +
+	"\x11actor_system_type\x18\x03 \x01(\tR\x0factorSystemType\x12*\n" +
+	"\x11acting_owner_type\x18\x04 \x01(\tR\x0factingOwnerType\x12&\n" +
+	"\x0facting_owner_id\x18\x05 \x01(\x04R\ractingOwnerId\"\xb9\x02\n" +
 	"\x16CounterOTCOfferRequest\x12\x19\n" +
 	"\boffer_id\x18\x01 \x01(\x04R\aofferId\x12\"\n" +
 	"\ractor_user_id\x18\x02 \x01(\x03R\vactorUserId\x12*\n" +
@@ -20627,7 +20824,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x15RejectOTCOfferRequest\x12\x19\n" +
 	"\boffer_id\x18\x01 \x01(\x04R\aofferId\x12\"\n" +
 	"\ractor_user_id\x18\x02 \x01(\x03R\vactorUserId\x12*\n" +
-	"\x11actor_system_type\x18\x03 \x01(\tR\x0factorSystemType\"\xc0\x05\n" +
+	"\x11actor_system_type\x18\x03 \x01(\tR\x0factorSystemType\"\xb3\x06\n" +
 	"\x16OptionContractResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x19\n" +
 	"\boffer_id\x18\x02 \x01(\x04R\aofferId\x12\x19\n" +
@@ -20652,7 +20849,11 @@ const file_stock_stock_proto_rawDesc = "" +
 	"created_at\x18\x12 \x01(\tR\tcreatedAt\x12\x1d\n" +
 	"\n" +
 	"updated_at\x18\x13 \x01(\tR\tupdatedAt\x12\x18\n" +
-	"\aversion\x18\x14 \x01(\x03R\aversion\"\xc9\x01\n" +
+	"\aversion\x18\x14 \x01(\x03R\aversion\x12\x12\n" +
+	"\x04kind\x18\x15 \x01(\tR\x04kind\x12%\n" +
+	"\x0erouting_number\x18\x16 \x01(\x03R\rroutingNumber\x12\x1b\n" +
+	"\tbank_code\x18\x17 \x01(\tR\bbankCode\x12\x19\n" +
+	"\bme_owner\x18\x18 \x01(\bR\ameOwner\"\xc9\x01\n" +
 	"\x16ListMyContractsRequest\x12\"\n" +
 	"\ractor_user_id\x18\x01 \x01(\x03R\vactorUserId\x12*\n" +
 	"\x11actor_system_type\x18\x02 \x01(\tR\x0factorSystemType\x12\x12\n" +

@@ -867,6 +867,14 @@ message UnifiedOptionOffer {
   string best_bid             = 16;
   string best_ask             = 17;
   int32  active_chains_count  = 18;
+  // Stable local surrogate id for this offer (RemoteOTCOffer.ID for remote;
+  // equals the numeric offer_id for local). The frontend addresses any
+  // offer — local or remote — by this id on the unified routes. (SP-1)
+  uint64 local_id = 19;
+  // me_owner is true when the acting caller (acting_owner_type/id on the
+  // request) owns this listing. Always false for remote rows. Computed in
+  // the stock-service from the caller identity. (SP-1)
+  bool me_owner = 20;
 }
 
 message ListUnifiedOptionOffersRequest {
@@ -884,6 +892,11 @@ message ListUnifiedOptionOffersRequest {
   // shape. Implies kind=local since cross-bank listings can never be
   // ours.
   string owner_only_seller_id = 7;
+  // Caller identity used to stamp me_owner on each row (SP-1).
+  // acting_owner_type is "client" | "bank"; acting_owner_id is 0 when
+  // acting as the bank.
+  string acting_owner_type = 8;
+  uint64 acting_owner_id   = 9;
 }
 
 message ListUnifiedOptionOffersResponse {
@@ -1281,6 +1294,23 @@ message OTCNegotiationResponse {
   // terminal status, or accepted but formation saga failed). Non-zero
   // only on status="accepted" rows where the contract formed successfully.
   uint64 minted_contract_id          = 17;
+  // SP-1 unified-list provenance. ListMyNegotiations merges the caller's
+  // LOCAL (intra-bank) and REMOTE (cross-bank peer) negotiation chains
+  // into one list; each item carries where it lives and whether the
+  // caller is the parent listing's poster/seller.
+  //   kind            — "local" | "remote"
+  //   routing_number  — owning bank's routing (own for local; the
+  //                     counterparty/peer bank's for remote)
+  //   bank_code       — owning bank's 3-digit code (own for local;
+  //                     the peer bank's for remote)
+  //   me_owner        — true ONLY when the caller is the parent offer's
+  //                     poster/seller (someone is bidding on MY listing);
+  //                     a chain the caller opened AS the bidder is false.
+  //                     For remote: true iff WE host the seller side.
+  string kind                        = 18;
+  int64  routing_number              = 19;
+  string bank_code                   = 20;
+  bool   me_owner                    = 21;
 }
 
 // OTCNegotiationRevisionResponse is one entry in the revision chain.
@@ -1668,6 +1698,15 @@ message OTCOfferResponse {
   string  updated_at = 15;
   int64   version = 16;
   bool    unread = 17;
+  // Provenance + ownership for the unified offer read (SP-1). kind is
+  // "local" (this bank holds the listing) or "remote" (resolved from a
+  // peer-bank mirror). routing_number / bank_code identify the hosting
+  // bank. me_owner is true only when the acting caller owns the listing
+  // (always false for remote). Computed in stock-service.
+  string kind = 18;
+  int64  routing_number = 19;
+  string bank_code = 20;
+  bool   me_owner = 21;
 }
 
 message OTCOfferRevisionItem {
@@ -1704,6 +1743,11 @@ message GetOTCOfferRequest {
   uint64 offer_id = 1;
   int64  actor_user_id = 2;
   string actor_system_type = 3;
+  // Caller identity used to stamp me_owner on the resolved offer (SP-1).
+  // acting_owner_type is "client" | "bank"; acting_owner_id is 0 when
+  // acting as the bank.
+  string acting_owner_type = 4;
+  uint64 acting_owner_id   = 5;
 }
 
 message CounterOTCOfferRequest {
@@ -1763,6 +1807,18 @@ message OptionContractResponse {
   string  created_at = 18;
   string  updated_at = 19;
   int64   version = 20;
+  // Provenance + ownership for the unified contract read (SP-1 Task 8).
+  // kind is "local" (intra-bank contract) or "remote" (cross-bank
+  // peer_option_contracts mirror). routing_number / bank_code identify the
+  // OWNING/HOSTING bank: own for local; the COUNTERPARTY peer bank for remote
+  // (the side this bank does NOT host). me_owner is true ONLY when the acting
+  // caller is the contract's BUYER/HOLDER — a formed option is the buyer's
+  // owned asset, so the seller/writer is never the owner (DIFFERENT from
+  // offers/negotiations where the poster/seller is the owner).
+  string kind = 21;
+  int64  routing_number = 22;
+  string bank_code = 23;
+  bool   me_owner = 24;
 }
 
 message ListMyContractsRequest {

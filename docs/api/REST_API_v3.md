@@ -5670,15 +5670,75 @@ Exercise an options contract.
 | *(new)* | `GET /api/v3/otc/options` (unified local + remote discovery) |
 | *(new — peer)* | `GET /api/v3/cross-bank-protocol/public-option-offers` (cross-bank discovery endpoint) |
 
-The exercise route, contract list, contract detail, ratings, and negotiation-history routes from the old §30 are unchanged — they're still at their existing paths under `/me/otc/contracts/...`, `/me/otc/history`, and `/otc/traders/...`.
+The exercise route, ratings, and negotiation-history routes from the old §30 are unchanged — they're still at their existing paths under `/me/otc/contracts/...`, `/me/otc/history`, and `/otc/traders/...`. The contract **list** (`GET /api/v3/me/otc/contracts`) and **detail** (`GET /api/v3/otc/contracts/:id`) routes keep their paths but now serve LOCAL and REMOTE contracts uniformly — see the next subsection.
+
+#### GET /api/v3/me/otc/contracts (unified local + remote) — SP-1 Task 8
+
+Returns the caller's formed option contracts — both LOCAL (intra-bank
+`OptionContract` rows) and REMOTE (cross-bank `peer_option_contracts` mirror
+rows where the caller is a party) — merged into one `contracts` array. Each
+item carries provenance (`kind` / `routing_number` / `bank_code`) plus
+`me_owner`.
+
+**Authentication:** Any JWT + `ResolveIdentity` (AnyAuth — clients and employees accepted)
+
+**Query Parameters:** `role` (`buyer`|`seller`|`either`, default `either`), `page` (default 1), `page_size` (default 20).
+
+**`OptionContractResponse` shape:** in addition to the existing fields, every item now carries:
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` | string | `local` (intra-bank contract) or `remote` (cross-bank peer contract) |
+| `routing_number` | int64 | Owning/hosting bank's routing. For `local`: our own routing. For `remote`: the COUNTERPARTY/peer bank's routing (the side we do NOT host). |
+| `bank_code` | string | Owning/peer bank's code, matching `routing_number`. For `remote` this is the counterparty routing formatted as a string (the peer-contract mirror stores no separate bank-code field). |
+| `me_owner` | bool | `true` ONLY when the caller is the contract's **buyer/holder** — a formed option is the buyer's owned asset, so the seller/writer is `false`. (DIFFERENT from offers/negotiations, where the poster/seller is the owner.) For `remote`: `true` iff the row's `direction == "CREDIT"` (this bank holds the buyer side). |
+
+For `remote` items, `id` is the **local surrogate primary key** of this bank's
+peer-contract mirror row (so callers correlate within this bank's id
+namespace), and the terms (`stock_ticker`, `quantity`, `strike_price`,
+`strike_currency`, `settlement_date`, `status`) are projected from the mirrored
+cross-bank option. The `buyer` / `seller` `PartyRef`s carry the SI-TX
+participant id as `display_name` plus the side's routing number as `bank_code`.
+
+**Paging note:** `page`/`page_size` paginate the LOCAL set; REMOTE contracts
+are appended in full after the local page (never silently truncated). `total`
+reflects the local total only.
+
+**Breaking change (SP-1 double-listing fix):** `peer_contracts[]` and
+`peer_total` are **no longer returned**. Remote contracts now appear exclusively
+in the unified `contracts[]` with `kind="remote"`. This matches the pattern
+used by `GET /api/v3/me/otc/negotiations` which has always returned one merged
+list.
+
+**Note:** the remote merge is gated to **client** principals (cross-bank
+participant ids are `client-<N>`); an employee acting as the bank skips the
+remote merge and gets local contracts only.
+
+#### GET /api/v3/otc/contracts/:id (unified local + remote) — SP-1 Task 8
+
+Resolves a single option contract by id. A LOCAL `OptionContract` is returned
+with `kind="local"`, own routing/bank-code provenance, and `me_owner` = (caller
+is the buyer/holder). When the id is not a local contract, it falls back to the
+cross-bank `peer_option_contracts` mirror (resolved by surrogate id) and returns
+a `kind="remote"` projection with `me_owner` = (`direction == "CREDIT"`).
+
+**Authentication:** Any JWT + `ResolveIdentity` (AnyAuth).
+
+**Response 403:** Caller is neither the buyer nor the seller of a LOCAL contract.
+
+**Response 404:** Neither a local nor a remote contract with that id exists. (A non-NotFound error from the remote mirror lookup surfaces as 500, never masked as 404.)
+
+---
 
 ### GET /api/v3/me/otc/transactions/:txid/status
 
 Status of a **cross-bank** OTC trade's underlying SI-TX transaction, resolved via `PeerTxService.GetTxStatus`. The `:txid` accepts either id a client may hold:
 - the bare idem returned in a dispatch's `poll_url`; or
-- a cross-bank contract's **`crossbank_tx_id`** (form `"<peerCode>:<idem>"`), which `GET /api/v3/me/otc/contracts` already returns on every `peer_contracts[]` entry.
+- a composite id of the form `"<peerCode>:<idem>"` (e.g. obtained from the `crossbank_tx_id` column stored internally on `peer_option_contracts`).
 
-The composite form is split into `(caller_peer_bank_code, transaction_id)` so the status resolves on **both** banks — the dispatching (sender) bank via its outbound row, the receiving bank via its inbound idempotence record. So a client can read their cross-bank contracts and poll each one's status directly, no extra plumbing. The id is only known to the trade's parties, so holding it authorizes reading its status.
+Note: the unified `OptionContractResponse` items in `contracts[]` (including `kind=remote` entries) do **not** expose a `crossbank_tx_id` field — that field existed only on the now-removed `peer_contracts[]` / `PeerOptionContractResponse`. The composite tx id can be obtained from the dispatch flow's `poll_url` or from a bank-internal lookup; it is not surfaced in the `GET /api/v3/me/otc/contracts` response.
+
+The composite form is split into `(caller_peer_bank_code, transaction_id)` so the status resolves on **both** banks — the dispatching (sender) bank via its outbound row, the receiving bank via its inbound idempotence record. The id is only known to the trade's parties, so holding it authorizes reading its status.
 
 **Authentication:** Any JWT (AnyAuthMiddleware)
 
@@ -7514,11 +7574,11 @@ The legacy `/me/watchlist` routes above operate on the caller's default **"My Wa
 
 ## 41. OTC Negotiation History (Celina 3)
 
-Read-only view of *terminal* OTC offers (accepted, rejected, expired, failed) for the caller. The active `/me/otc/offers` list excludes terminal offers; this endpoint surfaces them with optional status, date-range, and counterparty filters.
+Read-only view of *terminal* OTC negotiations for the caller, **LOCAL (intra-bank) and REMOTE (cross-bank) merged into one list** (SP-1 Task 8b). The active `/me/otc/offers` list excludes terminal offers; this endpoint surfaces them with optional status, date-range, and counterparty filters.
 
 ### GET /api/v3/me/otc/history
 
-List the caller's terminal OTC negotiations.
+List the caller's terminal OTC negotiations (local + remote).
 
 **Authentication:** Any JWT
 
@@ -7529,7 +7589,7 @@ List the caller's terminal OTC negotiations.
 | `status` | string (repeatable) | `ACCEPTED` / `REJECTED` / `EXPIRED` / `FAILED`. Default: all four. |
 | `since` | string (YYYY-MM-DD) | Lower bound on `updated_at`. |
 | `until` | string (YYYY-MM-DD) | Upper bound on `updated_at`. Must be ≥ `since`. |
-| `counterparty_id` | int | Restrict to offers where the OTHER party has this owner id. |
+| `counterparty_id` | int | Restrict to offers where the OTHER party has this owner id (LOCAL items only). |
 | `page` | int | 1-based; default 1. |
 | `page_size` | int | 1..100; default 20. |
 
@@ -7537,13 +7597,25 @@ List the caller's terminal OTC negotiations.
 ```json
 {
   "offers": [
-    { "id": 42, "status": "ACCEPTED", "direction": "sell_initiated", "...": "..." }
+    { "id": 42, "status": "ACCEPTED", "direction": "sell_initiated", "kind": "local",  "routing_number": 111, "bank_code": "111", "me_owner": true,  "...": "..." },
+    { "id": 55, "status": "accepted", "stock_ticker": "ACME",        "kind": "remote", "routing_number": 222, "bank_code": "222", "me_owner": false, "...": "..." }
   ],
   "total": 1
 }
 ```
 
-Sorted by `updated_at` descending. Item shape mirrors `/api/v3/me/otc/offers`.
+Each item carries provenance + ownership fields:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `kind` | string | `local` (this bank hosts the negotiation) or `remote` (resolved from a cross-bank peer chain). |
+| `routing_number` / `bank_code` | int / string | The hosting bank for `local`; the **counterparty/peer** bank for `remote`. |
+| `me_owner` | bool | `true` only when the caller **posted/originated** the offer (initiator side) — a history row where the caller was the bidder/counterparty is `false`. For `remote`: `true` iff WE host the **seller/poster** side (`SellerRoutingNumber == ownRouting`). |
+
+**Local vs remote behavior:**
+- **LOCAL** items are the caller's terminal `OTCOffer` rows (statuses `ACCEPTED` / `REJECTED` / `EXPIRED` / `FAILED`), sorted by `updated_at` descending; item shape mirrors `/api/v3/me/otc/offers`.
+- **REMOTE** items are the caller's cross-bank peer negotiation chains in a *terminal* peer status. Only client principals receive remote items (a bank/employee caller has no cross-bank identity and gets local-only). The request `status` filter is mapped onto the peer status vocabulary: `ACCEPTED→accepted`, `REJECTED→{rejected,declined,cancelled}`, `EXPIRED→expired`, `FAILED→(none)`. Remote chain statuses are surfaced in the peer's lowercase vocabulary.
+- **Paging:** `page` / `page_size` apply to the LOCAL set only; remote terminal rows are **appended in full** after the local page (never silently truncated). `total` reflects the local total only, so the `offers` array length may exceed `total` by the remote count. Unified cross-source paging is out of scope for SP-1.
 
 **Response 400:** Invalid `status` value, bad date format, `since > until`.
 
@@ -8283,23 +8355,31 @@ No funds or shares are unwound — none are reserved at listing-creation time; r
 
 #### GET /api/v3/otc/options/:id/negotiations
 
-List every negotiation chain against a listing (any status). Used by the listing's poster to see all incoming bids.
+List the negotiation chains against a listing. `:id` is the stable surrogate id from the discovery feed and may resolve to a **LOCAL** listing (an `OTCOffer` this bank hosts) or a **REMOTE** listing (a `remote_otc_offer` mirror of a peer-bank listing). (SP-1 Task 8b extends this to remote ids.)
 
-**Authentication:** Any JWT + `ResolveIdentity`. **Restricted audience:** only the listing's poster (a client whose `principal_id` matches the offer's initiator) or an employee holding the `otc.read.all` permission may call this. A competing bidder — or any other client — receives **403**; bidders see only their own chain via `GET /api/v3/me/otc/options/negotiations`.
+**Authentication:** Any JWT + `ResolveIdentity`.
+
+**LOCAL `:id` — unchanged audience + behavior.** Returns **every** chain on the listing (any status). **Restricted audience:** only the listing's poster (a client whose `principal_id` matches the offer's initiator) or an employee holding the `otc.read.all` permission may call this. A competing bidder — or any other client — receives **403**; bidders see only their own chain via `GET /api/v3/me/otc/options/negotiations`. Each item is now stamped `kind="local"` + own `routing_number` / `bank_code`; `me_owner` is `false` (the field reflects the *chain's* bidder ownership, not the listing's — a bidder is never the owner).
+
+**REMOTE `:id` — caller's own chain(s) only.** We do not host the listing, so we can only surface the **caller's own** chain(s) against it — never other parties' chains. Returns the caller's `peer_otc_negotiation` rows whose `(ParentOfferRouting, ParentOfferID)` lot key matches the mirror's `(PeerRoutingNumber, ForeignOfferID)`, each stamped `kind="remote"` with counterparty provenance and `me_owner` per the seller-side rule. If the caller has no chain on it → **empty list** (not 403/404). Only client principals have a cross-bank identity; a bank/employee caller gets an empty list for a remote id.
 
 **Response 200:** `{ "negotiations": [OTCNegotiationResponse...], "total": int }`.
 
-**Response 403:** Caller is neither the listing's poster nor a permission-gated employee.
+**Response 403:** (LOCAL only) caller is neither the listing's poster nor a permission-gated employee.
+
+**Response 404:** `:id` is neither a local offer nor a remote mirror.
 
 ---
 
 #### GET /api/v3/otc/options/:id/timeline
 
-Cross-chain interaction timeline for an offer: the offer plus **every** negotiation chain's revisions, merged into a single stream sorted ascending by `created_at`. This is the offer-owner "front page" view — one call returns the whole offer's history across all bidders, so the frontend never needs to fan out per chain. Each entry carries its chain's `negotiation_id` and bidder identity, so the client can render one flat timeline or regroup into per-bidder swimlanes.
+Cross-chain interaction timeline for an offer. `:id` may resolve to a **LOCAL** listing or a **REMOTE** mirror (SP-1 Task 8b extends this to remote ids).
 
-**Authentication:** Any JWT + `ResolveIdentity`. **Restricted audience:** identical to `GET /api/v3/otc/options/:id/negotiations` — listing poster or employee with `otc.read.all` only. Competing bidders receive **403**.
+**LOCAL `:id` — unchanged:** the offer plus **every** negotiation chain's revisions, merged into a single stream sorted ascending by `created_at`. This is the offer-owner "front page" view — one call returns the whole offer's history across all bidders, so the frontend never needs to fan out per chain. Each entry carries its chain's `negotiation_id` and bidder identity, so the client can render one flat timeline or regroup into per-bidder swimlanes. **Restricted audience:** identical to `GET /api/v3/otc/options/:id/negotiations` — listing poster or employee with `otc.read.all` only. Competing bidders receive **403**.
 
-**Path:** `:id` — the parent OTCOffer listing id.
+**REMOTE `:id` — caller's own chain(s) only:** we do not host the listing, so the timeline surfaces only the **caller's own** chain(s) against it (never other parties'). The mirror provides the `offer` header (`kind="remote"`); each of the caller's matching peer chains (lot key `(ParentOfferRouting, ParentOfferID)` == mirror `(PeerRoutingNumber, ForeignOfferID)`) becomes **one** timeline entry — the peer mirror keeps only current terms, not a per-revision history, so there is one entry per chain with `action="COUNTER"`. No matching chain → offer header + **empty timeline** (not 403/404). Only client principals have a cross-bank identity.
+
+**Path:** `:id` — the surrogate listing id (local OTCOffer or remote mirror).
 
 **Response 200:**
 
@@ -8339,27 +8419,50 @@ Cross-chain interaction timeline for an offer: the offer plus **every** negotiat
 }
 ```
 
-Entries are ordered by `created_at ASC`; ties break by `(negotiation_id, revision_number)` for deterministic ordering.
+Entries are ordered by `created_at ASC`; ties break by `(negotiation_id, revision_number)` for deterministic ordering (LOCAL only).
 
-**Response 403:** Caller is neither the listing's poster nor a permission-gated employee.
+**Response 403:** (LOCAL only) caller is neither the listing's poster nor a permission-gated employee.
 
-**Response 404:** Offer not found.
+**Response 404:** `:id` is neither a local offer nor a remote mirror.
 
 ---
 
 #### GET /api/v3/me/otc/options/negotiations
 
-List chains where the caller is the bidder.
+Returns a **unified list** of the caller's negotiation chains — both LOCAL
+(intra-bank chains where the caller is the bidder) and REMOTE (cross-bank
+peer chains where the caller is a party) — merged into one `negotiations`
+array. Each item carries provenance (`kind` / `routing_number` /
+`bank_code`) plus `me_owner`. (SP-1 Task 7)
 
 **Query Parameters:**
 
 | Parameter | Type | Description |
 |---|---|---|
-| `statuses` | string | Comma-separated filter: `open,countered,accepted,rejected,cancelled,expired` |
+| `statuses` | string | Comma-separated filter: `open,countered,accepted,rejected,cancelled,expired` (applied to both local and remote items) |
 | `page` | int | Default 1 |
 | `page_size` | int | Default 20, max 200 |
 
-**`OTCNegotiationResponse` shape:** includes a `minted_contract_id` field (uint64, 0 when absent) populated on `status=accepted` rows that successfully minted a contract.
+**`OTCNegotiationResponse` shape:** in addition to the existing fields and
+`minted_contract_id` (uint64, 0 when absent; populated on `status=accepted`
+rows that successfully minted a contract), every item now carries:
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` | string | `local` (intra-bank chain) or `remote` (cross-bank peer chain) |
+| `routing_number` | int64 | Owning bank's routing. For `local`: our own routing. For `remote`: the COUNTERPARTY/peer bank's routing (the side we do not host). |
+| `bank_code` | string | Owning/peer bank's code, matching `routing_number`. |
+| `me_owner` | bool | `true` ONLY when the caller is the parent listing's poster/seller (someone is bidding on MY listing). A chain the caller opened **as the bidder** is `false`. For `remote`: `true` iff WE host the seller/poster side (`seller_routing == own_routing`). |
+
+For `remote` items, `id` is the **local surrogate primary key** of this
+bank's peer-negotiation mirror row (so callers correlate within this
+bank's id namespace), and the terms (`quantity`, `strike_price`, `premium`,
+`settlement_date`, `status`) are projected from the mirrored cross-bank
+offer.
+
+**Paging note:** `page`/`page_size` paginate the LOCAL set; REMOTE chains
+are appended in full after the local page (never silently truncated).
+`total` reflects the local total only.
 
 ---
 
@@ -8427,6 +8530,60 @@ History view: every OTC option listing the caller has ever posted, **any status*
 
 ---
 
+#### GET /api/v3/otc/options/:id
+
+Resolve a single OTC option offer by its **stable surrogate id** — the `local_id` surfaced on every row of `GET /api/v3/otc/options`. Works for both **local** offers (this bank's listings) and **remote** offers (a peer-bank listing mirrored locally). The handler first tries the local lookup; if that 404s it falls back to the persistent remote mirror, so a frontend can address any discovered offer — local or remote — by the same id.
+
+**Authentication:** Any JWT + `ResolveIdentity`.
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | uint64 | The surrogate id from the discovery feed (`local_id`) |
+
+**Response 200 — local offer** (backward-compatible: the existing `offer` / `revisions` body is preserved, with two decoration fields added):
+```json
+{
+  "offer":    { "...": "OTCOfferResponse" },
+  "revisions": [ "..." ],
+  "kind":     "local",
+  "me_owner": true
+}
+```
+- `kind` is always `"local"` here.
+- `me_owner` is `true` when the acting identity owns the listing (client whose `seller_id` is `client-<their owner id>`, or an employee acting as the bank on a `bank`-owned listing), else `false`.
+
+**Response 200 — remote (cross-bank) offer** (resolved from the mirror; flat shape):
+```json
+{
+  "id":               7,
+  "kind":             "remote",
+  "me_owner":         false,
+  "offer_id":         "off-9",
+  "bank_code":        "222",
+  "routing_number":   222,
+  "seller_id":        "client-3",
+  "direction":        "sell_initiated",
+  "ticker":           "AAPL",
+  "amount":           50,
+  "strike_price":     "180.50",
+  "strike_currency":  "USD",
+  "premium":          "700.00",
+  "premium_currency": "USD",
+  "settlement_date":  "2026-12-31T00:00:00Z",
+  "status":           "open",
+  "created_at":       "2026-05-10T14:00:00Z"
+}
+```
+- `kind` is always `"remote"` and `me_owner` is always `false` (a peer hosts the listing — it is never ours).
+- `status` is `open` or `cancelled` (cancelled mirror rows are still returned so the FE can render a terminal state rather than a 404).
+
+**Response 400:** `{ "error": { "code": "validation_error", "message": "invalid id" } }`
+**Response 404:** `{ "error": { "code": "not_found", "message": "OTC offer not found" } }` — neither a local offer nor a remote mirror row exists for `id`.
+
+---
+
 #### GET /api/v3/otc/options
 
 Unified cross-bank discovery view: every open OTC option listing on this bank + every peer bank's open listings (refreshed every ~5 s by the OptionRefresher). Filterable, paginated, partial-failure tolerant (the cache exposes `peers_total` / `peers_reached` / `partial=true` if some peers were unreachable in the last refresh).
@@ -8450,6 +8607,7 @@ Unified cross-bank discovery view: every open OTC option listing on this bank + 
       "kind":                "remote",
       "bank_code":           "222",
       "routing_number":      222,
+      "local_id":            17,
       "offer_id":            "42",
       "seller_id":           "client-7",
       "seller_name":         "",
@@ -8473,6 +8631,16 @@ Unified cross-bank discovery view: every open OTC option listing on this bank + 
   "last_refresh":  "2026-05-16T02:50:00Z"
 }
 ```
+
+**SP-1 provenance + ownership fields (2026-06-04):** Every item in `offers[]` carries:
+
+| Field | Type | Notes |
+|---|---|---|
+| `kind` | string | `"local"` (this bank's listing) or `"remote"` (peer-bank mirror). |
+| `routing_number` | int64 | Bank routing number identifying the hosting bank. |
+| `bank_code` | string | 3-digit bank code. |
+| `local_id` | uint64 | Stable local surrogate id — `RemoteOTCOffer.ID` for remote rows; the numeric offer id for local rows. Use this as `:id` in `GET /api/v3/otc/options/:id`. |
+| `me_owner` | bool | `true` when the acting caller is the listing's poster/seller. Always `false` for remote rows. Omitted (falsy) when not owned. |
 
 **Best-bid / best-ask surface (Part A 2026-05-16).** Three optional fields surface aggregated active-chain pricing so a prospective bidder sees that competition is live before placing an offer at the seller's static ask:
 

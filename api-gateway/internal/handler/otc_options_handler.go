@@ -232,12 +232,15 @@ func (h *OTCOptionsHandler) ListMyPostedOffers(c *gin.Context) {
 }
 
 // GetOffer godoc
-// @Summary      Get an OTC offer with revisions
+// @Summary      Get an OTC option offer by surrogate id (local or remote)
+// @Description  Resolves an OTC option offer by its stable surrogate id (the local_id from the discovery feed). Local offers return the {offer,revisions} body decorated with kind="local" + me_owner. If the id is not a local offer it is resolved from the remote (cross-bank) mirror and returned as a flat body with kind="remote" + me_owner=false.
 // @Tags         OTCOptions
 // @Security     BearerAuth
 // @Produce      json
-// @Param        id path int true "offer id"
+// @Param        id path int true "surrogate offer id"
 // @Success      200 {object} map[string]interface{}
+// @Failure      400 {object} map[string]interface{}
+// @Failure      404 {object} map[string]interface{}
 // @Router       /api/v3/otc/options/{id} [get]
 func (h *OTCOptionsHandler) GetOffer(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -250,6 +253,8 @@ func (h *OTCOptionsHandler) GetOffer(c *gin.Context) {
 		OfferId:         id,
 		ActorUserId:     int64(ownerToLegacyUserID(identity.OwnerID)),
 		ActorSystemType: ownerToLegacySystemType(identity.OwnerType),
+		ActingOwnerType: identity.OwnerType,
+		ActingOwnerId:   derefU64(identity.OwnerID),
 	})
 	if err != nil {
 		handleGRPCError(c, err)
@@ -361,10 +366,14 @@ func (h *OTCOptionsHandler) RejectOffer(c *gin.Context) {
 }
 
 // ListMyContracts godoc
-// @Summary      List the caller's OTC contracts
+// @Summary      List the caller's OTC contracts (unified local + remote)
+// @Description  Returns the caller's formed option contracts, LOCAL and REMOTE merged into one contracts[] array. Each item carries kind/routing_number/bank_code and me_owner (true when the caller is the buyer/holder). peer_contracts[] has been removed — remote contracts appear in contracts[] with kind=remote. (SP-1 Task 8)
 // @Tags         OTCOptions
 // @Security     BearerAuth
 // @Produce      json
+// @Param        role query string false "buyer|seller|either"
+// @Param        page query int false "page (default 1)"
+// @Param        page_size query int false "page size (default 20)"
 // @Success      200 {object} map[string]interface{}
 // @Router       /api/v3/me/otc/contracts [get]
 func (h *OTCOptionsHandler) ListMyContracts(c *gin.Context) {
@@ -382,20 +391,21 @@ func (h *OTCOptionsHandler) ListMyContracts(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"contracts":      resp.Contracts,
-		"total":          resp.Total,
-		"peer_contracts": resp.PeerContracts,
-		"peer_total":     resp.PeerTotal,
+		"contracts": resp.Contracts,
+		"total":     resp.Total,
 	})
 }
 
 // GetContract godoc
-// @Summary      Get an OTC contract
+// @Summary      Get an OTC contract (unified local + remote)
+// @Description  Resolves an option contract by id. A LOCAL contract is returned with kind=local + own provenance + me_owner (true when caller is the buyer/holder). A non-local id falls back to the cross-bank mirror and returns kind=remote (me_owner=direction==CREDIT). 404 only when neither exists. (SP-1 Task 8)
 // @Tags         OTCOptions
 // @Security     BearerAuth
 // @Produce      json
 // @Param        id path int true "contract id"
 // @Success      200 {object} map[string]interface{}
+// @Failure      403 {object} map[string]interface{}
+// @Failure      404 {object} map[string]interface{}
 // @Router       /api/v3/otc/contracts/{id} [get]
 func (h *OTCOptionsHandler) GetContract(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)

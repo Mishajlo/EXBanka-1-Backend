@@ -3,6 +3,7 @@ package handler_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -371,6 +372,48 @@ func TestOTCOpt_GetOffer_BadID(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/offers/abc", nil))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// SP-1 (passthrough): GetOffer passes identity fields down to the service,
+// which now resolves local vs remote internally and returns kind + me_owner.
+// Assert 200 and that the service response is passed through unchanged.
+func TestGetOffer_PassthroughLocal(t *testing.T) {
+	cl := &stubOTCOptionsClient{
+		getOfferFn: func(in *stockpb.GetOTCOfferRequest) (*stockpb.OTCOfferDetailResponse, error) {
+			require.Equal(t, uint64(15), in.OfferId)
+			require.Equal(t, "client", in.ActingOwnerType)
+			require.Equal(t, uint64(42), in.ActingOwnerId)
+			return &stockpb.OTCOfferDetailResponse{Offer: &stockpb.OTCOfferResponse{
+				Id:      15,
+				Kind:    "local",
+				MeOwner: true,
+			}}, nil
+		},
+	}
+	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/offers/15", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	// Service response is passed through: offer wrapper is present.
+	require.Contains(t, body, "offer")
+	offer, _ := body["offer"].(map[string]any)
+	require.Equal(t, "local", offer["kind"])
+	require.Equal(t, true, offer["me_owner"])
+}
+
+// SP-1 (passthrough): NotFound from the service propagates as HTTP 404.
+func TestGetOffer_NotFound(t *testing.T) {
+	cl := &stubOTCOptionsClient{
+		getOfferFn: func(*stockpb.GetOTCOfferRequest) (*stockpb.OTCOfferDetailResponse, error) {
+			return nil, status.Error(codes.NotFound, "offer not found")
+		},
+	}
+	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/offers/99", nil))
+	require.Equal(t, http.StatusNotFound, rec.Code)
 }
 
 func TestOTCOpt_CounterOffer_Success(t *testing.T) {

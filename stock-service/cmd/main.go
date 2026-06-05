@@ -133,6 +133,10 @@ func main() {
 		// Cross-bank option contracts written at COMMIT_TX time
 		// when transaction-service finalises an OTC accept TX.
 		&model.PeerOptionContract{},
+		// SP-1: persistent mirror of OTC option offers discovered on peer banks.
+		// Gives each remote listing a stable local surrogate id; reconciliation
+		// flips Status open->cancelled when a peer stops listing it.
+		&model.RemoteOTCOffer{},
 		// Outbox: durable queue for Kafka events published from inside
 		// sagas. The drainer goroutine (started below) reads pending rows
 		// and publishes them, so a crash between business commit and
@@ -843,6 +847,47 @@ func main() {
 	}
 	peerOtcRepo := repository.NewPeerOtcNegotiationRepository(db)
 	peerOptionRepo := repository.NewPeerOptionContractRepository(db)
+
+	// SP-1 Task 9 — safety-net reconciler for missed cross-bank negotiation
+	// state changes. Polls each active peer's GET /negotiations/{rid}/{id}
+	// every 2 minutes for our "ongoing" rows. When the peer reports
+	// isOngoing=false (terminal): checks for a local peer_option_contracts row
+	// (proof of acceptance); if found → flips to "accepted"; otherwise →
+	// "cancelled". False-cancel guard: skips on any non-2xx, transport error,
+	// empty body, or contract-check error. Wrapped in cronreg for operator
+	// visibility and manual triggering.
+	negReconcilerEntry := cronRegistry.Register("peer-otc-neg-reconciler", "Safety-net poll for missed cross-bank negotiation cancels (2 min tick)", 2*time.Minute)
+	negReconciler := service.NewPeerOTCNegotiationReconciler(
+		peerOtcRepo, peerOptionRepo, peerBankAdminClient, nil /* default http.Client */, ownRouting, 2*time.Minute,
+	).WithNotifier(producer)
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		// Run an initial reconcile immediately (best-effort on startup).
+		if negReconcilerEntry.BeginRun() {
+			negReconciler.RunOnce(ctx)
+			negReconcilerEntry.EndRun(nil)
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if !negReconcilerEntry.BeginRun() {
+					continue
+				}
+				negReconciler.RunOnce(ctx)
+				negReconcilerEntry.EndRun(nil)
+			case <-negReconcilerEntry.TriggerChan():
+				if !negReconcilerEntry.BeginRun() {
+					continue
+				}
+				negReconciler.RunOnce(ctx)
+				negReconcilerEntry.EndRun(nil)
+			}
+		}
+	}()
+
 	peerOtcHandler := handler.NewPeerOTCGRPCHandler(peerOtcRepo, peerOptionRepo, holdingRepo, peerTxClient, ownRouting)
 	peerOtcHandler.SetHoldingReserver(holdingReservationSvc)
 	peerOtcHandler = peerOtcHandler.WithNotifier(producer)
@@ -919,7 +964,9 @@ func main() {
 		return out, nil
 	}
 	optionRefresher.WithAggregateBids(cacheAgg)
-	// Now that aggregation is wired, kick off the refresher (gated by cronreg).
+	remoteOfferRepo := repository.NewRemoteOTCOfferRepository(db)
+	optionRefresher = optionRefresher.WithMirror(remoteOfferRepo)
+	// Now that aggregation and mirror are wired, kick off the refresher (gated by cronreg).
 	optionCacheEntry := cronRegistry.Register("option-offer-cache-refresher", "Refreshes unified option offer cache from local + peer banks", 5*time.Second)
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
@@ -965,7 +1012,9 @@ func main() {
 		WithListings(listingRepo).
 		WithPeerContracts(peerOptionRepo, ownRouting).
 		WithRatings(ratingSvc).
-		WithNegotiations(otcNegotiationSvc)
+		WithNegotiations(otcNegotiationSvc).
+		WithRemoteOffers(remoteOfferRepo, cfg.OwnBankCode).
+		WithPeerNegotiations(peerOtcRepo) // SP-1 Task 7: unified local+remote negotiation list
 
 	// Phase 3: OTC stocks marketplace (sell + buy direction). The
 	// service uses narrow OTCStockListingResolver + OTCStockAccountClient

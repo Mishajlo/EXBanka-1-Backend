@@ -895,16 +895,25 @@ func (s *OTCNegotiationService) ListMyNegotiations(
 // (owner_type="bank", already gated on otc.read.all at the gateway) may
 // see all incoming bids. A competing bidder receives PermissionDenied —
 // they see only their own chain via ListMyNegotiations.
+//
+// Returns the parent OTCOffer alongside the chain slice so the handler can
+// stamp me_owner from the offer's InitiatorOwnerType/InitiatorOwnerID without
+// a second DB fetch (authorizeListingAudience already loaded it).
 func (s *OTCNegotiationService) ListByParentOffer(
 	ctx context.Context,
 	parentOfferID uint64,
 	callerOwnerType model.OwnerType,
 	callerOwnerID *uint64,
-) ([]model.OTCNegotiation, error) {
-	if _, err := s.authorizeListingAudience(parentOfferID, callerOwnerType, callerOwnerID); err != nil {
-		return nil, err
+) (*model.OTCOffer, []model.OTCNegotiation, error) {
+	parent, err := s.authorizeListingAudience(parentOfferID, callerOwnerType, callerOwnerID)
+	if err != nil {
+		return nil, nil, err
 	}
-	return s.negRepo.ListByParentOffer(parentOfferID)
+	rows, err := s.negRepo.ListByParentOffer(parentOfferID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return parent, rows, nil
 }
 
 // authorizeListingAudience verifies the caller may see the full set of
