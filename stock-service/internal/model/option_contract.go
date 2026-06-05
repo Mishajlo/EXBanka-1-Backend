@@ -55,8 +55,15 @@ type OptionContract struct {
 	ExpiredAt       *time.Time `json:"expired_at,omitempty"`
 	// Cross-bank saga linkage (Spec 4 / Celina 5). CrossbankTxID is set on
 	// accept; CrossbankExerciseTxID is set on cross-bank exercise.
-	CrossbankTxID         *string `gorm:"size:36;index" json:"crossbank_tx_id,omitempty"`
-	CrossbankExerciseTxID *string `gorm:"size:36;index" json:"crossbank_exercise_tx_id,omitempty"`
+	// Sized to hold the NAMESPACED cross-bank tx id "<peerRouting>:<uuid>" (a
+	// bare UUID is 36 chars, but the SI-TX correlation prefixes the peer routing,
+	// so the stored value runs up to ~56 chars). Matches the holding_reservation
+	// CrossbankTxID width (160) so a long peer routing never overflows. Was 36
+	// (UUID-only), which made the COMMIT_TX remote-contract write fail on Postgres
+	// with "value too long for type character varying(36)" and stranded the
+	// cross-bank SI-TX in "committing" with no contract formed.
+	CrossbankTxID         *string `gorm:"size:160;index" json:"crossbank_tx_id,omitempty"`
+	CrossbankExerciseTxID *string `gorm:"size:160;index" json:"crossbank_exercise_tx_id,omitempty"`
 	// OnBehalfOfFundID, when non-nil, records that the BUYER side of this
 	// contract was placed on behalf of an investment fund (E2, Plan E).
 	// The fund's manager is the acting employee. On exercise, the acquired
