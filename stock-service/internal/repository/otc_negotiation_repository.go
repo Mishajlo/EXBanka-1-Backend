@@ -271,10 +271,10 @@ func (r *OTCNegotiationRepository) AggregateActiveBidsByOffer(offerIDs []uint64)
 	var rows []row
 	err := r.db.Model(&model.OTCNegotiation{}).
 		Select("parent_offer_id, MAX(premium) AS best_bid, MIN(premium) AS best_ask, COUNT(*) AS active_count").
-		Where("parent_offer_id IN ? AND status IN ?", offerIDs, []string{
+		Where("parent_offer_id IN ? AND status IN ? AND routing_number = ?", offerIDs, []string{
 			model.OTCNegotiationStatusOpen,
 			model.OTCNegotiationStatusCountered,
-		}).
+		}, model.OwnRouting()).
 		Group("parent_offer_id").
 		Scan(&rows).Error
 	if err != nil {
