@@ -1744,6 +1744,13 @@ message OTCOfferResponse {
   // Works for local and remote offers. (SP-2b)
   uint64 my_negotiation_id     = 22;
   string my_negotiation_status = 23;
+  // seller_id — the LOCAL read view's SI-TX-prefixed seller identity of the
+  // offer's initiator: "bank" for a bank-owned listing, "client-<N>" for a
+  // client-owned one. This is the same value the unified marketplace listing
+  // surfaces (otccache.composeSellerID), kept consistent across the single-offer
+  // create/detail/counter/cancel responses. Distinct from the cross-bank wire
+  // id "employee-<N>", which is composed only on the SI-TX publish path. (SP-1)
+  string seller_id = 24;
 }
 
 message OTCOfferRevisionItem {

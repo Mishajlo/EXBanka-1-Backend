@@ -314,8 +314,10 @@ func (h *OTCOptionsHandler) CancelMyListing(c *gin.Context) {
 	// Gateway-level ownership pre-check: fetch the offer and verify the
 	// caller is the initiator. The service-layer also checks (defense in
 	// depth) but per CLAUDE.md ownership must be verified before the gRPC
-	// call. GetOffer returns NotFound for non-participants which gives
-	// us a clean 404 for "offer doesn't exist or isn't mine".
+	// call. GetOffer now returns the offer to any authenticated caller
+	// (OTC offers are publicly discoverable), so a missing offer yields a
+	// clean 404 here while a non-initiator falls through to the explicit
+	// 403 below — never a 404 that would imply non-existence.
 	detail, gerr := h.client.GetOffer(c.Request.Context(), &stockpb.GetOTCOfferRequest{
 		OfferId:         offerID,
 		ActorUserId:     int64(ownerToLegacyUserID(identity.OwnerID)),

@@ -1225,6 +1225,11 @@ func toOTCOfferProto(o *model.OTCOffer, unread bool) *stockpb.OTCOfferResponse {
 		UpdatedAt: o.UpdatedAt.Format(time.RFC3339),
 		Version:   o.Version,
 		Unread:    unread,
+		// LOCAL read view's SI-TX seller id ("bank" | "client-<N>"), stamped
+		// uniformly on every single-offer response (create/detail/counter/
+		// cancel) so it matches the unified marketplace listing. The cross-bank
+		// wire id "employee-<N>" is composed only on the SI-TX publish path.
+		SellerId: sellerIDForOwner(o.InitiatorOwnerType, o.InitiatorOwnerID),
 	}
 	if o.CounterpartyOwnerType != nil {
 		resp.Counterparty = &stockpb.PartyRef{

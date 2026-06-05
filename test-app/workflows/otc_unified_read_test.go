@@ -304,14 +304,23 @@ func TestSP1_MyNegotiations_HasProvenanceFields(t *testing.T) {
 		if !ok {
 			continue
 		}
-		assertProvenanceFields(t, item, "negotiations[]")
+		// id and kind must always be present. me_owner is NOT asserted for
+		// presence here: it is proto-omitempty (absent == false on the wire),
+		// and a bidder's chain is definitionally me_owner=false, so the key is
+		// legitimately omitted. We therefore treat absent me_owner as false.
+		for _, f := range []string{"id", "kind"} {
+			if _, ok := item[f]; !ok {
+				t.Errorf("SP-1 my-negotiations: field %q missing from item %v", f, item)
+			}
+		}
 
 		kind, _ := item["kind"].(string)
 		if kind == "" {
 			t.Errorf("SP-1 my-negotiations: item missing kind field: %v", item)
 		}
 		// A bidder's own chain must always have me_owner=false
-		// (me_owner=true is reserved for the listing's poster/seller).
+		// (me_owner=true is reserved for the listing's poster/seller). Absent
+		// (omitted) == false, which satisfies this; only an explicit true fails.
 		meOwner, _ := item["me_owner"].(bool)
 		if meOwner {
 			t.Errorf("SP-1 my-negotiations: bidder's chain has me_owner=true (should be false); item=%v", item)
@@ -418,31 +427,41 @@ func TestSP1_MyContracts_BuyerIsOwner(t *testing.T) {
 	if bidResp.StatusCode != 201 {
 		t.Fatalf("buyer bid: want 201, got %d body=%v", bidResp.StatusCode, bidResp.Body)
 	}
-	negID := int(helpers.GetNumberField(t, bidResp, "id"))
+	// The bid response is shaped {"negotiation":{"id":...}} (gateway
+	// OpenNegotiationChain wraps the chain under "negotiation"); read the
+	// nested id, not a flat one.
+	negID := int(helpers.GetNestedNumberField(t, bidResp, "negotiation", "id"))
 
-	// Seller accepts (first-accept-wins).
-	acceptResp, err := sellerC.POST(fmt.Sprintf("/api/v3/me/otc/options/%d/negotiations/%d/accept", offerID, negID), map[string]interface{}{})
+	// Seller accepts (first-accept-wins). The accept route requires the
+	// acceptor's account id in the body and returns 200 (not 201).
+	acceptResp, err := sellerC.POST(fmt.Sprintf("/api/v3/me/otc/options/%d/negotiations/%d/accept", offerID, negID), map[string]interface{}{
+		"acceptor_account_id": sellerAcctID,
+	})
 	if err != nil {
 		t.Fatalf("seller accept: %v", err)
 	}
-	if acceptResp.StatusCode != 201 {
-		t.Fatalf("seller accept: want 201, got %d body=%v", acceptResp.StatusCode, acceptResp.Body)
+	if acceptResp.StatusCode != 200 {
+		t.Fatalf("seller accept: want 200, got %d body=%v", acceptResp.StatusCode, acceptResp.Body)
 	}
 
-	// Give the contract-formation saga a moment.
-	time.Sleep(2 * time.Second)
-
-	// Buyer lists their contracts — must see me_owner=true on the new contract.
-	contractsResp, err := buyerC.GET("/api/v3/me/otc/contracts")
-	if err != nil {
-		t.Fatalf("buyer list contracts: %v", err)
+	// The contract-formation saga is async — poll the buyer's contracts list
+	// until it appears (mirrors TestSP2b_UnifiedLocalLifecycle).
+	var contracts []interface{}
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		contractsResp, cErr := buyerC.GET("/api/v3/me/otc/contracts")
+		if cErr != nil {
+			t.Fatalf("buyer list contracts: %v", cErr)
+		}
+		helpers.RequireStatus(t, contractsResp, 200)
+		if cs, ok := contractsResp.Body["contracts"].([]interface{}); ok && len(cs) > 0 {
+			contracts = cs
+			break
+		}
+		time.Sleep(1 * time.Second)
 	}
-	helpers.RequireStatus(t, contractsResp, 200)
-
-	contracts, ok := contractsResp.Body["contracts"].([]interface{})
-	if !ok || len(contracts) == 0 {
-		t.Logf("SP-1 contracts: buyer has no contracts yet (saga may still be running); body=%v", contractsResp.Body)
-		t.Skip("SP-1 contracts: contract not yet formed — skipping provenance check")
+	if len(contracts) == 0 {
+		t.Skip("SP-1 contracts: contract not yet formed within 20s — skipping provenance check")
 	}
 
 	for _, raw := range contracts {

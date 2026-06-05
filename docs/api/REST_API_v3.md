@@ -8433,9 +8433,9 @@ No funds or shares are unwound — none are reserved at listing-creation time; r
 
 **Response 204:** Listing cancelled. No body.
 
-**Response 403:** Caller is authenticated but is not the listing's initiator (e.g. they are the bound counterparty or a stranger).
+**Response 403:** Caller is authenticated but is not the listing's initiator (e.g. they are the bound counterparty or a stranger). As of 2026-06-05 this also covers a non-participant acting on an existing offer they don't own — `GetOffer` is now public, so the gateway pre-check fetches the offer and the initiator-only check returns 403 (OTC offers are already publicly discoverable, so this confirms nothing a stranger could not learn from `GET /api/v3/otc/options`).
 
-**Response 404:** Offer does not exist, or the caller is not a participant (the gateway's pre-check fetches the offer via the participant-scoped `GetOffer`, which returns NotFound for non-participants — confirming existence of a stranger's listing would itself be a data leak).
+**Response 404:** Offer does not exist (neither a local listing nor a remote mirror row for `id`).
 
 **Response 409:** Listing is no longer open (already accepted/consumed, already cancelled, expired, etc.).
 
@@ -8644,12 +8644,15 @@ Resolve a single OTC option offer by its **stable surrogate id** — the `local_
 ```json
 {
   "offer":    { "...": "OTCOfferResponse", "kind": "local", "me_owner": true,
+                "seller_id": "bank",
                 "my_negotiation_id": 88, "my_negotiation_status": "open" },
   "revisions": [ "..." ]
 }
 ```
 - `kind` is always `"local"` here.
+- **Public read (2026-06-05):** the offer body is readable by **any** authenticated caller, mirroring the unified discovery list (`GET /api/v3/otc/options`) — a caller that can see an offer in the list can read its detail. A **non-participant** receives the offer with `me_owner=false` and an **empty `revisions[]`** (the negotiation/counter history stays gated to participants — the listing's poster/seller or the chain's bidder). Reading a non-owned offer triggers no read-receipt. (Previously a non-participant got a `not_found` masked as 500; that reject path is removed.)
 - `me_owner` is `true` when the acting identity owns the listing (client whose `seller_id` is `client-<their owner id>`, or an employee acting as the bank on a `bank`-owned listing), else `false`.
+- **`seller_id`** — the LOCAL read view's SI-TX seller identity of the offer's initiator: `"bank"` for a bank-owned listing, `"client-<N>"` for a client-owned one. The same value the unified marketplace listing surfaces, now stamped uniformly on every single-offer response (create / detail / counter / cancel). Distinct from the cross-bank wire id `"employee-<N>"`, composed only on the SI-TX publish path.
 - **`my_negotiation_id` / `my_negotiation_status` (SP-2b, 2026-06-05):** when the authenticated caller has an own (bidder) negotiation chain against this offer, these carry that chain's surrogate id + status so the FE can jump straight to its chain. **Omitted/0 / "" when the caller has no bidder chain** — note a poster who never bid on their own listing is `me_owner=true` but has NO `my_negotiation_id` (the two are independent). When several chains exist on one offer the **active** one wins: an accepted chain beats a live (`open`/`countered`/`ongoing`) one beats a terminal one; ties break to the most recently created. Works for local and remote offers.
 
 **Response 200 — remote (cross-bank) offer** (resolved from the mirror; flat shape):

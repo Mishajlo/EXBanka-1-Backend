@@ -12423,8 +12423,15 @@ type OTCOfferResponse struct {
 	// Works for local and remote offers. (SP-2b)
 	MyNegotiationId     uint64 `protobuf:"varint,22,opt,name=my_negotiation_id,json=myNegotiationId,proto3" json:"my_negotiation_id,omitempty"`
 	MyNegotiationStatus string `protobuf:"bytes,23,opt,name=my_negotiation_status,json=myNegotiationStatus,proto3" json:"my_negotiation_status,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// seller_id — the LOCAL read view's SI-TX-prefixed seller identity of the
+	// offer's initiator: "bank" for a bank-owned listing, "client-<N>" for a
+	// client-owned one. This is the same value the unified marketplace listing
+	// surfaces (otccache.composeSellerID), kept consistent across the single-offer
+	// create/detail/counter/cancel responses. Distinct from the cross-bank wire
+	// id "employee-<N>", which is composed only on the SI-TX publish path. (SP-1)
+	SellerId      string `protobuf:"bytes,24,opt,name=seller_id,json=sellerId,proto3" json:"seller_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *OTCOfferResponse) Reset() {
@@ -12614,6 +12621,13 @@ func (x *OTCOfferResponse) GetMyNegotiationId() uint64 {
 func (x *OTCOfferResponse) GetMyNegotiationStatus() string {
 	if x != nil {
 		return x.MyNegotiationStatus
+	}
+	return ""
+}
+
+func (x *OTCOfferResponse) GetSellerId() string {
+	if x != nil {
+		return x.SellerId
 	}
 	return ""
 }
@@ -20188,7 +20202,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	" \x01(\x04R\taccountId\x122\n" +
 	"\x16on_behalf_of_client_id\x18\v \x01(\x04R\x12onBehalfOfClientId\x12\x16\n" +
 	"\x06ticker\x18\f \x01(\tR\x06ticker\x12,\n" +
-	"\x12acting_employee_id\x18\r \x01(\x04R\x10actingEmployeeId\"\xb0\x06\n" +
+	"\x12acting_employee_id\x18\r \x01(\x04R\x10actingEmployeeId\"\xcd\x06\n" +
 	"\x10OTCOfferResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x1c\n" +
 	"\tdirection\x18\x02 \x01(\tR\tdirection\x12\x19\n" +
@@ -20215,7 +20229,8 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\tbank_code\x18\x14 \x01(\tR\bbankCode\x12\x19\n" +
 	"\bme_owner\x18\x15 \x01(\bR\ameOwner\x12*\n" +
 	"\x11my_negotiation_id\x18\x16 \x01(\x04R\x0fmyNegotiationId\x122\n" +
-	"\x15my_negotiation_status\x18\x17 \x01(\tR\x13myNegotiationStatus\"\xaa\x02\n" +
+	"\x15my_negotiation_status\x18\x17 \x01(\tR\x13myNegotiationStatus\x12\x1b\n" +
+	"\tseller_id\x18\x18 \x01(\tR\bsellerId\"\xaa\x02\n" +
 	"\x14OTCOfferRevisionItem\x12'\n" +
 	"\x0frevision_number\x18\x01 \x01(\x05R\x0erevisionNumber\x12\x1a\n" +
 	"\bquantity\x18\x02 \x01(\tR\bquantity\x12!\n" +

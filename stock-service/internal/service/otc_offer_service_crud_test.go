@@ -719,7 +719,9 @@ func TestOTCOfferService_GetOffer_HappyPath(t *testing.T) {
 	}
 }
 
-func TestOTCOfferService_GetOffer_NonParticipantRejected(t *testing.T) {
+// A non-participant can READ the offer (public discovery mirrors the unified
+// list) but never sees its revision history and triggers no read-receipt.
+func TestOTCOfferService_GetOffer_NonParticipantSeesOfferNotRevisions(t *testing.T) {
 	fx := newOTCCRUDFixture(t)
 	fx.seedHolding(t, 7, 42, 100)
 	out, _ := fx.svc.Create(context.Background(), CreateOfferInput{
@@ -728,9 +730,15 @@ func TestOTCOfferService_GetOffer_NonParticipantRejected(t *testing.T) {
 		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
 		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
 	})
-	_, _, err := fx.svc.GetOffer(out.ID, 999, "client")
-	if err == nil {
-		t.Fatal("expected non-participant rejection")
+	got, revs, err := fx.svc.GetOffer(out.ID, 999, "client")
+	if err != nil {
+		t.Fatalf("non-participant read should succeed, got: %v", err)
+	}
+	if got == nil || got.ID != out.ID {
+		t.Fatalf("non-participant should receive the offer; got %+v", got)
+	}
+	if len(revs) != 0 {
+		t.Errorf("non-participant must not receive revision history; got %d revs", len(revs))
 	}
 }
 
