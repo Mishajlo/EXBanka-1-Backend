@@ -517,6 +517,92 @@ func TestGuard_ListExpiring_ExcludesRemote(t *testing.T) {
 	}
 }
 
+// TestGuard_ListExpiringOn_ExcludesRemote verifies that ListExpiringOn (used
+// by the SP5 expiring-soon warning pass) only returns contracts whose
+// routing_number == OwnRouting() (111). It seeds one LOCAL ACTIVE contract
+// expiring on the target day (routing 111 via BeforeCreate) and one REMOTE
+// ACTIVE contract also expiring on the same day (routing 222) and asserts
+// that only the local one is returned.
+func TestGuard_ListExpiringOn_ExcludesRemote(t *testing.T) {
+	db := newGuardTestDB(t)
+	model.SetOwnRouting("111")
+	r := NewOptionContractRepository(db)
+
+	// Target day: two days from now (ensures it is not the same day as
+	// "past" contracts already seeded by seedGuardFixtures, so the window
+	// [day, day+1) contains ONLY these two purpose-built rows).
+	targetDay := time.Now().UTC().Truncate(24 * time.Hour).AddDate(0, 0, 2)
+
+	bidder1 := uint64(11)
+	bidder2 := uint64(12)
+
+	// LOCAL contract: BeforeCreate stamps routing_number = 111.
+	localContract := &model.OptionContract{
+		BuyerOwnerType:  model.OwnerClient,
+		BuyerOwnerID:    &bidder1,
+		SellerOwnerType: model.OwnerClient,
+		SellerOwnerID:   &bidder2,
+		StockID:         42,
+		Ticker:          "EXP",
+		Quantity:        decimal.NewFromInt(5),
+		StrikePrice:     decimal.NewFromFloat(200),
+		PremiumPaid:     decimal.NewFromFloat(10),
+		PremiumCurrency: "RSD",
+		StrikeCurrency:  "RSD",
+		SettlementDate:  targetDay,
+		BuyerAccountID:  100,
+		SellerAccountID: 200,
+		Status:          model.OptionContractStatusActive,
+		SagaID:          "saga-expiring-on-local",
+		PremiumPaidAt:   time.Now().UTC(),
+	}
+	if err := db.Create(localContract).Error; err != nil {
+		t.Fatalf("seed local expiring-on contract: %v", err)
+	}
+
+	// REMOTE contract: explicit routing 222, same settlement day.
+	remoteNativeID := "remote-expiring-on-1"
+	remoteContract := &model.OptionContract{
+		RoutingNumber:   222,
+		NativeID:        &remoteNativeID,
+		BuyerOwnerType:  model.OwnerClient,
+		BuyerOwnerID:    &bidder1,
+		SellerOwnerType: model.OwnerClient,
+		SellerOwnerID:   &bidder2,
+		StockID:         42,
+		Ticker:          "EXP",
+		Quantity:        decimal.NewFromInt(5),
+		StrikePrice:     decimal.NewFromFloat(200),
+		PremiumPaid:     decimal.NewFromFloat(10),
+		PremiumCurrency: "RSD",
+		StrikeCurrency:  "RSD",
+		SettlementDate:  targetDay,
+		BuyerAccountID:  300,
+		SellerAccountID: 400,
+		Status:          model.OptionContractStatusActive,
+		SagaID:          "saga-expiring-on-remote",
+		PremiumPaidAt:   time.Now().UTC(),
+	}
+	if err := db.Create(remoteContract).Error; err != nil {
+		t.Fatalf("seed remote expiring-on contract: %v", err)
+	}
+
+	rows, err := r.ListExpiringOn(targetDay, 1000)
+	if err != nil {
+		t.Fatalf("ListExpiringOn: %v", err)
+	}
+	// Must return exactly the local contract.
+	if len(rows) != 1 {
+		t.Fatalf("ListExpiringOn: got %d rows want 1", len(rows))
+	}
+	if rows[0].RoutingNumber != model.OwnRouting() {
+		t.Errorf("ListExpiringOn returned remote row id=%d routing=%d", rows[0].ID, rows[0].RoutingNumber)
+	}
+	if rows[0].ID != localContract.ID {
+		t.Errorf("ListExpiringOn: got contract id=%d want %d (local)", rows[0].ID, localContract.ID)
+	}
+}
+
 // TestGuard_ContractGetByID_RemoteRow_NotFound verifies that GetByID returns
 // ErrRecordNotFound for a remote contract (routing != own).
 func TestGuard_ContractGetByID_RemoteRow_NotFound(t *testing.T) {

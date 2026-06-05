@@ -3055,7 +3055,7 @@ The auto-mirroring of counter/cancel onto the caller's local row is best-effort:
 
 - **`PeerOTCService`** (stock-service): 9 RPCs.
   - Negotiation lifecycle: `GetPublicStocks`, `CreateNegotiation`, `UpdateNegotiation`, `GetNegotiation`, `DeleteNegotiation`, `AcceptNegotiation`.
-  - SI-TX option leg materialisation (called by transaction-service): `RecordOptionContract` — dispatches on transaction SHAPE (OPTION-as-asset → accept; OPTION-as-pseudo-account with STOCK legs → exercise), creates a `peer_option_contracts` row + locks seller's holdings on accept, transitions to `exercised` + runs role-specific stock ops on exercise. Idempotent on `(crossbank_tx_id, posting_index)`.
+  - SI-TX option leg materialisation (called by transaction-service): `RecordOptionContract` — dispatches on transaction SHAPE (OPTION-as-asset → accept; OPTION-as-pseudo-account with STOCK legs → exercise), creates a remote `option_contracts` row (routing_number != own) + locks seller's holdings on accept, transitions to `exercised` + runs role-specific stock ops on exercise. Idempotent on `(crossbank_tx_id, posting_index)`.
   - SI-TX validation hooks (called by transaction-service): `CheckSellerCanDeliver` — NEW_TX-time pre-check that the seller has enough unreserved shares, drives `INSUFFICIENT_ASSET` `NoVote` so money never moves on a contract the seller can't fulfil.
   - Exercise dispatch (called by gateway): `InitiateOptionExercise` — composes the 4-posting exercise TX from a contract row and dispatches via `transaction-service.PeerTxService.InitiateOutboundTxWithPostings`.
 
@@ -3075,7 +3075,7 @@ The unified OTC offer view (local + cross-bank) is served by `stock-service`'s `
 5. The SI-TX flow:
    - `posting_executor.Reserve` (NEW_TX) on each bank validates option-asset postings via `CheckSellerCanDeliver` for DEBIT direction → vote NO with `INSUFFICIENT_ASSET` if seller short.
    - On YES, `cacheAndReturn` persists `peer_idempotence_records.options_json` listing the option items.
-   - On COMMIT_TX, `materialiseOptions` calls `PeerOTCService.RecordOptionContract` per option leg → writes `peer_option_contracts` row + (DEBIT side) calls `HoldingReservationService.ReserveForPeerOptionContract` to lock seller's shares. If the seller-side lock fails (reservation error or unparseable `seller_id`), `RecordOptionContract` **returns an error** rather than reporting success — leaving an `active` contract with no holding reservation behind it (silent over-promise) is not allowed. The COMMIT then does not ack and retries; both the contract row (idempotent on `crossbank_tx_id, posting_index`) and the reservation (idempotent on `peer_option_contract_id`) are replay-safe, so the lock heals once shares are available.
+   - On COMMIT_TX, `materialiseOptions` calls `PeerOTCService.RecordOptionContract` per option leg → writes a remote `option_contracts` row (routing_number != own) + (DEBIT side) calls `HoldingReservationService.ReserveForPeerOptionContract` to lock seller's shares. If the seller-side lock fails (reservation error or unparseable `seller_id`), `RecordOptionContract` **returns an error** rather than reporting success — leaving an `active` contract with no holding reservation behind it (silent over-promise) is not allowed. The COMMIT then does not ack and retries; both the contract row (idempotent on `crossbank_tx_id, posting_index`) and the reservation (idempotent on `peer_option_contract_id`) are replay-safe, so the lock heals once shares are available.
 6. Negotiation status transitions to `accepted`.
 
 > **Concurrency & ownership guards (2026-05-30, found by adversarial testing).**
@@ -3111,7 +3111,7 @@ The unified OTC offer view (local + cross-bank) is served by `stock-service`'s `
 
 #### Expiry (cron)
 
-`OTCExpiryCron` runs daily at 02:00 UTC (and once on stock-service startup to catch up missed runs). For each `peer_option_contracts` row with `status='active'` and `settlement_date < today`:
+`OTCExpiryCron` runs daily at 02:00 UTC (and once on stock-service startup to catch up missed runs). For each remote `option_contracts` row (routing_number != own) with `status='active'` and `settlement_date < today`:
 - DEBIT direction (seller's bank): `ReleaseForPeerOptionContract` releases the reservation; shares unlock.
 - CREDIT direction (buyer's bank): no holding op.
 - Both: row → `status=expired`. Seller keeps the premium (no money movement).

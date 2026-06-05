@@ -170,8 +170,8 @@ func (r *OptionContractRepository) ListExpiringOn(day time.Time, limit int) ([]m
 	start := day.UTC().Truncate(24 * time.Hour)
 	end := start.Add(24 * time.Hour)
 	var out []model.OptionContract
-	err := r.db.Where("status = ? AND settlement_date >= ? AND settlement_date < ?",
-		model.OptionContractStatusActive, start, end).
+	err := r.db.Where("status = ? AND settlement_date >= ? AND settlement_date < ? AND routing_number = ?",
+		model.OptionContractStatusActive, start, end, model.OwnRouting()).
 		Order("id ASC").Limit(limit).Find(&out).Error
 	return out, err
 }
