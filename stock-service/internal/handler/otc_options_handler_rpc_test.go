@@ -522,8 +522,10 @@ func TestOTCOptionsHandler_ListMyContracts_HappyPath(t *testing.T) {
 
 // TestOTCOptionsHandler_ListMyContracts_WithPeerContracts verifies that wiring
 // the peer-contracts repo (empty) results in no remote contracts in the unified
-// list and that PeerContracts/PeerTotal are never populated (SP-1 double-listing
-// fix: remote contracts appear only in Contracts[] with kind=remote).
+// list. Remote contracts appear only in Contracts[] with kind=remote (SP-1
+// double-listing fix). The legacy PeerContracts/PeerTotal response fields were
+// removed in SP-2b, so there is nothing separate to assert empty — Contracts[]
+// is the single merged list.
 func TestOTCOptionsHandler_ListMyContracts_WithPeerContracts(t *testing.T) {
 	fx := newOTCOptionsHandlerFixture(t)
 	peerRepo := repository.NewOptionContractRepository(fx.db)
@@ -535,13 +537,10 @@ func TestOTCOptionsHandler_ListMyContracts_WithPeerContracts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	// PeerContracts/PeerTotal must never be populated; 0 confirms the field
-	// is unset (no double-listing). Remote contracts go into Contracts[] only.
-	if resp.GetPeerTotal() != 0 {
-		t.Errorf("peer_total must be 0 (not populated); got %d", resp.GetPeerTotal())
-	}
-	if len(resp.GetPeerContracts()) != 0 {
-		t.Errorf("peer_contracts must be empty (not populated); got %d entries", len(resp.GetPeerContracts()))
+	// No local contracts seeded and the peer repo is empty → the unified list
+	// is empty. (No double-listing: remote rows would land in Contracts[].)
+	if resp.GetTotal() != 0 || len(resp.GetContracts()) != 0 {
+		t.Errorf("contracts must be empty; total=%d len=%d", resp.GetTotal(), len(resp.GetContracts()))
 	}
 }
 

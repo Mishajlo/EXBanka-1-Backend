@@ -5759,8 +5759,10 @@ func (x *ListOTCOffersResponse) GetTotalCount() int64 {
 // UnifiedOTCOffer is one entry in the cross-bank-aggregated OTC view.
 // `kind` discriminates the buy flow:
 //   - "local"  → buy via POST /api/v3/otc/offers/{id}/buy
-//   - "remote" → buy via POST /api/v3/me/peer-otc/negotiations using
-//     bank_code as seller_bank_code and owner_id as seller_id.
+//   - "remote" → bid via the unified POST /api/v3/otc/options/{id}/bid;
+//     stock-service dispatches the cross-bank negotiation
+//     (SP-2b folded the retired /me/peer-otc/negotiations
+//     client route into the unified surface).
 //
 // Local-only fields (id, seller_id, seller_name, name, created_at) are
 // zero/empty on remote offers; owner_id is empty on local offers.
@@ -13615,14 +13617,9 @@ func (x *ListMyContractsRequest) GetPageSize() int32 {
 }
 
 type ListContractsResponse struct {
-	state     protoimpl.MessageState    `protogen:"open.v1"`
-	Contracts []*OptionContractResponse `protobuf:"bytes,1,rep,name=contracts,proto3" json:"contracts,omitempty"`
-	Total     int64                     `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
-	// Cross-bank (Celina 5 SI-TX) option contracts where this user is
-	// either the buyer or the seller. Rendered alongside intra-bank
-	// contracts above so clients see one merged list.
-	PeerContracts []*PeerOptionContractResponse `protobuf:"bytes,3,rep,name=peer_contracts,json=peerContracts,proto3" json:"peer_contracts,omitempty"`
-	PeerTotal     int64                         `protobuf:"varint,4,opt,name=peer_total,json=peerTotal,proto3" json:"peer_total,omitempty"`
+	state         protoimpl.MessageState    `protogen:"open.v1"`
+	Contracts     []*OptionContractResponse `protobuf:"bytes,1,rep,name=contracts,proto3" json:"contracts,omitempty"`
+	Total         int64                     `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -13667,20 +13664,6 @@ func (x *ListContractsResponse) GetContracts() []*OptionContractResponse {
 func (x *ListContractsResponse) GetTotal() int64 {
 	if x != nil {
 		return x.Total
-	}
-	return 0
-}
-
-func (x *ListContractsResponse) GetPeerContracts() []*PeerOptionContractResponse {
-	if x != nil {
-		return x.PeerContracts
-	}
-	return nil
-}
-
-func (x *ListContractsResponse) GetPeerTotal() int64 {
-	if x != nil {
-		return x.PeerTotal
 	}
 	return 0
 }
@@ -14109,9 +14092,9 @@ func (x *ExerciseResponse) GetSharesTransferred() string {
 type CascadeCancelSiblingsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The negotiation that was just accepted — sets the "seller side" +
-	// "offer terms" the cascade matches on. Caller passes the gateway-
-	// side keys (the gateway only knows (peer_bank_code, foreign_id)
-	// because that's what proxyPeerNegotiation already uses).
+	// "offer terms" the cascade matches on. Caller passes the
+	// (peer_bank_code, foreign_id) keys the remote-negotiation dispatch
+	// already tracks for the accepted chain.
 	PeerBankCode  string `protobuf:"bytes,1,opt,name=peer_bank_code,json=peerBankCode,proto3" json:"peer_bank_code,omitempty"` // peer-bank code of the accepted chain
 	ForeignId     string `protobuf:"bytes,2,opt,name=foreign_id,json=foreignId,proto3" json:"foreign_id,omitempty"`            // foreign id of the accepted chain
 	unknownFields protoimpl.UnknownFields
@@ -14163,12 +14146,12 @@ func (x *CascadeCancelSiblingsRequest) GetForeignId() string {
 }
 
 // CascadedSibling identifies one chain that was cancelled by the
-// cascade. peer_bank_code + foreign_id are the routing tuple the
-// gateway uses to fire the outbound DELETE; the rest of the fields
-// are a wire-shape projection of the cancelled negotiation (same
-// shape as PeerNegotiationListItem) so the FE can render the
-// cancelled-siblings list in the cross-bank accept response with
-// the same UI it uses for /me/peer-otc/negotiations rows.
+// cascade. peer_bank_code + foreign_id are the routing tuple used to
+// fire the outbound DELETE to the sibling bidder's bank; the rest of
+// the fields are a wire-shape projection of the cancelled negotiation
+// (same shape as PeerNegotiationListItem) so the FE can render the
+// cancelled-siblings list in the cross-bank accept response with the
+// same UI it uses for the unified negotiations list.
 type CascadedSibling struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PeerBankCode  string                 `protobuf:"bytes,1,opt,name=peer_bank_code,json=peerBankCode,proto3" json:"peer_bank_code,omitempty"` // bidder's bank-code (for outbound DELETE)
@@ -20934,13 +20917,11 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12\x1a\n" +
 	"\bstatuses\x18\x04 \x03(\tR\bstatuses\x12\x12\n" +
 	"\x04page\x18\x05 \x01(\x05R\x04page\x12\x1b\n" +
-	"\tpage_size\x18\x06 \x01(\x05R\bpageSize\"\xd3\x01\n" +
+	"\tpage_size\x18\x06 \x01(\x05R\bpageSize\"\x92\x01\n" +
 	"\x15ListContractsResponse\x12;\n" +
 	"\tcontracts\x18\x01 \x03(\v2\x1d.stock.OptionContractResponseR\tcontracts\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x03R\x05total\x12H\n" +
-	"\x0epeer_contracts\x18\x03 \x03(\v2!.stock.PeerOptionContractResponseR\rpeerContracts\x12\x1d\n" +
-	"\n" +
-	"peer_total\x18\x04 \x01(\x03R\tpeerTotal\"\xc4\x04\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05totalJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x0epeer_contractsR\n" +
+	"peer_total\"\xc4\x04\n" +
 	"\x1aPeerOptionContractResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12&\n" +
 	"\x0fcrossbank_tx_id\x18\x02 \x01(\tR\rcrossbankTxId\x12#\n" +
@@ -21905,304 +21886,303 @@ var file_stock_stock_proto_depIdxs = []int32{
 	145, // 59: stock.OptionContractResponse.buyer:type_name -> stock.PartyRef
 	145, // 60: stock.OptionContractResponse.seller:type_name -> stock.PartyRef
 	157, // 61: stock.ListContractsResponse.contracts:type_name -> stock.OptionContractResponse
-	160, // 62: stock.ListContractsResponse.peer_contracts:type_name -> stock.PeerOptionContractResponse
-	174, // 63: stock.PeerOptionContractResponse.buyer_id:type_name -> stock.PeerForeignBankId
-	174, // 64: stock.PeerOptionContractResponse.seller_id:type_name -> stock.PeerForeignBankId
-	174, // 65: stock.CascadedSibling.buyer_id:type_name -> stock.PeerForeignBankId
-	174, // 66: stock.CascadedSibling.seller_id:type_name -> stock.PeerForeignBankId
-	175, // 67: stock.CascadedSibling.offer:type_name -> stock.PeerOtcOffer
-	165, // 68: stock.CascadeCancelSiblingsResponse.siblings:type_name -> stock.CascadedSibling
-	174, // 69: stock.MarkNegotiationAcceptedRequest.negotiation_id:type_name -> stock.PeerForeignBankId
-	174, // 70: stock.RecordOutboundNegotiationRequest.negotiation_id:type_name -> stock.PeerForeignBankId
-	174, // 71: stock.RecordOutboundNegotiationRequest.buyer_id:type_name -> stock.PeerForeignBankId
-	174, // 72: stock.RecordOutboundNegotiationRequest.seller_id:type_name -> stock.PeerForeignBankId
-	175, // 73: stock.RecordOutboundNegotiationRequest.offer:type_name -> stock.PeerOtcOffer
-	173, // 74: stock.ListMyPeerNegotiationsResponse.items:type_name -> stock.PeerNegotiationListItem
-	174, // 75: stock.PeerNegotiationListItem.id:type_name -> stock.PeerForeignBankId
-	174, // 76: stock.PeerNegotiationListItem.buyer_id:type_name -> stock.PeerForeignBankId
-	174, // 77: stock.PeerNegotiationListItem.seller_id:type_name -> stock.PeerForeignBankId
-	175, // 78: stock.PeerNegotiationListItem.offer:type_name -> stock.PeerOtcOffer
-	174, // 79: stock.PeerOtcOffer.last_modified_by:type_name -> stock.PeerForeignBankId
-	174, // 80: stock.PeerOtcOffer.parent_offer_id:type_name -> stock.PeerForeignBankId
-	174, // 81: stock.PeerPublicStock.owner_id:type_name -> stock.PeerForeignBankId
-	177, // 82: stock.GetPublicStocksResponse.stocks:type_name -> stock.PeerPublicStock
-	174, // 83: stock.PeerPublicOptionOffer.offer_id:type_name -> stock.PeerForeignBankId
-	174, // 84: stock.PeerPublicOptionOffer.seller_id:type_name -> stock.PeerForeignBankId
-	174, // 85: stock.PeerPublicOptionOffer.last_modified_by:type_name -> stock.PeerForeignBankId
-	180, // 86: stock.GetPublicOptionOffersResponse.offers:type_name -> stock.PeerPublicOptionOffer
-	175, // 87: stock.CreateNegotiationRequest.offer:type_name -> stock.PeerOtcOffer
-	174, // 88: stock.CreateNegotiationRequest.buyer_id:type_name -> stock.PeerForeignBankId
-	174, // 89: stock.CreateNegotiationRequest.seller_id:type_name -> stock.PeerForeignBankId
-	174, // 90: stock.CreateNegotiationResponse.negotiation_id:type_name -> stock.PeerForeignBankId
-	174, // 91: stock.UpdateNegotiationRequest.negotiation_id:type_name -> stock.PeerForeignBankId
-	175, // 92: stock.UpdateNegotiationRequest.offer:type_name -> stock.PeerOtcOffer
-	174, // 93: stock.GetNegotiationRequest.negotiation_id:type_name -> stock.PeerForeignBankId
-	174, // 94: stock.GetNegotiationResponse.id:type_name -> stock.PeerForeignBankId
-	174, // 95: stock.GetNegotiationResponse.buyer_id:type_name -> stock.PeerForeignBankId
-	174, // 96: stock.GetNegotiationResponse.seller_id:type_name -> stock.PeerForeignBankId
-	175, // 97: stock.GetNegotiationResponse.offer:type_name -> stock.PeerOtcOffer
-	174, // 98: stock.DeleteNegotiationRequest.negotiation_id:type_name -> stock.PeerForeignBankId
-	174, // 99: stock.AcceptNegotiationRequest.negotiation_id:type_name -> stock.PeerForeignBankId
-	174, // 100: stock.RecordOptionContractRequest.buyer_id:type_name -> stock.PeerForeignBankId
-	174, // 101: stock.RecordOptionContractRequest.seller_id:type_name -> stock.PeerForeignBankId
-	174, // 102: stock.CheckSellerCanDeliverRequest.seller_id:type_name -> stock.PeerForeignBankId
-	174, // 103: stock.ReserveSellerSharesRequest.seller_id:type_name -> stock.PeerForeignBankId
-	210, // 104: stock.ListMyRecurringFundsResponse.items:type_name -> stock.RecurringFundResponse
-	215, // 105: stock.ListMyRecurringOrdersResponse.items:type_name -> stock.RecurringOrderResponse
-	223, // 106: stock.ListMyPriceAlertsResponse.alerts:type_name -> stock.PriceAlertResponse
-	228, // 107: stock.ListWatchlistsResponse.watchlists:type_name -> stock.WatchlistResponse
-	235, // 108: stock.ListMyWatchlistResponse.items:type_name -> stock.WatchlistItemResponse
-	242, // 109: stock.ListDividendPayoutsResponse.payouts:type_name -> stock.DividendPayoutItem
-	245, // 110: stock.ListFundDividendPaymentsResponse.payments:type_name -> stock.FundDividendPaymentItem
-	2,   // 111: stock.StockExchangeGRPCService.ListExchanges:input_type -> stock.ListExchangesRequest
-	4,   // 112: stock.StockExchangeGRPCService.GetExchange:input_type -> stock.GetExchangeRequest
-	5,   // 113: stock.StockExchangeGRPCService.SetTestingMode:input_type -> stock.SetTestingModeRequest
-	7,   // 114: stock.StockExchangeGRPCService.GetTestingMode:input_type -> stock.GetTestingModeRequest
-	16,  // 115: stock.SecurityGRPCService.ListStocks:input_type -> stock.ListStocksRequest
-	18,  // 116: stock.SecurityGRPCService.GetStock:input_type -> stock.GetStockRequest
-	19,  // 117: stock.SecurityGRPCService.GetStockByTicker:input_type -> stock.GetStockByTickerRequest
-	12,  // 118: stock.SecurityGRPCService.GetStockHistory:input_type -> stock.GetPriceHistoryRequest
-	22,  // 119: stock.SecurityGRPCService.ListFutures:input_type -> stock.ListFuturesRequest
-	24,  // 120: stock.SecurityGRPCService.GetFutures:input_type -> stock.GetFuturesRequest
-	12,  // 121: stock.SecurityGRPCService.GetFuturesHistory:input_type -> stock.GetPriceHistoryRequest
-	27,  // 122: stock.SecurityGRPCService.ListForexPairs:input_type -> stock.ListForexPairsRequest
-	29,  // 123: stock.SecurityGRPCService.GetForexPair:input_type -> stock.GetForexPairRequest
-	12,  // 124: stock.SecurityGRPCService.GetForexPairHistory:input_type -> stock.GetPriceHistoryRequest
-	32,  // 125: stock.SecurityGRPCService.ListOptions:input_type -> stock.ListOptionsRequest
-	34,  // 126: stock.SecurityGRPCService.GetOption:input_type -> stock.GetOptionRequest
-	35,  // 127: stock.SecurityGRPCService.GetCandles:input_type -> stock.GetCandlesRequest
-	41,  // 128: stock.OrderGRPCService.CreateOrder:input_type -> stock.CreateOrderRequest
-	42,  // 129: stock.OrderGRPCService.GetOrder:input_type -> stock.GetOrderRequest
-	43,  // 130: stock.OrderGRPCService.ListMyOrders:input_type -> stock.ListMyOrdersRequest
-	46,  // 131: stock.OrderGRPCService.CancelOrder:input_type -> stock.CancelOrderRequest
-	44,  // 132: stock.OrderGRPCService.ListOrders:input_type -> stock.ListOrdersRequest
-	47,  // 133: stock.OrderGRPCService.ApproveOrder:input_type -> stock.ApproveOrderRequest
-	48,  // 134: stock.OrderGRPCService.DeclineOrder:input_type -> stock.DeclineOrderRequest
-	54,  // 135: stock.PortfolioGRPCService.ListHoldings:input_type -> stock.ListHoldingsRequest
-	58,  // 136: stock.PortfolioGRPCService.GetPortfolioSummary:input_type -> stock.GetPortfolioSummaryRequest
-	60,  // 137: stock.PortfolioGRPCService.MakePublic:input_type -> stock.MakePublicRequest
-	61,  // 138: stock.PortfolioGRPCService.ExerciseOption:input_type -> stock.ExerciseOptionRequest
-	62,  // 139: stock.PortfolioGRPCService.ExerciseOptionByOptionID:input_type -> stock.ExerciseOptionByOptionIDRequest
-	56,  // 140: stock.PortfolioGRPCService.GetHolding:input_type -> stock.GetHoldingRequest
-	65,  // 141: stock.PortfolioGRPCService.ListHoldingTransactions:input_type -> stock.ListHoldingTransactionsRequest
-	49,  // 142: stock.PortfolioGRPCService.GetUnifiedPortfolio:input_type -> stock.GetUnifiedPortfolioRequest
-	68,  // 143: stock.OTCGRPCService.ListOffers:input_type -> stock.ListOTCOffersRequest
-	76,  // 144: stock.OTCGRPCService.BuyOffer:input_type -> stock.BuyOTCOfferRequest
-	71,  // 145: stock.OTCGRPCService.ListUnifiedOffers:input_type -> stock.ListUnifiedOTCOffersRequest
-	74,  // 146: stock.OTCGRPCService.ListUnifiedOptionOffers:input_type -> stock.ListUnifiedOptionOffersRequest
-	79,  // 147: stock.TaxGRPCService.ListTaxRecords:input_type -> stock.ListTaxRecordsRequest
-	81,  // 148: stock.TaxGRPCService.CollectTax:input_type -> stock.CollectTaxRequest
-	83,  // 149: stock.TaxGRPCService.ListUserTaxRecords:input_type -> stock.ListUserTaxRecordsRequest
-	87,  // 150: stock.SourceAdminService.SwitchSource:input_type -> stock.SwitchSourceRequest
-	89,  // 151: stock.SourceAdminService.GetSourceStatus:input_type -> stock.GetSourceStatusRequest
-	92,  // 152: stock.InvestmentFundService.CreateFund:input_type -> stock.CreateFundRequest
-	94,  // 153: stock.InvestmentFundService.ListFunds:input_type -> stock.ListFundsRequest
-	96,  // 154: stock.InvestmentFundService.GetFund:input_type -> stock.GetFundRequest
-	100, // 155: stock.InvestmentFundService.UpdateFund:input_type -> stock.UpdateFundRequest
-	101, // 156: stock.InvestmentFundService.InvestInFund:input_type -> stock.InvestInFundRequest
-	102, // 157: stock.InvestmentFundService.RedeemFromFund:input_type -> stock.RedeemFromFundRequest
-	104, // 158: stock.InvestmentFundService.ListMyPositions:input_type -> stock.ListMyPositionsRequest
-	105, // 159: stock.InvestmentFundService.ListBankPositions:input_type -> stock.ListBankPositionsRequest
-	108, // 160: stock.InvestmentFundService.GetActuaryPerformance:input_type -> stock.GetActuaryPerformanceRequest
-	237, // 161: stock.InvestmentFundService.DeclareDividend:input_type -> stock.DeclareDividendRequest
-	239, // 162: stock.InvestmentFundService.PayoutDividend:input_type -> stock.PayoutDividendRequest
-	241, // 163: stock.InvestmentFundService.ListMyDividends:input_type -> stock.ListMyDividendsRequest
-	244, // 164: stock.InvestmentFundService.ListFundDividends:input_type -> stock.ListFundDividendsRequest
-	146, // 165: stock.OTCOptionsService.CreateOffer:input_type -> stock.CreateOTCOfferRequest
-	150, // 166: stock.OTCOptionsService.ListMyOffers:input_type -> stock.ListMyOTCOffersRequest
-	152, // 167: stock.OTCOptionsService.GetOffer:input_type -> stock.GetOTCOfferRequest
-	153, // 168: stock.OTCOptionsService.CounterOffer:input_type -> stock.CounterOTCOfferRequest
-	154, // 169: stock.OTCOptionsService.AcceptOffer:input_type -> stock.AcceptOTCOfferRequest
-	156, // 170: stock.OTCOptionsService.RejectOffer:input_type -> stock.RejectOTCOfferRequest
-	158, // 171: stock.OTCOptionsService.ListMyContracts:input_type -> stock.ListMyContractsRequest
-	161, // 172: stock.OTCOptionsService.GetContract:input_type -> stock.GetContractRequest
-	162, // 173: stock.OTCOptionsService.ExerciseContract:input_type -> stock.ExerciseContractRequest
-	144, // 174: stock.OTCOptionsService.ListNegotiationHistory:input_type -> stock.ListNegotiationHistoryRequest
-	138, // 175: stock.OTCOptionsService.SubmitRating:input_type -> stock.SubmitOTCRatingRequest
-	140, // 176: stock.OTCOptionsService.GetTraderProfile:input_type -> stock.GetTraderProfileRequest
-	142, // 177: stock.OTCOptionsService.ListReceivedRatings:input_type -> stock.ListReceivedRatingsRequest
-	115, // 178: stock.OTCOptionsService.OpenNegotiation:input_type -> stock.OpenNegotiationRequest
-	116, // 179: stock.OTCOptionsService.CounterNegotiation:input_type -> stock.CounterNegotiationRequest
-	117, // 180: stock.OTCOptionsService.AcceptNegotiationChain:input_type -> stock.OTCAcceptNegotiationRequest
-	120, // 181: stock.OTCOptionsService.RejectNegotiation:input_type -> stock.RejectNegotiationRequest
-	121, // 182: stock.OTCOptionsService.CancelNegotiation:input_type -> stock.CancelNegotiationRequest
-	122, // 183: stock.OTCOptionsService.CancelListing:input_type -> stock.CancelListingRequest
-	124, // 184: stock.OTCOptionsService.ListMyNegotiations:input_type -> stock.ListMyNegotiationsRequest
-	125, // 185: stock.OTCOptionsService.ListNegotiationsByListing:input_type -> stock.ListNegotiationsByListingRequest
-	113, // 186: stock.OTCOptionsService.ListNegotiationRevisions:input_type -> stock.ListNegotiationRevisionsRequest
-	126, // 187: stock.OTCOptionsService.GetOfferTimeline:input_type -> stock.GetOfferTimelineRequest
-	133, // 188: stock.OTCStockMarketGRPCService.CreateOTCStockOffer:input_type -> stock.CreateOTCStockOfferRequest
-	134, // 189: stock.OTCStockMarketGRPCService.CancelOTCStockOffer:input_type -> stock.CancelOTCStockOfferRequest
-	136, // 190: stock.OTCStockMarketGRPCService.ListMyOTCStocks:input_type -> stock.ListMyOTCStocksRequest
-	130, // 191: stock.OTCStockMarketGRPCService.SellOTCStockOffer:input_type -> stock.SellOTCStockOfferRequest
-	176, // 192: stock.PeerOTCService.GetPublicStocks:input_type -> stock.GetPublicStocksRequest
-	179, // 193: stock.PeerOTCService.GetPublicOptionOffers:input_type -> stock.GetPublicOptionOffersRequest
-	182, // 194: stock.PeerOTCService.CreateNegotiation:input_type -> stock.CreateNegotiationRequest
-	184, // 195: stock.PeerOTCService.UpdateNegotiation:input_type -> stock.UpdateNegotiationRequest
-	186, // 196: stock.PeerOTCService.GetNegotiation:input_type -> stock.GetNegotiationRequest
-	188, // 197: stock.PeerOTCService.DeleteNegotiation:input_type -> stock.DeleteNegotiationRequest
-	190, // 198: stock.PeerOTCService.AcceptNegotiation:input_type -> stock.AcceptNegotiationRequest
-	192, // 199: stock.PeerOTCService.RecordOptionContract:input_type -> stock.RecordOptionContractRequest
-	196, // 200: stock.PeerOTCService.CheckSellerCanDeliver:input_type -> stock.CheckSellerCanDeliverRequest
-	198, // 201: stock.PeerOTCService.ReserveSellerSharesForNewTx:input_type -> stock.ReserveSellerSharesRequest
-	202, // 202: stock.PeerOTCService.ReleaseSellerSharesForNewTx:input_type -> stock.ReleaseSellerSharesRequest
-	200, // 203: stock.PeerOTCService.ValidatePeerOptionMoneyLeg:input_type -> stock.ValidatePeerOptionMoneyLegRequest
-	204, // 204: stock.PeerOTCService.LookupPeerOptionContract:input_type -> stock.LookupPeerOptionContractRequest
-	194, // 205: stock.PeerOTCService.InitiateOptionExercise:input_type -> stock.InitiateOptionExerciseRequest
-	169, // 206: stock.PeerOTCService.RecordOutboundNegotiation:input_type -> stock.RecordOutboundNegotiationRequest
-	171, // 207: stock.PeerOTCService.ListMyPeerNegotiations:input_type -> stock.ListMyPeerNegotiationsRequest
-	167, // 208: stock.PeerOTCService.MarkNegotiationAccepted:input_type -> stock.MarkNegotiationAcceptedRequest
-	164, // 209: stock.PeerOTCService.CascadeCancelSiblings:input_type -> stock.CascadeCancelSiblingsRequest
-	206, // 210: stock.RecurringFundService.Create:input_type -> stock.CreateRecurringFundRequest
-	207, // 211: stock.RecurringFundService.Get:input_type -> stock.GetRecurringFundRequest
-	207, // 212: stock.RecurringFundService.Pause:input_type -> stock.GetRecurringFundRequest
-	207, // 213: stock.RecurringFundService.Resume:input_type -> stock.GetRecurringFundRequest
-	207, // 214: stock.RecurringFundService.Cancel:input_type -> stock.GetRecurringFundRequest
-	209, // 215: stock.RecurringFundService.ListMy:input_type -> stock.ListMyRecurringFundsRequest
-	212, // 216: stock.RecurringOrderService.CreateOrder:input_type -> stock.CreateRecurringOrderRequest
-	213, // 217: stock.RecurringOrderService.GetOrder:input_type -> stock.GetRecurringOrderRequest
-	213, // 218: stock.RecurringOrderService.PauseOrder:input_type -> stock.GetRecurringOrderRequest
-	213, // 219: stock.RecurringOrderService.ResumeOrder:input_type -> stock.GetRecurringOrderRequest
-	213, // 220: stock.RecurringOrderService.CancelOrder:input_type -> stock.GetRecurringOrderRequest
-	214, // 221: stock.RecurringOrderService.ListMy:input_type -> stock.ListMyRecurringOrdersRequest
-	217, // 222: stock.PriceAlertService.CreateAlert:input_type -> stock.CreatePriceAlertRequest
-	218, // 223: stock.PriceAlertService.UpdateAlert:input_type -> stock.UpdatePriceAlertRequest
-	219, // 224: stock.PriceAlertService.GetAlert:input_type -> stock.GetPriceAlertRequest
-	220, // 225: stock.PriceAlertService.DeleteAlert:input_type -> stock.DeletePriceAlertRequest
-	222, // 226: stock.PriceAlertService.ListMy:input_type -> stock.ListMyPriceAlertsRequest
-	225, // 227: stock.WatchlistService.AddItem:input_type -> stock.AddWatchlistItemRequest
-	226, // 228: stock.WatchlistService.RemoveItem:input_type -> stock.RemoveWatchlistItemRequest
-	234, // 229: stock.WatchlistService.ListMy:input_type -> stock.ListMyWatchlistRequest
-	227, // 230: stock.WatchlistService.CreateWatchlist:input_type -> stock.CreateWatchlistRequest
-	229, // 231: stock.WatchlistService.ListWatchlists:input_type -> stock.ListWatchlistsRequest
-	231, // 232: stock.WatchlistService.DeleteWatchlist:input_type -> stock.DeleteWatchlistRequest
-	3,   // 233: stock.StockExchangeGRPCService.ListExchanges:output_type -> stock.ListExchangesResponse
-	1,   // 234: stock.StockExchangeGRPCService.GetExchange:output_type -> stock.Exchange
-	6,   // 235: stock.StockExchangeGRPCService.SetTestingMode:output_type -> stock.SetTestingModeResponse
-	8,   // 236: stock.StockExchangeGRPCService.GetTestingMode:output_type -> stock.GetTestingModeResponse
-	17,  // 237: stock.SecurityGRPCService.ListStocks:output_type -> stock.ListStocksResponse
-	15,  // 238: stock.SecurityGRPCService.GetStock:output_type -> stock.StockDetail
-	15,  // 239: stock.SecurityGRPCService.GetStockByTicker:output_type -> stock.StockDetail
-	13,  // 240: stock.SecurityGRPCService.GetStockHistory:output_type -> stock.PriceHistoryResponse
-	23,  // 241: stock.SecurityGRPCService.ListFutures:output_type -> stock.ListFuturesResponse
-	21,  // 242: stock.SecurityGRPCService.GetFutures:output_type -> stock.FuturesDetail
-	13,  // 243: stock.SecurityGRPCService.GetFuturesHistory:output_type -> stock.PriceHistoryResponse
-	28,  // 244: stock.SecurityGRPCService.ListForexPairs:output_type -> stock.ListForexPairsResponse
-	26,  // 245: stock.SecurityGRPCService.GetForexPair:output_type -> stock.ForexPairDetail
-	13,  // 246: stock.SecurityGRPCService.GetForexPairHistory:output_type -> stock.PriceHistoryResponse
-	33,  // 247: stock.SecurityGRPCService.ListOptions:output_type -> stock.ListOptionsResponse
-	31,  // 248: stock.SecurityGRPCService.GetOption:output_type -> stock.OptionDetail
-	37,  // 249: stock.SecurityGRPCService.GetCandles:output_type -> stock.GetCandlesResponse
-	38,  // 250: stock.OrderGRPCService.CreateOrder:output_type -> stock.Order
-	40,  // 251: stock.OrderGRPCService.GetOrder:output_type -> stock.OrderDetail
-	45,  // 252: stock.OrderGRPCService.ListMyOrders:output_type -> stock.ListOrdersResponse
-	38,  // 253: stock.OrderGRPCService.CancelOrder:output_type -> stock.Order
-	45,  // 254: stock.OrderGRPCService.ListOrders:output_type -> stock.ListOrdersResponse
-	38,  // 255: stock.OrderGRPCService.ApproveOrder:output_type -> stock.Order
-	38,  // 256: stock.OrderGRPCService.DeclineOrder:output_type -> stock.Order
-	55,  // 257: stock.PortfolioGRPCService.ListHoldings:output_type -> stock.ListHoldingsResponse
-	59,  // 258: stock.PortfolioGRPCService.GetPortfolioSummary:output_type -> stock.PortfolioSummary
-	53,  // 259: stock.PortfolioGRPCService.MakePublic:output_type -> stock.Holding
-	63,  // 260: stock.PortfolioGRPCService.ExerciseOption:output_type -> stock.ExerciseResult
-	63,  // 261: stock.PortfolioGRPCService.ExerciseOptionByOptionID:output_type -> stock.ExerciseResult
-	57,  // 262: stock.PortfolioGRPCService.GetHolding:output_type -> stock.HoldingWithOwner
-	66,  // 263: stock.PortfolioGRPCService.ListHoldingTransactions:output_type -> stock.ListHoldingTransactionsResponse
-	52,  // 264: stock.PortfolioGRPCService.GetUnifiedPortfolio:output_type -> stock.UnifiedPortfolioResponse
-	69,  // 265: stock.OTCGRPCService.ListOffers:output_type -> stock.ListOTCOffersResponse
-	77,  // 266: stock.OTCGRPCService.BuyOffer:output_type -> stock.OTCTransaction
-	72,  // 267: stock.OTCGRPCService.ListUnifiedOffers:output_type -> stock.ListUnifiedOTCOffersResponse
-	75,  // 268: stock.OTCGRPCService.ListUnifiedOptionOffers:output_type -> stock.ListUnifiedOptionOffersResponse
-	80,  // 269: stock.TaxGRPCService.ListTaxRecords:output_type -> stock.ListTaxRecordsResponse
-	82,  // 270: stock.TaxGRPCService.CollectTax:output_type -> stock.CollectTaxResponse
-	85,  // 271: stock.TaxGRPCService.ListUserTaxRecords:output_type -> stock.ListUserTaxRecordsResponse
-	88,  // 272: stock.SourceAdminService.SwitchSource:output_type -> stock.SwitchSourceResponse
-	90,  // 273: stock.SourceAdminService.GetSourceStatus:output_type -> stock.SourceStatus
-	93,  // 274: stock.InvestmentFundService.CreateFund:output_type -> stock.FundResponse
-	95,  // 275: stock.InvestmentFundService.ListFunds:output_type -> stock.ListFundsResponse
-	97,  // 276: stock.InvestmentFundService.GetFund:output_type -> stock.FundDetailResponse
-	93,  // 277: stock.InvestmentFundService.UpdateFund:output_type -> stock.FundResponse
-	103, // 278: stock.InvestmentFundService.InvestInFund:output_type -> stock.ContributionResponse
-	103, // 279: stock.InvestmentFundService.RedeemFromFund:output_type -> stock.ContributionResponse
-	106, // 280: stock.InvestmentFundService.ListMyPositions:output_type -> stock.ListPositionsResponse
-	106, // 281: stock.InvestmentFundService.ListBankPositions:output_type -> stock.ListPositionsResponse
-	109, // 282: stock.InvestmentFundService.GetActuaryPerformance:output_type -> stock.GetActuaryPerformanceResponse
-	238, // 283: stock.InvestmentFundService.DeclareDividend:output_type -> stock.DividendPaymentResponse
-	240, // 284: stock.InvestmentFundService.PayoutDividend:output_type -> stock.PayoutDividendResponse
-	243, // 285: stock.InvestmentFundService.ListMyDividends:output_type -> stock.ListDividendPayoutsResponse
-	246, // 286: stock.InvestmentFundService.ListFundDividends:output_type -> stock.ListFundDividendPaymentsResponse
-	147, // 287: stock.OTCOptionsService.CreateOffer:output_type -> stock.OTCOfferResponse
-	151, // 288: stock.OTCOptionsService.ListMyOffers:output_type -> stock.ListMyOTCOffersResponse
-	149, // 289: stock.OTCOptionsService.GetOffer:output_type -> stock.OTCOfferDetailResponse
-	147, // 290: stock.OTCOptionsService.CounterOffer:output_type -> stock.OTCOfferResponse
-	155, // 291: stock.OTCOptionsService.AcceptOffer:output_type -> stock.AcceptOfferResponse
-	147, // 292: stock.OTCOptionsService.RejectOffer:output_type -> stock.OTCOfferResponse
-	159, // 293: stock.OTCOptionsService.ListMyContracts:output_type -> stock.ListContractsResponse
-	157, // 294: stock.OTCOptionsService.GetContract:output_type -> stock.OptionContractResponse
-	163, // 295: stock.OTCOptionsService.ExerciseContract:output_type -> stock.ExerciseResponse
-	151, // 296: stock.OTCOptionsService.ListNegotiationHistory:output_type -> stock.ListMyOTCOffersResponse
-	139, // 297: stock.OTCOptionsService.SubmitRating:output_type -> stock.OTCRatingResponse
-	141, // 298: stock.OTCOptionsService.GetTraderProfile:output_type -> stock.TraderProfileResponse
-	143, // 299: stock.OTCOptionsService.ListReceivedRatings:output_type -> stock.ListOTCRatingsResponse
-	111, // 300: stock.OTCOptionsService.OpenNegotiation:output_type -> stock.OTCNegotiationResponse
-	111, // 301: stock.OTCOptionsService.CounterNegotiation:output_type -> stock.OTCNegotiationResponse
-	118, // 302: stock.OTCOptionsService.AcceptNegotiationChain:output_type -> stock.OTCAcceptNegotiationResponse
-	111, // 303: stock.OTCOptionsService.RejectNegotiation:output_type -> stock.OTCNegotiationResponse
-	111, // 304: stock.OTCOptionsService.CancelNegotiation:output_type -> stock.OTCNegotiationResponse
-	123, // 305: stock.OTCOptionsService.CancelListing:output_type -> stock.CancelListingResponse
-	129, // 306: stock.OTCOptionsService.ListMyNegotiations:output_type -> stock.ListNegotiationsResponse
-	129, // 307: stock.OTCOptionsService.ListNegotiationsByListing:output_type -> stock.ListNegotiationsResponse
-	114, // 308: stock.OTCOptionsService.ListNegotiationRevisions:output_type -> stock.ListNegotiationRevisionsResponse
-	128, // 309: stock.OTCOptionsService.GetOfferTimeline:output_type -> stock.GetOfferTimelineResponse
-	132, // 310: stock.OTCStockMarketGRPCService.CreateOTCStockOffer:output_type -> stock.OTCStockOfferResponse
-	135, // 311: stock.OTCStockMarketGRPCService.CancelOTCStockOffer:output_type -> stock.CancelOTCStockOfferResponse
-	137, // 312: stock.OTCStockMarketGRPCService.ListMyOTCStocks:output_type -> stock.ListMyOTCStocksResponse
-	131, // 313: stock.OTCStockMarketGRPCService.SellOTCStockOffer:output_type -> stock.OTCStockFillResult
-	178, // 314: stock.PeerOTCService.GetPublicStocks:output_type -> stock.GetPublicStocksResponse
-	181, // 315: stock.PeerOTCService.GetPublicOptionOffers:output_type -> stock.GetPublicOptionOffersResponse
-	183, // 316: stock.PeerOTCService.CreateNegotiation:output_type -> stock.CreateNegotiationResponse
-	185, // 317: stock.PeerOTCService.UpdateNegotiation:output_type -> stock.UpdateNegotiationResponse
-	187, // 318: stock.PeerOTCService.GetNegotiation:output_type -> stock.GetNegotiationResponse
-	189, // 319: stock.PeerOTCService.DeleteNegotiation:output_type -> stock.DeleteNegotiationResponse
-	191, // 320: stock.PeerOTCService.AcceptNegotiation:output_type -> stock.AcceptNegotiationResponse
-	193, // 321: stock.PeerOTCService.RecordOptionContract:output_type -> stock.RecordOptionContractResponse
-	197, // 322: stock.PeerOTCService.CheckSellerCanDeliver:output_type -> stock.CheckSellerCanDeliverResponse
-	199, // 323: stock.PeerOTCService.ReserveSellerSharesForNewTx:output_type -> stock.ReserveSellerSharesResponse
-	203, // 324: stock.PeerOTCService.ReleaseSellerSharesForNewTx:output_type -> stock.ReleaseSellerSharesResponse
-	201, // 325: stock.PeerOTCService.ValidatePeerOptionMoneyLeg:output_type -> stock.ValidatePeerOptionMoneyLegResponse
-	205, // 326: stock.PeerOTCService.LookupPeerOptionContract:output_type -> stock.LookupPeerOptionContractResponse
-	195, // 327: stock.PeerOTCService.InitiateOptionExercise:output_type -> stock.InitiateOptionExerciseResponse
-	170, // 328: stock.PeerOTCService.RecordOutboundNegotiation:output_type -> stock.RecordOutboundNegotiationResponse
-	172, // 329: stock.PeerOTCService.ListMyPeerNegotiations:output_type -> stock.ListMyPeerNegotiationsResponse
-	168, // 330: stock.PeerOTCService.MarkNegotiationAccepted:output_type -> stock.MarkNegotiationAcceptedResponse
-	166, // 331: stock.PeerOTCService.CascadeCancelSiblings:output_type -> stock.CascadeCancelSiblingsResponse
-	210, // 332: stock.RecurringFundService.Create:output_type -> stock.RecurringFundResponse
-	210, // 333: stock.RecurringFundService.Get:output_type -> stock.RecurringFundResponse
-	210, // 334: stock.RecurringFundService.Pause:output_type -> stock.RecurringFundResponse
-	210, // 335: stock.RecurringFundService.Resume:output_type -> stock.RecurringFundResponse
-	208, // 336: stock.RecurringFundService.Cancel:output_type -> stock.CancelRecurringFundResponse
-	211, // 337: stock.RecurringFundService.ListMy:output_type -> stock.ListMyRecurringFundsResponse
-	215, // 338: stock.RecurringOrderService.CreateOrder:output_type -> stock.RecurringOrderResponse
-	215, // 339: stock.RecurringOrderService.GetOrder:output_type -> stock.RecurringOrderResponse
-	215, // 340: stock.RecurringOrderService.PauseOrder:output_type -> stock.RecurringOrderResponse
-	215, // 341: stock.RecurringOrderService.ResumeOrder:output_type -> stock.RecurringOrderResponse
-	215, // 342: stock.RecurringOrderService.CancelOrder:output_type -> stock.RecurringOrderResponse
-	216, // 343: stock.RecurringOrderService.ListMy:output_type -> stock.ListMyRecurringOrdersResponse
-	223, // 344: stock.PriceAlertService.CreateAlert:output_type -> stock.PriceAlertResponse
-	223, // 345: stock.PriceAlertService.UpdateAlert:output_type -> stock.PriceAlertResponse
-	223, // 346: stock.PriceAlertService.GetAlert:output_type -> stock.PriceAlertResponse
-	221, // 347: stock.PriceAlertService.DeleteAlert:output_type -> stock.DeletePriceAlertResponse
-	224, // 348: stock.PriceAlertService.ListMy:output_type -> stock.ListMyPriceAlertsResponse
-	235, // 349: stock.WatchlistService.AddItem:output_type -> stock.WatchlistItemResponse
-	233, // 350: stock.WatchlistService.RemoveItem:output_type -> stock.RemoveWatchlistItemResponse
-	236, // 351: stock.WatchlistService.ListMy:output_type -> stock.ListMyWatchlistResponse
-	228, // 352: stock.WatchlistService.CreateWatchlist:output_type -> stock.WatchlistResponse
-	230, // 353: stock.WatchlistService.ListWatchlists:output_type -> stock.ListWatchlistsResponse
-	232, // 354: stock.WatchlistService.DeleteWatchlist:output_type -> stock.DeleteWatchlistResponse
-	233, // [233:355] is the sub-list for method output_type
-	111, // [111:233] is the sub-list for method input_type
-	111, // [111:111] is the sub-list for extension type_name
-	111, // [111:111] is the sub-list for extension extendee
-	0,   // [0:111] is the sub-list for field type_name
+	174, // 62: stock.PeerOptionContractResponse.buyer_id:type_name -> stock.PeerForeignBankId
+	174, // 63: stock.PeerOptionContractResponse.seller_id:type_name -> stock.PeerForeignBankId
+	174, // 64: stock.CascadedSibling.buyer_id:type_name -> stock.PeerForeignBankId
+	174, // 65: stock.CascadedSibling.seller_id:type_name -> stock.PeerForeignBankId
+	175, // 66: stock.CascadedSibling.offer:type_name -> stock.PeerOtcOffer
+	165, // 67: stock.CascadeCancelSiblingsResponse.siblings:type_name -> stock.CascadedSibling
+	174, // 68: stock.MarkNegotiationAcceptedRequest.negotiation_id:type_name -> stock.PeerForeignBankId
+	174, // 69: stock.RecordOutboundNegotiationRequest.negotiation_id:type_name -> stock.PeerForeignBankId
+	174, // 70: stock.RecordOutboundNegotiationRequest.buyer_id:type_name -> stock.PeerForeignBankId
+	174, // 71: stock.RecordOutboundNegotiationRequest.seller_id:type_name -> stock.PeerForeignBankId
+	175, // 72: stock.RecordOutboundNegotiationRequest.offer:type_name -> stock.PeerOtcOffer
+	173, // 73: stock.ListMyPeerNegotiationsResponse.items:type_name -> stock.PeerNegotiationListItem
+	174, // 74: stock.PeerNegotiationListItem.id:type_name -> stock.PeerForeignBankId
+	174, // 75: stock.PeerNegotiationListItem.buyer_id:type_name -> stock.PeerForeignBankId
+	174, // 76: stock.PeerNegotiationListItem.seller_id:type_name -> stock.PeerForeignBankId
+	175, // 77: stock.PeerNegotiationListItem.offer:type_name -> stock.PeerOtcOffer
+	174, // 78: stock.PeerOtcOffer.last_modified_by:type_name -> stock.PeerForeignBankId
+	174, // 79: stock.PeerOtcOffer.parent_offer_id:type_name -> stock.PeerForeignBankId
+	174, // 80: stock.PeerPublicStock.owner_id:type_name -> stock.PeerForeignBankId
+	177, // 81: stock.GetPublicStocksResponse.stocks:type_name -> stock.PeerPublicStock
+	174, // 82: stock.PeerPublicOptionOffer.offer_id:type_name -> stock.PeerForeignBankId
+	174, // 83: stock.PeerPublicOptionOffer.seller_id:type_name -> stock.PeerForeignBankId
+	174, // 84: stock.PeerPublicOptionOffer.last_modified_by:type_name -> stock.PeerForeignBankId
+	180, // 85: stock.GetPublicOptionOffersResponse.offers:type_name -> stock.PeerPublicOptionOffer
+	175, // 86: stock.CreateNegotiationRequest.offer:type_name -> stock.PeerOtcOffer
+	174, // 87: stock.CreateNegotiationRequest.buyer_id:type_name -> stock.PeerForeignBankId
+	174, // 88: stock.CreateNegotiationRequest.seller_id:type_name -> stock.PeerForeignBankId
+	174, // 89: stock.CreateNegotiationResponse.negotiation_id:type_name -> stock.PeerForeignBankId
+	174, // 90: stock.UpdateNegotiationRequest.negotiation_id:type_name -> stock.PeerForeignBankId
+	175, // 91: stock.UpdateNegotiationRequest.offer:type_name -> stock.PeerOtcOffer
+	174, // 92: stock.GetNegotiationRequest.negotiation_id:type_name -> stock.PeerForeignBankId
+	174, // 93: stock.GetNegotiationResponse.id:type_name -> stock.PeerForeignBankId
+	174, // 94: stock.GetNegotiationResponse.buyer_id:type_name -> stock.PeerForeignBankId
+	174, // 95: stock.GetNegotiationResponse.seller_id:type_name -> stock.PeerForeignBankId
+	175, // 96: stock.GetNegotiationResponse.offer:type_name -> stock.PeerOtcOffer
+	174, // 97: stock.DeleteNegotiationRequest.negotiation_id:type_name -> stock.PeerForeignBankId
+	174, // 98: stock.AcceptNegotiationRequest.negotiation_id:type_name -> stock.PeerForeignBankId
+	174, // 99: stock.RecordOptionContractRequest.buyer_id:type_name -> stock.PeerForeignBankId
+	174, // 100: stock.RecordOptionContractRequest.seller_id:type_name -> stock.PeerForeignBankId
+	174, // 101: stock.CheckSellerCanDeliverRequest.seller_id:type_name -> stock.PeerForeignBankId
+	174, // 102: stock.ReserveSellerSharesRequest.seller_id:type_name -> stock.PeerForeignBankId
+	210, // 103: stock.ListMyRecurringFundsResponse.items:type_name -> stock.RecurringFundResponse
+	215, // 104: stock.ListMyRecurringOrdersResponse.items:type_name -> stock.RecurringOrderResponse
+	223, // 105: stock.ListMyPriceAlertsResponse.alerts:type_name -> stock.PriceAlertResponse
+	228, // 106: stock.ListWatchlistsResponse.watchlists:type_name -> stock.WatchlistResponse
+	235, // 107: stock.ListMyWatchlistResponse.items:type_name -> stock.WatchlistItemResponse
+	242, // 108: stock.ListDividendPayoutsResponse.payouts:type_name -> stock.DividendPayoutItem
+	245, // 109: stock.ListFundDividendPaymentsResponse.payments:type_name -> stock.FundDividendPaymentItem
+	2,   // 110: stock.StockExchangeGRPCService.ListExchanges:input_type -> stock.ListExchangesRequest
+	4,   // 111: stock.StockExchangeGRPCService.GetExchange:input_type -> stock.GetExchangeRequest
+	5,   // 112: stock.StockExchangeGRPCService.SetTestingMode:input_type -> stock.SetTestingModeRequest
+	7,   // 113: stock.StockExchangeGRPCService.GetTestingMode:input_type -> stock.GetTestingModeRequest
+	16,  // 114: stock.SecurityGRPCService.ListStocks:input_type -> stock.ListStocksRequest
+	18,  // 115: stock.SecurityGRPCService.GetStock:input_type -> stock.GetStockRequest
+	19,  // 116: stock.SecurityGRPCService.GetStockByTicker:input_type -> stock.GetStockByTickerRequest
+	12,  // 117: stock.SecurityGRPCService.GetStockHistory:input_type -> stock.GetPriceHistoryRequest
+	22,  // 118: stock.SecurityGRPCService.ListFutures:input_type -> stock.ListFuturesRequest
+	24,  // 119: stock.SecurityGRPCService.GetFutures:input_type -> stock.GetFuturesRequest
+	12,  // 120: stock.SecurityGRPCService.GetFuturesHistory:input_type -> stock.GetPriceHistoryRequest
+	27,  // 121: stock.SecurityGRPCService.ListForexPairs:input_type -> stock.ListForexPairsRequest
+	29,  // 122: stock.SecurityGRPCService.GetForexPair:input_type -> stock.GetForexPairRequest
+	12,  // 123: stock.SecurityGRPCService.GetForexPairHistory:input_type -> stock.GetPriceHistoryRequest
+	32,  // 124: stock.SecurityGRPCService.ListOptions:input_type -> stock.ListOptionsRequest
+	34,  // 125: stock.SecurityGRPCService.GetOption:input_type -> stock.GetOptionRequest
+	35,  // 126: stock.SecurityGRPCService.GetCandles:input_type -> stock.GetCandlesRequest
+	41,  // 127: stock.OrderGRPCService.CreateOrder:input_type -> stock.CreateOrderRequest
+	42,  // 128: stock.OrderGRPCService.GetOrder:input_type -> stock.GetOrderRequest
+	43,  // 129: stock.OrderGRPCService.ListMyOrders:input_type -> stock.ListMyOrdersRequest
+	46,  // 130: stock.OrderGRPCService.CancelOrder:input_type -> stock.CancelOrderRequest
+	44,  // 131: stock.OrderGRPCService.ListOrders:input_type -> stock.ListOrdersRequest
+	47,  // 132: stock.OrderGRPCService.ApproveOrder:input_type -> stock.ApproveOrderRequest
+	48,  // 133: stock.OrderGRPCService.DeclineOrder:input_type -> stock.DeclineOrderRequest
+	54,  // 134: stock.PortfolioGRPCService.ListHoldings:input_type -> stock.ListHoldingsRequest
+	58,  // 135: stock.PortfolioGRPCService.GetPortfolioSummary:input_type -> stock.GetPortfolioSummaryRequest
+	60,  // 136: stock.PortfolioGRPCService.MakePublic:input_type -> stock.MakePublicRequest
+	61,  // 137: stock.PortfolioGRPCService.ExerciseOption:input_type -> stock.ExerciseOptionRequest
+	62,  // 138: stock.PortfolioGRPCService.ExerciseOptionByOptionID:input_type -> stock.ExerciseOptionByOptionIDRequest
+	56,  // 139: stock.PortfolioGRPCService.GetHolding:input_type -> stock.GetHoldingRequest
+	65,  // 140: stock.PortfolioGRPCService.ListHoldingTransactions:input_type -> stock.ListHoldingTransactionsRequest
+	49,  // 141: stock.PortfolioGRPCService.GetUnifiedPortfolio:input_type -> stock.GetUnifiedPortfolioRequest
+	68,  // 142: stock.OTCGRPCService.ListOffers:input_type -> stock.ListOTCOffersRequest
+	76,  // 143: stock.OTCGRPCService.BuyOffer:input_type -> stock.BuyOTCOfferRequest
+	71,  // 144: stock.OTCGRPCService.ListUnifiedOffers:input_type -> stock.ListUnifiedOTCOffersRequest
+	74,  // 145: stock.OTCGRPCService.ListUnifiedOptionOffers:input_type -> stock.ListUnifiedOptionOffersRequest
+	79,  // 146: stock.TaxGRPCService.ListTaxRecords:input_type -> stock.ListTaxRecordsRequest
+	81,  // 147: stock.TaxGRPCService.CollectTax:input_type -> stock.CollectTaxRequest
+	83,  // 148: stock.TaxGRPCService.ListUserTaxRecords:input_type -> stock.ListUserTaxRecordsRequest
+	87,  // 149: stock.SourceAdminService.SwitchSource:input_type -> stock.SwitchSourceRequest
+	89,  // 150: stock.SourceAdminService.GetSourceStatus:input_type -> stock.GetSourceStatusRequest
+	92,  // 151: stock.InvestmentFundService.CreateFund:input_type -> stock.CreateFundRequest
+	94,  // 152: stock.InvestmentFundService.ListFunds:input_type -> stock.ListFundsRequest
+	96,  // 153: stock.InvestmentFundService.GetFund:input_type -> stock.GetFundRequest
+	100, // 154: stock.InvestmentFundService.UpdateFund:input_type -> stock.UpdateFundRequest
+	101, // 155: stock.InvestmentFundService.InvestInFund:input_type -> stock.InvestInFundRequest
+	102, // 156: stock.InvestmentFundService.RedeemFromFund:input_type -> stock.RedeemFromFundRequest
+	104, // 157: stock.InvestmentFundService.ListMyPositions:input_type -> stock.ListMyPositionsRequest
+	105, // 158: stock.InvestmentFundService.ListBankPositions:input_type -> stock.ListBankPositionsRequest
+	108, // 159: stock.InvestmentFundService.GetActuaryPerformance:input_type -> stock.GetActuaryPerformanceRequest
+	237, // 160: stock.InvestmentFundService.DeclareDividend:input_type -> stock.DeclareDividendRequest
+	239, // 161: stock.InvestmentFundService.PayoutDividend:input_type -> stock.PayoutDividendRequest
+	241, // 162: stock.InvestmentFundService.ListMyDividends:input_type -> stock.ListMyDividendsRequest
+	244, // 163: stock.InvestmentFundService.ListFundDividends:input_type -> stock.ListFundDividendsRequest
+	146, // 164: stock.OTCOptionsService.CreateOffer:input_type -> stock.CreateOTCOfferRequest
+	150, // 165: stock.OTCOptionsService.ListMyOffers:input_type -> stock.ListMyOTCOffersRequest
+	152, // 166: stock.OTCOptionsService.GetOffer:input_type -> stock.GetOTCOfferRequest
+	153, // 167: stock.OTCOptionsService.CounterOffer:input_type -> stock.CounterOTCOfferRequest
+	154, // 168: stock.OTCOptionsService.AcceptOffer:input_type -> stock.AcceptOTCOfferRequest
+	156, // 169: stock.OTCOptionsService.RejectOffer:input_type -> stock.RejectOTCOfferRequest
+	158, // 170: stock.OTCOptionsService.ListMyContracts:input_type -> stock.ListMyContractsRequest
+	161, // 171: stock.OTCOptionsService.GetContract:input_type -> stock.GetContractRequest
+	162, // 172: stock.OTCOptionsService.ExerciseContract:input_type -> stock.ExerciseContractRequest
+	144, // 173: stock.OTCOptionsService.ListNegotiationHistory:input_type -> stock.ListNegotiationHistoryRequest
+	138, // 174: stock.OTCOptionsService.SubmitRating:input_type -> stock.SubmitOTCRatingRequest
+	140, // 175: stock.OTCOptionsService.GetTraderProfile:input_type -> stock.GetTraderProfileRequest
+	142, // 176: stock.OTCOptionsService.ListReceivedRatings:input_type -> stock.ListReceivedRatingsRequest
+	115, // 177: stock.OTCOptionsService.OpenNegotiation:input_type -> stock.OpenNegotiationRequest
+	116, // 178: stock.OTCOptionsService.CounterNegotiation:input_type -> stock.CounterNegotiationRequest
+	117, // 179: stock.OTCOptionsService.AcceptNegotiationChain:input_type -> stock.OTCAcceptNegotiationRequest
+	120, // 180: stock.OTCOptionsService.RejectNegotiation:input_type -> stock.RejectNegotiationRequest
+	121, // 181: stock.OTCOptionsService.CancelNegotiation:input_type -> stock.CancelNegotiationRequest
+	122, // 182: stock.OTCOptionsService.CancelListing:input_type -> stock.CancelListingRequest
+	124, // 183: stock.OTCOptionsService.ListMyNegotiations:input_type -> stock.ListMyNegotiationsRequest
+	125, // 184: stock.OTCOptionsService.ListNegotiationsByListing:input_type -> stock.ListNegotiationsByListingRequest
+	113, // 185: stock.OTCOptionsService.ListNegotiationRevisions:input_type -> stock.ListNegotiationRevisionsRequest
+	126, // 186: stock.OTCOptionsService.GetOfferTimeline:input_type -> stock.GetOfferTimelineRequest
+	133, // 187: stock.OTCStockMarketGRPCService.CreateOTCStockOffer:input_type -> stock.CreateOTCStockOfferRequest
+	134, // 188: stock.OTCStockMarketGRPCService.CancelOTCStockOffer:input_type -> stock.CancelOTCStockOfferRequest
+	136, // 189: stock.OTCStockMarketGRPCService.ListMyOTCStocks:input_type -> stock.ListMyOTCStocksRequest
+	130, // 190: stock.OTCStockMarketGRPCService.SellOTCStockOffer:input_type -> stock.SellOTCStockOfferRequest
+	176, // 191: stock.PeerOTCService.GetPublicStocks:input_type -> stock.GetPublicStocksRequest
+	179, // 192: stock.PeerOTCService.GetPublicOptionOffers:input_type -> stock.GetPublicOptionOffersRequest
+	182, // 193: stock.PeerOTCService.CreateNegotiation:input_type -> stock.CreateNegotiationRequest
+	184, // 194: stock.PeerOTCService.UpdateNegotiation:input_type -> stock.UpdateNegotiationRequest
+	186, // 195: stock.PeerOTCService.GetNegotiation:input_type -> stock.GetNegotiationRequest
+	188, // 196: stock.PeerOTCService.DeleteNegotiation:input_type -> stock.DeleteNegotiationRequest
+	190, // 197: stock.PeerOTCService.AcceptNegotiation:input_type -> stock.AcceptNegotiationRequest
+	192, // 198: stock.PeerOTCService.RecordOptionContract:input_type -> stock.RecordOptionContractRequest
+	196, // 199: stock.PeerOTCService.CheckSellerCanDeliver:input_type -> stock.CheckSellerCanDeliverRequest
+	198, // 200: stock.PeerOTCService.ReserveSellerSharesForNewTx:input_type -> stock.ReserveSellerSharesRequest
+	202, // 201: stock.PeerOTCService.ReleaseSellerSharesForNewTx:input_type -> stock.ReleaseSellerSharesRequest
+	200, // 202: stock.PeerOTCService.ValidatePeerOptionMoneyLeg:input_type -> stock.ValidatePeerOptionMoneyLegRequest
+	204, // 203: stock.PeerOTCService.LookupPeerOptionContract:input_type -> stock.LookupPeerOptionContractRequest
+	194, // 204: stock.PeerOTCService.InitiateOptionExercise:input_type -> stock.InitiateOptionExerciseRequest
+	169, // 205: stock.PeerOTCService.RecordOutboundNegotiation:input_type -> stock.RecordOutboundNegotiationRequest
+	171, // 206: stock.PeerOTCService.ListMyPeerNegotiations:input_type -> stock.ListMyPeerNegotiationsRequest
+	167, // 207: stock.PeerOTCService.MarkNegotiationAccepted:input_type -> stock.MarkNegotiationAcceptedRequest
+	164, // 208: stock.PeerOTCService.CascadeCancelSiblings:input_type -> stock.CascadeCancelSiblingsRequest
+	206, // 209: stock.RecurringFundService.Create:input_type -> stock.CreateRecurringFundRequest
+	207, // 210: stock.RecurringFundService.Get:input_type -> stock.GetRecurringFundRequest
+	207, // 211: stock.RecurringFundService.Pause:input_type -> stock.GetRecurringFundRequest
+	207, // 212: stock.RecurringFundService.Resume:input_type -> stock.GetRecurringFundRequest
+	207, // 213: stock.RecurringFundService.Cancel:input_type -> stock.GetRecurringFundRequest
+	209, // 214: stock.RecurringFundService.ListMy:input_type -> stock.ListMyRecurringFundsRequest
+	212, // 215: stock.RecurringOrderService.CreateOrder:input_type -> stock.CreateRecurringOrderRequest
+	213, // 216: stock.RecurringOrderService.GetOrder:input_type -> stock.GetRecurringOrderRequest
+	213, // 217: stock.RecurringOrderService.PauseOrder:input_type -> stock.GetRecurringOrderRequest
+	213, // 218: stock.RecurringOrderService.ResumeOrder:input_type -> stock.GetRecurringOrderRequest
+	213, // 219: stock.RecurringOrderService.CancelOrder:input_type -> stock.GetRecurringOrderRequest
+	214, // 220: stock.RecurringOrderService.ListMy:input_type -> stock.ListMyRecurringOrdersRequest
+	217, // 221: stock.PriceAlertService.CreateAlert:input_type -> stock.CreatePriceAlertRequest
+	218, // 222: stock.PriceAlertService.UpdateAlert:input_type -> stock.UpdatePriceAlertRequest
+	219, // 223: stock.PriceAlertService.GetAlert:input_type -> stock.GetPriceAlertRequest
+	220, // 224: stock.PriceAlertService.DeleteAlert:input_type -> stock.DeletePriceAlertRequest
+	222, // 225: stock.PriceAlertService.ListMy:input_type -> stock.ListMyPriceAlertsRequest
+	225, // 226: stock.WatchlistService.AddItem:input_type -> stock.AddWatchlistItemRequest
+	226, // 227: stock.WatchlistService.RemoveItem:input_type -> stock.RemoveWatchlistItemRequest
+	234, // 228: stock.WatchlistService.ListMy:input_type -> stock.ListMyWatchlistRequest
+	227, // 229: stock.WatchlistService.CreateWatchlist:input_type -> stock.CreateWatchlistRequest
+	229, // 230: stock.WatchlistService.ListWatchlists:input_type -> stock.ListWatchlistsRequest
+	231, // 231: stock.WatchlistService.DeleteWatchlist:input_type -> stock.DeleteWatchlistRequest
+	3,   // 232: stock.StockExchangeGRPCService.ListExchanges:output_type -> stock.ListExchangesResponse
+	1,   // 233: stock.StockExchangeGRPCService.GetExchange:output_type -> stock.Exchange
+	6,   // 234: stock.StockExchangeGRPCService.SetTestingMode:output_type -> stock.SetTestingModeResponse
+	8,   // 235: stock.StockExchangeGRPCService.GetTestingMode:output_type -> stock.GetTestingModeResponse
+	17,  // 236: stock.SecurityGRPCService.ListStocks:output_type -> stock.ListStocksResponse
+	15,  // 237: stock.SecurityGRPCService.GetStock:output_type -> stock.StockDetail
+	15,  // 238: stock.SecurityGRPCService.GetStockByTicker:output_type -> stock.StockDetail
+	13,  // 239: stock.SecurityGRPCService.GetStockHistory:output_type -> stock.PriceHistoryResponse
+	23,  // 240: stock.SecurityGRPCService.ListFutures:output_type -> stock.ListFuturesResponse
+	21,  // 241: stock.SecurityGRPCService.GetFutures:output_type -> stock.FuturesDetail
+	13,  // 242: stock.SecurityGRPCService.GetFuturesHistory:output_type -> stock.PriceHistoryResponse
+	28,  // 243: stock.SecurityGRPCService.ListForexPairs:output_type -> stock.ListForexPairsResponse
+	26,  // 244: stock.SecurityGRPCService.GetForexPair:output_type -> stock.ForexPairDetail
+	13,  // 245: stock.SecurityGRPCService.GetForexPairHistory:output_type -> stock.PriceHistoryResponse
+	33,  // 246: stock.SecurityGRPCService.ListOptions:output_type -> stock.ListOptionsResponse
+	31,  // 247: stock.SecurityGRPCService.GetOption:output_type -> stock.OptionDetail
+	37,  // 248: stock.SecurityGRPCService.GetCandles:output_type -> stock.GetCandlesResponse
+	38,  // 249: stock.OrderGRPCService.CreateOrder:output_type -> stock.Order
+	40,  // 250: stock.OrderGRPCService.GetOrder:output_type -> stock.OrderDetail
+	45,  // 251: stock.OrderGRPCService.ListMyOrders:output_type -> stock.ListOrdersResponse
+	38,  // 252: stock.OrderGRPCService.CancelOrder:output_type -> stock.Order
+	45,  // 253: stock.OrderGRPCService.ListOrders:output_type -> stock.ListOrdersResponse
+	38,  // 254: stock.OrderGRPCService.ApproveOrder:output_type -> stock.Order
+	38,  // 255: stock.OrderGRPCService.DeclineOrder:output_type -> stock.Order
+	55,  // 256: stock.PortfolioGRPCService.ListHoldings:output_type -> stock.ListHoldingsResponse
+	59,  // 257: stock.PortfolioGRPCService.GetPortfolioSummary:output_type -> stock.PortfolioSummary
+	53,  // 258: stock.PortfolioGRPCService.MakePublic:output_type -> stock.Holding
+	63,  // 259: stock.PortfolioGRPCService.ExerciseOption:output_type -> stock.ExerciseResult
+	63,  // 260: stock.PortfolioGRPCService.ExerciseOptionByOptionID:output_type -> stock.ExerciseResult
+	57,  // 261: stock.PortfolioGRPCService.GetHolding:output_type -> stock.HoldingWithOwner
+	66,  // 262: stock.PortfolioGRPCService.ListHoldingTransactions:output_type -> stock.ListHoldingTransactionsResponse
+	52,  // 263: stock.PortfolioGRPCService.GetUnifiedPortfolio:output_type -> stock.UnifiedPortfolioResponse
+	69,  // 264: stock.OTCGRPCService.ListOffers:output_type -> stock.ListOTCOffersResponse
+	77,  // 265: stock.OTCGRPCService.BuyOffer:output_type -> stock.OTCTransaction
+	72,  // 266: stock.OTCGRPCService.ListUnifiedOffers:output_type -> stock.ListUnifiedOTCOffersResponse
+	75,  // 267: stock.OTCGRPCService.ListUnifiedOptionOffers:output_type -> stock.ListUnifiedOptionOffersResponse
+	80,  // 268: stock.TaxGRPCService.ListTaxRecords:output_type -> stock.ListTaxRecordsResponse
+	82,  // 269: stock.TaxGRPCService.CollectTax:output_type -> stock.CollectTaxResponse
+	85,  // 270: stock.TaxGRPCService.ListUserTaxRecords:output_type -> stock.ListUserTaxRecordsResponse
+	88,  // 271: stock.SourceAdminService.SwitchSource:output_type -> stock.SwitchSourceResponse
+	90,  // 272: stock.SourceAdminService.GetSourceStatus:output_type -> stock.SourceStatus
+	93,  // 273: stock.InvestmentFundService.CreateFund:output_type -> stock.FundResponse
+	95,  // 274: stock.InvestmentFundService.ListFunds:output_type -> stock.ListFundsResponse
+	97,  // 275: stock.InvestmentFundService.GetFund:output_type -> stock.FundDetailResponse
+	93,  // 276: stock.InvestmentFundService.UpdateFund:output_type -> stock.FundResponse
+	103, // 277: stock.InvestmentFundService.InvestInFund:output_type -> stock.ContributionResponse
+	103, // 278: stock.InvestmentFundService.RedeemFromFund:output_type -> stock.ContributionResponse
+	106, // 279: stock.InvestmentFundService.ListMyPositions:output_type -> stock.ListPositionsResponse
+	106, // 280: stock.InvestmentFundService.ListBankPositions:output_type -> stock.ListPositionsResponse
+	109, // 281: stock.InvestmentFundService.GetActuaryPerformance:output_type -> stock.GetActuaryPerformanceResponse
+	238, // 282: stock.InvestmentFundService.DeclareDividend:output_type -> stock.DividendPaymentResponse
+	240, // 283: stock.InvestmentFundService.PayoutDividend:output_type -> stock.PayoutDividendResponse
+	243, // 284: stock.InvestmentFundService.ListMyDividends:output_type -> stock.ListDividendPayoutsResponse
+	246, // 285: stock.InvestmentFundService.ListFundDividends:output_type -> stock.ListFundDividendPaymentsResponse
+	147, // 286: stock.OTCOptionsService.CreateOffer:output_type -> stock.OTCOfferResponse
+	151, // 287: stock.OTCOptionsService.ListMyOffers:output_type -> stock.ListMyOTCOffersResponse
+	149, // 288: stock.OTCOptionsService.GetOffer:output_type -> stock.OTCOfferDetailResponse
+	147, // 289: stock.OTCOptionsService.CounterOffer:output_type -> stock.OTCOfferResponse
+	155, // 290: stock.OTCOptionsService.AcceptOffer:output_type -> stock.AcceptOfferResponse
+	147, // 291: stock.OTCOptionsService.RejectOffer:output_type -> stock.OTCOfferResponse
+	159, // 292: stock.OTCOptionsService.ListMyContracts:output_type -> stock.ListContractsResponse
+	157, // 293: stock.OTCOptionsService.GetContract:output_type -> stock.OptionContractResponse
+	163, // 294: stock.OTCOptionsService.ExerciseContract:output_type -> stock.ExerciseResponse
+	151, // 295: stock.OTCOptionsService.ListNegotiationHistory:output_type -> stock.ListMyOTCOffersResponse
+	139, // 296: stock.OTCOptionsService.SubmitRating:output_type -> stock.OTCRatingResponse
+	141, // 297: stock.OTCOptionsService.GetTraderProfile:output_type -> stock.TraderProfileResponse
+	143, // 298: stock.OTCOptionsService.ListReceivedRatings:output_type -> stock.ListOTCRatingsResponse
+	111, // 299: stock.OTCOptionsService.OpenNegotiation:output_type -> stock.OTCNegotiationResponse
+	111, // 300: stock.OTCOptionsService.CounterNegotiation:output_type -> stock.OTCNegotiationResponse
+	118, // 301: stock.OTCOptionsService.AcceptNegotiationChain:output_type -> stock.OTCAcceptNegotiationResponse
+	111, // 302: stock.OTCOptionsService.RejectNegotiation:output_type -> stock.OTCNegotiationResponse
+	111, // 303: stock.OTCOptionsService.CancelNegotiation:output_type -> stock.OTCNegotiationResponse
+	123, // 304: stock.OTCOptionsService.CancelListing:output_type -> stock.CancelListingResponse
+	129, // 305: stock.OTCOptionsService.ListMyNegotiations:output_type -> stock.ListNegotiationsResponse
+	129, // 306: stock.OTCOptionsService.ListNegotiationsByListing:output_type -> stock.ListNegotiationsResponse
+	114, // 307: stock.OTCOptionsService.ListNegotiationRevisions:output_type -> stock.ListNegotiationRevisionsResponse
+	128, // 308: stock.OTCOptionsService.GetOfferTimeline:output_type -> stock.GetOfferTimelineResponse
+	132, // 309: stock.OTCStockMarketGRPCService.CreateOTCStockOffer:output_type -> stock.OTCStockOfferResponse
+	135, // 310: stock.OTCStockMarketGRPCService.CancelOTCStockOffer:output_type -> stock.CancelOTCStockOfferResponse
+	137, // 311: stock.OTCStockMarketGRPCService.ListMyOTCStocks:output_type -> stock.ListMyOTCStocksResponse
+	131, // 312: stock.OTCStockMarketGRPCService.SellOTCStockOffer:output_type -> stock.OTCStockFillResult
+	178, // 313: stock.PeerOTCService.GetPublicStocks:output_type -> stock.GetPublicStocksResponse
+	181, // 314: stock.PeerOTCService.GetPublicOptionOffers:output_type -> stock.GetPublicOptionOffersResponse
+	183, // 315: stock.PeerOTCService.CreateNegotiation:output_type -> stock.CreateNegotiationResponse
+	185, // 316: stock.PeerOTCService.UpdateNegotiation:output_type -> stock.UpdateNegotiationResponse
+	187, // 317: stock.PeerOTCService.GetNegotiation:output_type -> stock.GetNegotiationResponse
+	189, // 318: stock.PeerOTCService.DeleteNegotiation:output_type -> stock.DeleteNegotiationResponse
+	191, // 319: stock.PeerOTCService.AcceptNegotiation:output_type -> stock.AcceptNegotiationResponse
+	193, // 320: stock.PeerOTCService.RecordOptionContract:output_type -> stock.RecordOptionContractResponse
+	197, // 321: stock.PeerOTCService.CheckSellerCanDeliver:output_type -> stock.CheckSellerCanDeliverResponse
+	199, // 322: stock.PeerOTCService.ReserveSellerSharesForNewTx:output_type -> stock.ReserveSellerSharesResponse
+	203, // 323: stock.PeerOTCService.ReleaseSellerSharesForNewTx:output_type -> stock.ReleaseSellerSharesResponse
+	201, // 324: stock.PeerOTCService.ValidatePeerOptionMoneyLeg:output_type -> stock.ValidatePeerOptionMoneyLegResponse
+	205, // 325: stock.PeerOTCService.LookupPeerOptionContract:output_type -> stock.LookupPeerOptionContractResponse
+	195, // 326: stock.PeerOTCService.InitiateOptionExercise:output_type -> stock.InitiateOptionExerciseResponse
+	170, // 327: stock.PeerOTCService.RecordOutboundNegotiation:output_type -> stock.RecordOutboundNegotiationResponse
+	172, // 328: stock.PeerOTCService.ListMyPeerNegotiations:output_type -> stock.ListMyPeerNegotiationsResponse
+	168, // 329: stock.PeerOTCService.MarkNegotiationAccepted:output_type -> stock.MarkNegotiationAcceptedResponse
+	166, // 330: stock.PeerOTCService.CascadeCancelSiblings:output_type -> stock.CascadeCancelSiblingsResponse
+	210, // 331: stock.RecurringFundService.Create:output_type -> stock.RecurringFundResponse
+	210, // 332: stock.RecurringFundService.Get:output_type -> stock.RecurringFundResponse
+	210, // 333: stock.RecurringFundService.Pause:output_type -> stock.RecurringFundResponse
+	210, // 334: stock.RecurringFundService.Resume:output_type -> stock.RecurringFundResponse
+	208, // 335: stock.RecurringFundService.Cancel:output_type -> stock.CancelRecurringFundResponse
+	211, // 336: stock.RecurringFundService.ListMy:output_type -> stock.ListMyRecurringFundsResponse
+	215, // 337: stock.RecurringOrderService.CreateOrder:output_type -> stock.RecurringOrderResponse
+	215, // 338: stock.RecurringOrderService.GetOrder:output_type -> stock.RecurringOrderResponse
+	215, // 339: stock.RecurringOrderService.PauseOrder:output_type -> stock.RecurringOrderResponse
+	215, // 340: stock.RecurringOrderService.ResumeOrder:output_type -> stock.RecurringOrderResponse
+	215, // 341: stock.RecurringOrderService.CancelOrder:output_type -> stock.RecurringOrderResponse
+	216, // 342: stock.RecurringOrderService.ListMy:output_type -> stock.ListMyRecurringOrdersResponse
+	223, // 343: stock.PriceAlertService.CreateAlert:output_type -> stock.PriceAlertResponse
+	223, // 344: stock.PriceAlertService.UpdateAlert:output_type -> stock.PriceAlertResponse
+	223, // 345: stock.PriceAlertService.GetAlert:output_type -> stock.PriceAlertResponse
+	221, // 346: stock.PriceAlertService.DeleteAlert:output_type -> stock.DeletePriceAlertResponse
+	224, // 347: stock.PriceAlertService.ListMy:output_type -> stock.ListMyPriceAlertsResponse
+	235, // 348: stock.WatchlistService.AddItem:output_type -> stock.WatchlistItemResponse
+	233, // 349: stock.WatchlistService.RemoveItem:output_type -> stock.RemoveWatchlistItemResponse
+	236, // 350: stock.WatchlistService.ListMy:output_type -> stock.ListMyWatchlistResponse
+	228, // 351: stock.WatchlistService.CreateWatchlist:output_type -> stock.WatchlistResponse
+	230, // 352: stock.WatchlistService.ListWatchlists:output_type -> stock.ListWatchlistsResponse
+	232, // 353: stock.WatchlistService.DeleteWatchlist:output_type -> stock.DeleteWatchlistResponse
+	232, // [232:354] is the sub-list for method output_type
+	110, // [110:232] is the sub-list for method input_type
+	110, // [110:110] is the sub-list for extension type_name
+	110, // [110:110] is the sub-list for extension extendee
+	0,   // [0:110] is the sub-list for field type_name
 }
 
 func init() { file_stock_stock_proto_init() }

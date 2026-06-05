@@ -3924,8 +3924,10 @@ type PeerOTCServiceClient interface {
 	LookupPeerOptionContract(ctx context.Context, in *LookupPeerOptionContractRequest, opts ...grpc.CallOption) (*LookupPeerOptionContractResponse, error)
 	InitiateOptionExercise(ctx context.Context, in *InitiateOptionExerciseRequest, opts ...grpc.CallOption) (*InitiateOptionExerciseResponse, error)
 	// Buyer-side mirror persistence so the buyer's bank also has a local
-	// row to surface in /me/peer-otc/negotiations. Called by the gateway
-	// right after the outbound POST to the seller's bank succeeds.
+	// row to surface in the unified negotiations list. Invoked inside
+	// stock-service's outbound-negotiation flow right after the outbound
+	// POST to the seller's bank succeeds (SP-2b moved this out of the
+	// retired gateway PeerOTCInitiateHandler).
 	RecordOutboundNegotiation(ctx context.Context, in *RecordOutboundNegotiationRequest, opts ...grpc.CallOption) (*RecordOutboundNegotiationResponse, error)
 	// Discovery: list pending peer negotiations for a client principal.
 	// Surfaces rows where the caller is either buyer or seller; the
@@ -3935,16 +3937,18 @@ type PeerOTCServiceClient interface {
 	// "seller" row on bank A is one where seller_routing == bank-A
 	// routing AND seller_id == "client-<N>").
 	ListMyPeerNegotiations(ctx context.Context, in *ListMyPeerNegotiationsRequest, opts ...grpc.CallOption) (*ListMyPeerNegotiationsResponse, error)
-	// Local-mirror status flip to "accepted". Called by the gateway after
-	// a successful proxy of POST /me/peer-otc/negotiations/.../accept to
-	// the counterparty's bank, so the caller's own list reflects the
-	// terminal state immediately. The peer-facing AcceptNegotiation RPC
-	// (above) is reserved for the bank that actually dispatches the
-	// option-formation SI-TX — calling that one twice would re-dispatch.
+	// Local-mirror status flip to "accepted". Invoked inside stock-service's
+	// outbound accept flow after a successful proxy GET .../accept to the
+	// counterparty's bank, so the caller's own list reflects the terminal
+	// state immediately. The peer-facing AcceptNegotiation RPC (above) is
+	// reserved for the bank that actually dispatches the option-formation
+	// SI-TX — calling that one twice would re-dispatch. (SP-2b moved the
+	// caller out of the retired gateway PeerOTCInitiateHandler.)
 	MarkNegotiationAccepted(ctx context.Context, in *MarkNegotiationAcceptedRequest, opts ...grpc.CallOption) (*MarkNegotiationAcceptedResponse, error)
 	// Phase 10 — cross-bank cascade-cancel of sibling chains on accept.
-	// Called by the seller's gateway after MarkNegotiationAccepted. The
-	// RPC returns every other ongoing peer_otc_negotiations row whose
+	// Invoked inside the seller-bank's stock-service accept flow after
+	// MarkNegotiationAccepted. The RPC returns every other ongoing
+	// peer_otc_negotiations row whose
 	// seller is the same AND whose offer matches the accepted offer's
 	// ticker + settlement_date — those are "the same parallel-bid
 	// siblings" in the user's mental model. Each match is marked
@@ -4209,8 +4213,10 @@ type PeerOTCServiceServer interface {
 	LookupPeerOptionContract(context.Context, *LookupPeerOptionContractRequest) (*LookupPeerOptionContractResponse, error)
 	InitiateOptionExercise(context.Context, *InitiateOptionExerciseRequest) (*InitiateOptionExerciseResponse, error)
 	// Buyer-side mirror persistence so the buyer's bank also has a local
-	// row to surface in /me/peer-otc/negotiations. Called by the gateway
-	// right after the outbound POST to the seller's bank succeeds.
+	// row to surface in the unified negotiations list. Invoked inside
+	// stock-service's outbound-negotiation flow right after the outbound
+	// POST to the seller's bank succeeds (SP-2b moved this out of the
+	// retired gateway PeerOTCInitiateHandler).
 	RecordOutboundNegotiation(context.Context, *RecordOutboundNegotiationRequest) (*RecordOutboundNegotiationResponse, error)
 	// Discovery: list pending peer negotiations for a client principal.
 	// Surfaces rows where the caller is either buyer or seller; the
@@ -4220,16 +4226,18 @@ type PeerOTCServiceServer interface {
 	// "seller" row on bank A is one where seller_routing == bank-A
 	// routing AND seller_id == "client-<N>").
 	ListMyPeerNegotiations(context.Context, *ListMyPeerNegotiationsRequest) (*ListMyPeerNegotiationsResponse, error)
-	// Local-mirror status flip to "accepted". Called by the gateway after
-	// a successful proxy of POST /me/peer-otc/negotiations/.../accept to
-	// the counterparty's bank, so the caller's own list reflects the
-	// terminal state immediately. The peer-facing AcceptNegotiation RPC
-	// (above) is reserved for the bank that actually dispatches the
-	// option-formation SI-TX — calling that one twice would re-dispatch.
+	// Local-mirror status flip to "accepted". Invoked inside stock-service's
+	// outbound accept flow after a successful proxy GET .../accept to the
+	// counterparty's bank, so the caller's own list reflects the terminal
+	// state immediately. The peer-facing AcceptNegotiation RPC (above) is
+	// reserved for the bank that actually dispatches the option-formation
+	// SI-TX — calling that one twice would re-dispatch. (SP-2b moved the
+	// caller out of the retired gateway PeerOTCInitiateHandler.)
 	MarkNegotiationAccepted(context.Context, *MarkNegotiationAcceptedRequest) (*MarkNegotiationAcceptedResponse, error)
 	// Phase 10 — cross-bank cascade-cancel of sibling chains on accept.
-	// Called by the seller's gateway after MarkNegotiationAccepted. The
-	// RPC returns every other ongoing peer_otc_negotiations row whose
+	// Invoked inside the seller-bank's stock-service accept flow after
+	// MarkNegotiationAccepted. The RPC returns every other ongoing
+	// peer_otc_negotiations row whose
 	// seller is the same AND whose offer matches the accepted offer's
 	// ticker + settlement_date — those are "the same parallel-bid
 	// siblings" in the user's mental model. Each match is marked

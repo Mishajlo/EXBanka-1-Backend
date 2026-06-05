@@ -61,8 +61,8 @@ func (s *otcStubAccountClient) GetAccountByNumber(_ context.Context, in *account
 // otcHandler builds an OTCOptionsHandler with permissive default security +
 // account stubs (ticker resolves to stock 11; accounts are owned by client
 // principal 42). Tests needing other behaviour construct the handler directly.
-func otcHandler(cl *stubOTCOptionsClient, peer *stubPeerOTCExerciseClient) *handler.OTCOptionsHandler {
-	return handler.NewOTCOptionsHandler(cl, peer, &otcStubSecurityClient{}, &otcStubAccountClient{})
+func otcHandler(cl *stubOTCOptionsClient) *handler.OTCOptionsHandler {
+	return handler.NewOTCOptionsHandler(cl, &otcStubSecurityClient{}, &otcStubAccountClient{})
 }
 
 // stubOTCOptionsClient implements stockpb.OTCOptionsServiceClient.
@@ -213,20 +213,6 @@ func (s *stubOTCOptionsClient) ListNegotiationRevisions(_ context.Context, in *s
 
 var _ stockpb.OTCOptionsServiceClient = (*stubOTCOptionsClient)(nil)
 
-// stubPeerOTCExerciseClient is a minimal PeerOTCServiceClient that only
-// implements InitiateOptionExercise. Other methods return Unimplemented.
-type stubPeerOTCExerciseClient struct {
-	stockpb.PeerOTCServiceClient
-	initiateFn func(*stockpb.InitiateOptionExerciseRequest) (*stockpb.InitiateOptionExerciseResponse, error)
-}
-
-func (s *stubPeerOTCExerciseClient) InitiateOptionExercise(_ context.Context, in *stockpb.InitiateOptionExerciseRequest, _ ...grpc.CallOption) (*stockpb.InitiateOptionExerciseResponse, error) {
-	if s.initiateFn != nil {
-		return s.initiateFn(in)
-	}
-	return &stockpb.InitiateOptionExerciseResponse{}, nil
-}
-
 func otcOptionsRouter(h *handler.OTCOptionsHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -240,7 +226,6 @@ func otcOptionsRouter(h *handler.OTCOptionsHandler) *gin.Engine {
 	r.GET("/me/otc/contracts", withCli, h.ListMyContracts)
 	r.GET("/otc/contracts/:id", withCli, h.GetContract)
 	r.POST("/otc/contracts/:id/exercise", withCli, h.ExerciseContract)
-	r.POST("/me/otc/contracts/peer/:id/exercise", withCli, h.ExercisePeerContract)
 	r.GET("/me/otc/options/posted", withCli, h.ListMyPostedOffers)
 	r.DELETE("/me/otc/options/:id", withCli, h.CancelMyListing)
 	return r
@@ -256,7 +241,7 @@ func TestOTCOpt_CreateOffer_Success(t *testing.T) {
 			return &stockpb.OTCOfferResponse{Id: 1}, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	body := `{"direction":"sell_initiated","ticker":"AAPL","quantity":"100","strike_price":"5","premium":"1","settlement_date":"2026-12-31","account_id":50}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
@@ -267,7 +252,7 @@ func TestOTCOpt_CreateOffer_UnknownTicker(t *testing.T) {
 	sec := &otcStubSecurityClient{byTickerFn: func(*stockpb.GetStockByTickerRequest) (*stockpb.StockDetail, error) {
 		return nil, status.Error(codes.NotFound, "no stock")
 	}}
-	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}, sec, &otcStubAccountClient{})
+	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, sec, &otcStubAccountClient{})
 	r := otcOptionsRouter(h)
 	body := `{"direction":"sell_initiated","ticker":"NOPE","quantity":"1","strike_price":"5","premium":"1","settlement_date":"2026-12-31","account_id":50}`
 	rec := httptest.NewRecorder()
@@ -279,7 +264,7 @@ func TestOTCOpt_CreateOffer_AccountNotOwned(t *testing.T) {
 	acct := &otcStubAccountClient{getFn: func(in *accountpb.GetAccountRequest) (*accountpb.AccountResponse, error) {
 		return &accountpb.AccountResponse{Id: in.Id, OwnerId: 999, AccountKind: "current"}, nil
 	}}
-	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}, &otcStubSecurityClient{}, acct)
+	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, &otcStubSecurityClient{}, acct)
 	r := otcOptionsRouter(h)
 	body := `{"direction":"sell_initiated","ticker":"AAPL","quantity":"1","strike_price":"5","premium":"1","settlement_date":"2026-12-31","account_id":50}`
 	rec := httptest.NewRecorder()
@@ -288,7 +273,7 @@ func TestOTCOpt_CreateOffer_AccountNotOwned(t *testing.T) {
 }
 
 func TestOTCOpt_CreateOffer_BadDirection(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	body := `{"direction":"weird","stock_id":1,"quantity":"100","strike_price":"5","settlement_date":"2026-12-31"}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
@@ -296,7 +281,7 @@ func TestOTCOpt_CreateOffer_BadDirection(t *testing.T) {
 }
 
 func TestOTCOpt_CreateOffer_MissingFields(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	body := `{"direction":"sell_initiated","stock_id":0}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
@@ -304,7 +289,7 @@ func TestOTCOpt_CreateOffer_MissingFields(t *testing.T) {
 }
 
 func TestOTCOpt_CreateOffer_BadBody(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader("xxx")))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -319,7 +304,7 @@ func TestOTCOpt_CreateOffer_WithCounterparty(t *testing.T) {
 			return &stockpb.OTCOfferResponse{Id: 1}, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	body := `{"direction":"buy_initiated","ticker":"AAPL","quantity":"100","strike_price":"5","premium":"1","settlement_date":"2026-12-31","counterparty_user_id":7,"account_id":50}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
@@ -332,7 +317,7 @@ func TestOTCOpt_CreateOffer_GRPCError(t *testing.T) {
 			return nil, status.Error(codes.PermissionDenied, "no")
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	body := `{"direction":"sell_initiated","ticker":"AAPL","quantity":"100","strike_price":"5","premium":"1","settlement_date":"2026-12-31","account_id":50}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
@@ -348,7 +333,7 @@ func TestOTCOpt_ListMyOffers_Success(t *testing.T) {
 			return &stockpb.ListMyOTCOffersResponse{Total: 0}, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/me/otc/offers?role=initiator&page=2&page_size=50", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -361,14 +346,14 @@ func TestOTCOpt_GetOffer_Success(t *testing.T) {
 			return &stockpb.OTCOfferDetailResponse{}, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/offers/15", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestOTCOpt_GetOffer_BadID(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/offers/abc", nil))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -390,7 +375,7 @@ func TestGetOffer_PassthroughLocal(t *testing.T) {
 			}}, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/offers/15", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -410,7 +395,7 @@ func TestGetOffer_NotFound(t *testing.T) {
 			return nil, status.Error(codes.NotFound, "offer not found")
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/offers/99", nil))
 	require.Equal(t, http.StatusNotFound, rec.Code)
@@ -423,7 +408,7 @@ func TestOTCOpt_CounterOffer_Success(t *testing.T) {
 			return &stockpb.OTCOfferResponse{Id: in.OfferId}, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	body := `{"quantity":"100","strike_price":"7","premium":"2","settlement_date":"2026-12-31"}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers/3/counter", strings.NewReader(body)))
@@ -431,14 +416,14 @@ func TestOTCOpt_CounterOffer_Success(t *testing.T) {
 }
 
 func TestOTCOpt_CounterOffer_BadID(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers/abc/counter", strings.NewReader(`{}`)))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
 func TestOTCOpt_CounterOffer_BadBody(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers/1/counter", strings.NewReader("nope")))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -452,7 +437,7 @@ func TestOTCOpt_AcceptOffer_Success(t *testing.T) {
 			return &stockpb.AcceptOfferResponse{}, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	body := `{"account_id":10}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers/3/accept", strings.NewReader(body)))
@@ -460,7 +445,7 @@ func TestOTCOpt_AcceptOffer_Success(t *testing.T) {
 }
 
 func TestOTCOpt_AcceptOffer_MissingFields(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers/3/accept", strings.NewReader(`{}`)))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -470,7 +455,7 @@ func TestOTCOpt_AcceptOffer_AccountNotOwned(t *testing.T) {
 	acct := &otcStubAccountClient{getFn: func(in *accountpb.GetAccountRequest) (*accountpb.AccountResponse, error) {
 		return &accountpb.AccountResponse{Id: in.Id, OwnerId: 999, AccountKind: "current"}, nil
 	}}
-	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}, &otcStubSecurityClient{}, acct)
+	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, &otcStubSecurityClient{}, acct)
 	r := otcOptionsRouter(h)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers/1/accept", strings.NewReader(`{"account_id":50}`)))
@@ -478,14 +463,14 @@ func TestOTCOpt_AcceptOffer_AccountNotOwned(t *testing.T) {
 }
 
 func TestOTCOpt_AcceptOffer_BadID(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers/x/accept", strings.NewReader(`{"buyer_account_id":1,"seller_account_id":2}`)))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
 func TestOTCOpt_AcceptOffer_BadBody(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers/3/accept", strings.NewReader("xxx")))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -498,14 +483,14 @@ func TestOTCOpt_RejectOffer_Success(t *testing.T) {
 			return &stockpb.OTCOfferResponse{Id: in.OfferId}, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers/3/reject", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestOTCOpt_RejectOffer_BadID(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers/x/reject", nil))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -517,7 +502,7 @@ func TestOTCOpt_RejectOffer_GRPCError(t *testing.T) {
 			return nil, status.Error(codes.NotFound, "no")
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers/3/reject", nil))
 	require.Equal(t, http.StatusNotFound, rec.Code)
@@ -530,7 +515,7 @@ func TestOTCOpt_ListMyContracts_Success(t *testing.T) {
 			return &stockpb.ListContractsResponse{}, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/me/otc/contracts", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -543,14 +528,14 @@ func TestOTCOpt_GetContract_Success(t *testing.T) {
 			return &stockpb.OptionContractResponse{}, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/contracts/8", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestOTCOpt_GetContract_BadID(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/contracts/x", nil))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -563,14 +548,14 @@ func TestOTCOpt_ExerciseContract_Success(t *testing.T) {
 			return &stockpb.ExerciseResponse{}, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/contracts/8/exercise", strings.NewReader(`{}`)))
 	require.Equal(t, http.StatusCreated, rec.Code)
 }
 
 func TestOTCOpt_ExerciseContract_BadID(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/contracts/x/exercise", strings.NewReader(`{}`)))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -588,7 +573,7 @@ func TestOTCOpt_ExerciseContract_CrossBankPassesBuyerAccount(t *testing.T) {
 		},
 	}
 	// Account owned by the caller (42) by default.
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/contracts/8/exercise", strings.NewReader(`{"buyer_account_number":"265-12-13"}`)))
 	require.Equal(t, http.StatusCreated, rec.Code)
@@ -609,7 +594,7 @@ func TestOTCOpt_ExerciseContract_CrossBankStrikeAccountNotOwned(t *testing.T) {
 	acct := &otcStubAccountClient{getByNumFn: func(in *accountpb.GetAccountByNumberRequest) (*accountpb.AccountResponse, error) {
 		return &accountpb.AccountResponse{AccountNumber: in.AccountNumber, OwnerId: 999, AccountKind: "current"}, nil // not the caller (42)
 	}}
-	h := handler.NewOTCOptionsHandler(cl, &stubPeerOTCExerciseClient{}, &otcStubSecurityClient{}, acct)
+	h := handler.NewOTCOptionsHandler(cl, &otcStubSecurityClient{}, acct)
 	r := otcOptionsRouter(h)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/contracts/8/exercise", strings.NewReader(`{"buyer_account_number":"111000130146666611"}`)))
@@ -634,84 +619,11 @@ func TestOTCOpt_ExerciseContract_LocalNoAccountGate(t *testing.T) {
 		t.Fatalf("account lookup must NOT happen on the local path")
 		return nil, nil
 	}}
-	h := handler.NewOTCOptionsHandler(cl, &stubPeerOTCExerciseClient{}, &otcStubSecurityClient{}, acct)
+	h := handler.NewOTCOptionsHandler(cl, &otcStubSecurityClient{}, acct)
 	r := otcOptionsRouter(h)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/contracts/8/exercise", strings.NewReader(`{}`)))
 	require.Equal(t, http.StatusCreated, rec.Code)
-}
-
-func TestOTCOpt_ExercisePeerContract_Success(t *testing.T) {
-	peer := &stubPeerOTCExerciseClient{
-		initiateFn: func(in *stockpb.InitiateOptionExerciseRequest) (*stockpb.InitiateOptionExerciseResponse, error) {
-			require.Equal(t, uint64(8), in.PeerOptionContractId)
-			require.Equal(t, "265-12-13", in.BuyerAccountNumber)
-			return &stockpb.InitiateOptionExerciseResponse{TransactionId: "tx-1", Status: "pending"}, nil
-		},
-	}
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, peer))
-	body := `{"buyer_account_number":"265-12-13"}`
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest("POST", "/me/otc/contracts/peer/8/exercise", strings.NewReader(body)))
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "tx-1")
-}
-
-// TestOTCOpt_ExercisePeerContract_StrikeAccountNotOwned is the regression test
-// for the exercise theft vector: a client must NOT be able to pay the strike from
-// an account they don't own. The strike account's owner (999) differs from the
-// caller (42) → 404, and the exercise must NOT be dispatched (no money moves).
-func TestOTCOpt_ExercisePeerContract_StrikeAccountNotOwned(t *testing.T) {
-	dispatched := false
-	peer := &stubPeerOTCExerciseClient{
-		initiateFn: func(*stockpb.InitiateOptionExerciseRequest) (*stockpb.InitiateOptionExerciseResponse, error) {
-			dispatched = true
-			return &stockpb.InitiateOptionExerciseResponse{TransactionId: "tx-should-not-happen"}, nil
-		},
-	}
-	acct := &otcStubAccountClient{getByNumFn: func(in *accountpb.GetAccountByNumberRequest) (*accountpb.AccountResponse, error) {
-		return &accountpb.AccountResponse{AccountNumber: in.AccountNumber, OwnerId: 999, AccountKind: "current"}, nil // not the caller (42)
-	}}
-	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, peer, &otcStubSecurityClient{}, acct)
-	r := otcOptionsRouter(h)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest("POST", "/me/otc/contracts/peer/8/exercise", strings.NewReader(`{"buyer_account_number":"111000130146666611"}`)))
-	require.Equal(t, http.StatusNotFound, rec.Code, "expected 404 for strike paid from a non-owned account; body=%s", rec.Body.String())
-	require.False(t, dispatched, "exercise must NOT dispatch when the strike account is not owned by the caller (theft vector)")
-}
-
-func TestOTCOpt_ExercisePeerContract_BadID(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest("POST", "/me/otc/contracts/peer/x/exercise", strings.NewReader(`{"buyer_account_number":"a"}`)))
-	require.Equal(t, http.StatusBadRequest, rec.Code)
-}
-
-func TestOTCOpt_ExercisePeerContract_BadBody(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest("POST", "/me/otc/contracts/peer/8/exercise", strings.NewReader("nope")))
-	require.Equal(t, http.StatusBadRequest, rec.Code)
-}
-
-func TestOTCOpt_ExercisePeerContract_MissingAccount(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest("POST", "/me/otc/contracts/peer/8/exercise", strings.NewReader(`{}`)))
-	require.Equal(t, http.StatusBadRequest, rec.Code)
-}
-
-func TestOTCOpt_ExercisePeerContract_GRPCError(t *testing.T) {
-	peer := &stubPeerOTCExerciseClient{
-		initiateFn: func(*stockpb.InitiateOptionExerciseRequest) (*stockpb.InitiateOptionExerciseResponse, error) {
-			return nil, status.Error(codes.FailedPrecondition, "expired")
-		},
-	}
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, peer))
-	body := `{"buyer_account_number":"265-12-13"}`
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest("POST", "/me/otc/contracts/peer/8/exercise", strings.NewReader(body)))
-	require.Equal(t, http.StatusConflict, rec.Code)
 }
 
 // ListMyPostedOffers: caller's posted listings, role hardcoded to initiator.
@@ -723,7 +635,7 @@ func TestOTCOpt_ListMyPostedOffers_HardcodesInitiator(t *testing.T) {
 			return &stockpb.ListMyOTCOffersResponse{Total: 0}, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/me/otc/options/posted?statuses=open,cancelled", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -749,7 +661,7 @@ func TestOTCOpt_CancelMyListing_Success(t *testing.T) {
 			return &stockpb.CancelListingResponse{OfferId: 6, Status: "cancelled"}, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("DELETE", "/me/otc/options/6", nil))
 	require.Equal(t, http.StatusNoContent, rec.Code)
@@ -769,7 +681,7 @@ func TestOTCOpt_CancelMyListing_NotInitiator(t *testing.T) {
 			return nil, nil
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("DELETE", "/me/otc/options/6", nil))
 	require.Equal(t, http.StatusForbidden, rec.Code)
@@ -782,7 +694,7 @@ func TestOTCOpt_CancelMyListing_NotFound(t *testing.T) {
 			return nil, status.Error(codes.NotFound, "offer not found")
 		},
 	}
-	r := otcOptionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("DELETE", "/me/otc/options/6", nil))
 	require.Equal(t, http.StatusNotFound, rec.Code)
@@ -790,7 +702,7 @@ func TestOTCOpt_CancelMyListing_NotFound(t *testing.T) {
 
 // CancelMyListing: bad id format yields 400.
 func TestOTCOpt_CancelMyListing_BadID(t *testing.T) {
-	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("DELETE", "/me/otc/options/abc", nil))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -810,7 +722,7 @@ func otcRevisionsRouter(h *handler.OTCOptionsHandler) *gin.Engine {
 // empty revision list and the handler responds 200 with a "revisions" key.
 func TestOTCOpt_ListRevisions_Success(t *testing.T) {
 	cl := &stubOTCOptionsClient{}
-	r := otcRevisionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcRevisionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/me/otc/options/negotiations/5/revisions", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -819,7 +731,7 @@ func TestOTCOpt_ListRevisions_Success(t *testing.T) {
 
 // TestOTCOpt_ListRevisions_BadNID verifies that a non-numeric :nid yields 400.
 func TestOTCOpt_ListRevisions_BadNID(t *testing.T) {
-	r := otcRevisionsRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcRevisionsRouter(otcHandler(&stubOTCOptionsClient{}))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/me/otc/options/negotiations/abc/revisions", nil))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -832,7 +744,7 @@ func TestOTCOpt_ListRevisions_GRPCError(t *testing.T) {
 	cl.listRevisionsFn = func(_ *stockpb.ListNegotiationRevisionsRequest) (*stockpb.ListNegotiationRevisionsResponse, error) {
 		return nil, status.Error(codes.PermissionDenied, "not a party")
 	}
-	r := otcRevisionsRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcRevisionsRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/me/otc/options/negotiations/5/revisions", nil))
 	require.Equal(t, http.StatusForbidden, rec.Code)
@@ -859,7 +771,7 @@ func TestOTCOpt_ListNegotiationsOnListing_ForwardsIdentity(t *testing.T) {
 			return &stockpb.ListNegotiationsResponse{}, nil
 		},
 	}
-	r := otcListingRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcListingRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/options/42/negotiations", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -876,7 +788,7 @@ func TestOTCOpt_ListNegotiationsOnListing_Forbidden(t *testing.T) {
 			return nil, status.Error(codes.PermissionDenied, "not the poster")
 		},
 	}
-	r := otcListingRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcListingRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/options/42/negotiations", nil))
 	require.Equal(t, http.StatusForbidden, rec.Code)
@@ -894,7 +806,7 @@ func TestOTCOpt_GetOfferTimeline_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	r := otcListingRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcListingRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/options/42/timeline", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -907,7 +819,7 @@ func TestOTCOpt_GetOfferTimeline_Success(t *testing.T) {
 
 // Timeline: non-numeric id yields 400.
 func TestOTCOpt_GetOfferTimeline_BadID(t *testing.T) {
-	r := otcListingRouter(otcHandler(&stubOTCOptionsClient{}, &stubPeerOTCExerciseClient{}))
+	r := otcListingRouter(otcHandler(&stubOTCOptionsClient{}))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/options/abc/timeline", nil))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -920,7 +832,7 @@ func TestOTCOpt_GetOfferTimeline_Forbidden(t *testing.T) {
 			return nil, status.Error(codes.PermissionDenied, "not the poster")
 		},
 	}
-	r := otcListingRouter(otcHandler(cl, &stubPeerOTCExerciseClient{}))
+	r := otcListingRouter(otcHandler(cl))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/options/42/timeline", nil))
 	require.Equal(t, http.StatusForbidden, rec.Code)

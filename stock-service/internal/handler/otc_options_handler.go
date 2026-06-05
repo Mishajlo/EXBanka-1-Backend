@@ -727,8 +727,8 @@ func (h *OTCOptionsHandler) RejectOffer(ctx context.Context, in *stockpb.RejectO
 // REMOTE list is fetched with the same page/page_size and APPENDED in full
 // after the local page — it is not interleaved or globally re-paged. Total
 // counts the local matches. Clients should rely on the per-item `kind` field
-// to distinguish local vs remote; PeerContracts/PeerTotal are no longer
-// populated (the unified Contracts[] is the single source of truth).
+// to distinguish local vs remote; the unified Contracts[] is the single source
+// of truth (the legacy peer_contracts/peer_total fields were removed in SP-2b).
 func (h *OTCOptionsHandler) ListMyContracts(ctx context.Context, in *stockpb.ListMyContractsRequest) (*stockpb.ListContractsResponse, error) {
 	if h.contracts == nil {
 		return &stockpb.ListContractsResponse{}, nil
@@ -756,9 +756,9 @@ func (h *OTCOptionsHandler) ListMyContracts(ctx context.Context, in *stockpb.Lis
 	// surface elsewhere). page/page_size pass through unchanged so the
 	// peer list paginates the same way as the intra-bank list. Remote rows
 	// are mapped onto OptionContractResponse (kind="remote") and APPENDED to
-	// the same Contracts list so clients see one merged feed.
-	// PeerContracts/PeerTotal are intentionally NOT populated — the unified
-	// Contracts[] is the single source of truth (SP-1 double-listing fix).
+	// the same Contracts list so clients see one merged feed (the unified
+	// Contracts[] is the single source of truth; the legacy peer_contracts/
+	// peer_total fields were removed in SP-2b — SP-1 double-listing fix).
 	if h.peerContracts != nil && ownerType == model.OwnerClient && ownerID != nil {
 		participantID := "client-" + strconv.FormatUint(*ownerID, 10)
 		peerRows, _, perr := h.peerContracts.ListRemoteContractsByLocalParticipant(participantID, h.ownRouting, in.Role, int(in.Page), int(in.PageSize))

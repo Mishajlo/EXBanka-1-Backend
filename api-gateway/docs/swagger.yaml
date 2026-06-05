@@ -640,11 +640,6 @@ definitions:
       holding_id:
         type: integer
     type: object
-  handler.exercisePeerRequest:
-    properties:
-      buyer_account_number:
-        type: string
-    type: object
   handler.exerciseRequest:
     properties:
       buyer_account_number:
@@ -662,8 +657,6 @@ definitions:
           OnBehalfOfFundID, when non-zero, exercises this contract on behalf of a fund (E2).
           Caller must be the fund's manager (enforced in stock-service).
         type: integer
-    type: object
-  handler.initiateNegotiationRequest:
     type: object
   handler.investRequest:
     properties:
@@ -8846,39 +8839,6 @@ paths:
       summary: List the caller's OTC contracts (unified local + remote)
       tags:
       - OTCOptions
-  /api/v3/me/otc/contracts/peer/{id}/exercise:
-    post:
-      consumes:
-      - application/json
-      description: 'Buyer-only. Initiates the SI-TX exercise flow: strike money buyer→seller
-        + option markers carrying intent=exercise. Both banks transition the contract
-        to status=exercised on COMMIT_TX, the seller''s reservation is consumed and
-        the buyer''s holding is credited.'
-      parameters:
-      - description: peer_option_contracts row id on this bank
-        in: path
-        name: id
-        required: true
-        type: integer
-      - description: buyer's currency account number that pays the strike
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/handler.exercisePeerRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-      security:
-      - BearerAuth: []
-      summary: Exercise a cross-bank OTC option contract
-      tags:
-      - OTCOptions
   /api/v3/me/otc/history:
     get:
       description: Returns OTC offers in terminal statuses (accepted, rejected, expired,
@@ -9630,145 +9590,6 @@ paths:
       summary: Preview payment costs
       tags:
       - payments
-  /api/v3/me/peer-otc/negotiations:
-    get:
-      description: Returns rows from this bank's peer_otc_negotiations where the caller
-        is either the buyer (this bank hosts the buyer) or the seller. Use `role=buyer`
-        / `role=seller` to filter.
-      parameters:
-      - description: 'buyer|seller (default: both)'
-        in: query
-        name: role
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-      security:
-      - BearerAuth: []
-      summary: List the caller's pending peer-OTC negotiations
-      tags:
-      - OTCOptions
-    post:
-      consumes:
-      - application/json
-      description: Buyer-side client-facing endpoint. Composes an SI-TX OtcOffer with
-        buyerId from the caller's JWT and sellerId from the body, then HTTP POSTs
-        to the seller's bank's /api/v3/negotiations. Returns the foreign negotiation
-        id assigned by the seller's bank.
-      parameters:
-      - description: negotiation terms
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/handler.initiateNegotiationRequest'
-      produces:
-      - application/json
-      responses:
-        "201":
-          description: Created
-          schema:
-            additionalProperties: true
-            type: object
-      security:
-      - BearerAuth: []
-      summary: Initiate a cross-bank OTC negotiation
-      tags:
-      - OTCOptions
-  /api/v3/me/peer-otc/negotiations/{rid}/{id}:
-    delete:
-      description: Soft-cancels the negotiation on the counterparty's bank (DELETE
-        flips isOngoing to false; the row is preserved per SI-TX §3.5). The local
-        mirror is updated by the inbound webhook from the counterparty after they
-        refetch.
-      parameters:
-      - description: routing number
-        in: path
-        name: rid
-        required: true
-        type: string
-      - description: foreign id
-        in: path
-        name: id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "204":
-          description: No Content
-          schema:
-            type: string
-      security:
-      - BearerAuth: []
-      summary: Cancel a cross-bank OTC negotiation
-      tags:
-      - OTCOptions
-    put:
-      consumes:
-      - application/json
-      description: Updates the negotiation offer on the counterparty's bank. Body
-        is the same OtcOffer shape as the initial POST. The gateway proxies a PUT
-        to the counterparty's /api/v3/negotiations/:rid/:id. The local mirror row
-        is updated by the inbound webhook from the counterparty after they refetch.
-      parameters:
-      - description: routing number of the bank that issued the negotiation id
-        in: path
-        name: rid
-        required: true
-        type: string
-      - description: foreign id
-        in: path
-        name: id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-      security:
-      - BearerAuth: []
-      summary: Counter-offer on a cross-bank OTC negotiation
-      tags:
-      - OTCOptions
-  /api/v3/me/peer-otc/negotiations/{rid}/{id}/accept:
-    post:
-      description: Calls the counterparty's /api/v3/negotiations/:rid/:id/accept which
-        begins the option-formation SI-TX (4-posting NEW_TX). Returns the transaction_id
-        assigned by the counterparty.
-      parameters:
-      - description: routing number
-        in: path
-        name: rid
-        required: true
-        type: string
-      - description: foreign id
-        in: path
-        name: id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-      security:
-      - BearerAuth: []
-      summary: Accept a cross-bank OTC negotiation
-      tags:
-      - OTCOptions
   /api/v3/me/portfolio:
     get:
       description: Returns all securities holdings and fund positions for the caller,

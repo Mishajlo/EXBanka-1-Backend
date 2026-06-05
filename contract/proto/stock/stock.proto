@@ -793,8 +793,10 @@ message ListOTCOffersResponse {
 // UnifiedOTCOffer is one entry in the cross-bank-aggregated OTC view.
 // `kind` discriminates the buy flow:
 //   - "local"  → buy via POST /api/v3/otc/offers/{id}/buy
-//   - "remote" → buy via POST /api/v3/me/peer-otc/negotiations using
-//                bank_code as seller_bank_code and owner_id as seller_id.
+//   - "remote" → bid via the unified POST /api/v3/otc/options/{id}/bid;
+//                stock-service dispatches the cross-bank negotiation
+//                (SP-2b folded the retired /me/peer-otc/negotiations
+//                client route into the unified surface).
 // Local-only fields (id, seller_id, seller_name, name, created_at) are
 // zero/empty on remote offers; owner_id is empty on local offers.
 message UnifiedOTCOffer {
@@ -1861,11 +1863,12 @@ message ListMyContractsRequest {
 message ListContractsResponse {
   repeated OptionContractResponse contracts = 1;
   int64 total = 2;
-  // Cross-bank (Celina 5 SI-TX) option contracts where this user is
-  // either the buyer or the seller. Rendered alongside intra-bank
-  // contracts above so clients see one merged list.
-  repeated PeerOptionContractResponse peer_contracts = 3;
-  int64 peer_total = 4;
+  // (SP-2b clean-cut, 2026-06-05) Fields 3 (peer_contracts) and 4
+  // (peer_total) were REMOVED — they were never populated or read after
+  // SP-2a. Remote contracts now appear in contracts[] with kind=remote.
+  // Field numbers 3/4 are reserved so they are never reused.
+  reserved 3, 4;
+  reserved "peer_contracts", "peer_total";
 }
 
 // PeerOptionContractResponse is the on-the-wire shape of a row from
@@ -1988,8 +1991,10 @@ service PeerOTCService {
   rpc InitiateOptionExercise(InitiateOptionExerciseRequest) returns (InitiateOptionExerciseResponse);
 
   // Buyer-side mirror persistence so the buyer's bank also has a local
-  // row to surface in /me/peer-otc/negotiations. Called by the gateway
-  // right after the outbound POST to the seller's bank succeeds.
+  // row to surface in the unified negotiations list. Invoked inside
+  // stock-service's outbound-negotiation flow right after the outbound
+  // POST to the seller's bank succeeds (SP-2b moved this out of the
+  // retired gateway PeerOTCInitiateHandler).
   rpc RecordOutboundNegotiation(RecordOutboundNegotiationRequest) returns (RecordOutboundNegotiationResponse);
 
   // Discovery: list pending peer negotiations for a client principal.
@@ -2001,17 +2006,19 @@ service PeerOTCService {
   // routing AND seller_id == "client-<N>").
   rpc ListMyPeerNegotiations(ListMyPeerNegotiationsRequest) returns (ListMyPeerNegotiationsResponse);
 
-  // Local-mirror status flip to "accepted". Called by the gateway after
-  // a successful proxy of POST /me/peer-otc/negotiations/.../accept to
-  // the counterparty's bank, so the caller's own list reflects the
-  // terminal state immediately. The peer-facing AcceptNegotiation RPC
-  // (above) is reserved for the bank that actually dispatches the
-  // option-formation SI-TX — calling that one twice would re-dispatch.
+  // Local-mirror status flip to "accepted". Invoked inside stock-service's
+  // outbound accept flow after a successful proxy GET .../accept to the
+  // counterparty's bank, so the caller's own list reflects the terminal
+  // state immediately. The peer-facing AcceptNegotiation RPC (above) is
+  // reserved for the bank that actually dispatches the option-formation
+  // SI-TX — calling that one twice would re-dispatch. (SP-2b moved the
+  // caller out of the retired gateway PeerOTCInitiateHandler.)
   rpc MarkNegotiationAccepted(MarkNegotiationAcceptedRequest) returns (MarkNegotiationAcceptedResponse);
 
   // Phase 10 — cross-bank cascade-cancel of sibling chains on accept.
-  // Called by the seller's gateway after MarkNegotiationAccepted. The
-  // RPC returns every other ongoing peer_otc_negotiations row whose
+  // Invoked inside the seller-bank's stock-service accept flow after
+  // MarkNegotiationAccepted. The RPC returns every other ongoing
+  // peer_otc_negotiations row whose
   // seller is the same AND whose offer matches the accepted offer's
   // ticker + settlement_date — those are "the same parallel-bid
   // siblings" in the user's mental model. Each match is marked
@@ -2023,20 +2030,20 @@ service PeerOTCService {
 
 message CascadeCancelSiblingsRequest {
   // The negotiation that was just accepted — sets the "seller side" +
-  // "offer terms" the cascade matches on. Caller passes the gateway-
-  // side keys (the gateway only knows (peer_bank_code, foreign_id)
-  // because that's what proxyPeerNegotiation already uses).
+  // "offer terms" the cascade matches on. Caller passes the
+  // (peer_bank_code, foreign_id) keys the remote-negotiation dispatch
+  // already tracks for the accepted chain.
   string peer_bank_code = 1; // peer-bank code of the accepted chain
   string foreign_id     = 2; // foreign id of the accepted chain
 }
 
 // CascadedSibling identifies one chain that was cancelled by the
-// cascade. peer_bank_code + foreign_id are the routing tuple the
-// gateway uses to fire the outbound DELETE; the rest of the fields
-// are a wire-shape projection of the cancelled negotiation (same
-// shape as PeerNegotiationListItem) so the FE can render the
-// cancelled-siblings list in the cross-bank accept response with
-// the same UI it uses for /me/peer-otc/negotiations rows.
+// cascade. peer_bank_code + foreign_id are the routing tuple used to
+// fire the outbound DELETE to the sibling bidder's bank; the rest of
+// the fields are a wire-shape projection of the cancelled negotiation
+// (same shape as PeerNegotiationListItem) so the FE can render the
+// cancelled-siblings list in the cross-bank accept response with the
+// same UI it uses for the unified negotiations list.
 message CascadedSibling {
   string peer_bank_code = 1; // bidder's bank-code (for outbound DELETE)
   string foreign_id     = 2; // foreign id on the bidder's bank

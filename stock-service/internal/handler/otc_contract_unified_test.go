@@ -280,11 +280,9 @@ func TestListMyContracts_RemoteCreditWeHoldBuyer(t *testing.T) {
 	if got.GetStockTicker() != "ACME" {
 		t.Errorf("stock_ticker = %q want ACME", got.GetStockTicker())
 	}
-	// PeerContracts/PeerTotal are no longer populated (SP-1 double-listing fix).
-	// Remote contracts appear only in the unified Contracts[] with kind=remote.
-	if resp.GetPeerTotal() != 0 || len(resp.GetPeerContracts()) != 0 {
-		t.Errorf("peer_contracts must be empty (remote rows already in contracts[]): total=%d len=%d", resp.GetPeerTotal(), len(resp.GetPeerContracts()))
-	}
+	// Remote contracts appear only in the unified Contracts[] with kind=remote
+	// (SP-1 double-listing fix). The legacy PeerContracts/PeerTotal response
+	// fields were removed in SP-2b — there is no separate list to assert empty.
 }
 
 // A remote DEBIT row → this bank holds the SELLER side → me_owner=false,
@@ -366,9 +364,6 @@ func TestListMyContracts_BankCallerSkipsRemote(t *testing.T) {
 		if c.GetKind() == "remote" {
 			t.Errorf("bank caller must not get remote contracts; saw %+v", c)
 		}
-	}
-	if resp.GetPeerTotal() != 0 {
-		t.Errorf("peer_total = %d want 0 (bank caller skips remote)", resp.GetPeerTotal())
 	}
 }
 
