@@ -171,7 +171,7 @@ func (s *AuthService) Login(ctx context.Context, email, password, ipAddress, use
 	const lockoutWindow = 15 * time.Minute
 	const lockoutDuration = 30 * time.Minute
 
-	deviceType := detectDeviceType(userAgent)
+	deviceType := DetectDeviceType(userAgent)
 
 	// Check if account is locked
 	lock, err := s.loginAttemptRepo.GetActiveLock(email)
@@ -965,7 +965,10 @@ func generateToken() (string, error) {
 }
 
 // detectDeviceType infers device type from User-Agent string.
-func detectDeviceType(userAgent string) string {
+// DetectDeviceType infers a coarse device class ("mobile" | "api" | "browser")
+// from a User-Agent string. Exported so the handler layer can reuse it instead
+// of keeping a duplicate copy.
+func DetectDeviceType(userAgent string) string {
 	ua := strings.ToLower(userAgent)
 	switch {
 	case strings.Contains(ua, "mobile") || strings.Contains(ua, "android") || strings.Contains(ua, "iphone"):
