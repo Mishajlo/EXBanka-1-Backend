@@ -400,3 +400,35 @@ a clean, spec-grounded fail-closed. Three behavior changes enforce this end-to-e
 `LOCAL` `buy_initiated` offers/bids are **fully supported and unaffected**. Version
 bumped PATCH (2.9.0 → 2.9.1) — no API contract change, peers simply see the correct
 (seller-only) discovery set.
+
+---
+
+## 9. Inbound cross-bank counter-offer enforces turn + closed guards (2.9.2)
+
+Spec-conformance fix, **no REST request/response shape changed** (same path, body,
+and auth). The inbound `PUT /api/v3/cross-bank-protocol/negotiations/:rid/:id`
+(counter-offer) previously persisted the new terms unconditionally and always
+returned `200`, even when it was not the calling peer's turn or the negotiation was
+already closed. SI-TX §3.3 requires a **409 Conflict** in both cases:
+
+> "If the receiving bank deems that it is its turn to make a counter-offer, rather
+> than the [other party's] bank, or if negotiations are closed, a 409 Conflict
+> response code is produced." Turn rule: "the turn is buyers if
+> `off.lastModifiedBy ≠ off.buyerId`" — generalized, a peer may counter iff the
+> OTHER side made the last modification.
+
+Two guards now run on the persisted row **before** the counter is persisted (in
+`stock-service` `PeerOTCGRPCHandler.UpdateNegotiation`):
+
+| Case | Before (≤ 2.9.1) | After (2.9.2) |
+|---|---|---|
+| Negotiation not ongoing (cancelled/accepted/rejected/expired) | persisted + `200` | `409 business_rule_violation`, no mutation |
+| Calling peer already made the last modification (out of turn) | persisted + `200` | `409 business_rule_violation`, no mutation |
+| In-turn counter on an ongoing negotiation (the other side last acted) | `200` | `200` (unchanged) |
+
+The turn check reads the stored `lastModifiedBy.routingNumber` (which is DERIVED
+from the authenticated sender, per the 2.8.1 HOLE-1 fix), so the peer may counter
+only when *this* bank last proposed. Immediately after a peer's own bid the stored
+routing is the peer's, so a peer counter right after its own bid is correctly out of
+turn (the receiving side must counter or accept first). `FailedPrecondition` →
+gateway → `409`. Version bumped PATCH (2.9.1 → 2.9.2).

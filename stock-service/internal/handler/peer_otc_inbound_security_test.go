@@ -156,6 +156,11 @@ func TestInbound_UpdateNegotiation_ForgedLastModifiedBy_RoutingOverridden(t *tes
 		t.Fatalf("create: %v", err)
 	}
 
+	// §3.3 turn rule: make it the peer's turn (we last acted) so the counter is
+	// in-turn — this test exercises the HOLE-1 routing-override, not the turn
+	// guard.
+	setStoredLastModifiedRouting(t, db, 222, createResp.GetNegotiationId().GetId(), 111)
+
 	if _, err = h.UpdateNegotiation(ctx, &stockpb.UpdateNegotiationRequest{
 		PeerBankCode:  "222",
 		NegotiationId: createResp.GetNegotiationId(),
@@ -191,6 +196,11 @@ func TestInbound_ForgedCounter_ThenSelfAccept_Blocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
+
+	// §3.3 turn rule: make it the peer's turn so the forged counter is in-turn
+	// (200) — this test then proves the SELF-ACCEPT is still blocked by the
+	// HOLE-1 derive, independent of the turn guard.
+	setStoredLastModifiedRouting(t, db, 222, createResp.GetNegotiationId().GetId(), 111)
 
 	// Forged counter — claims WE (111) last proposed.
 	if _, err = h.UpdateNegotiation(ctx, &stockpb.UpdateNegotiationRequest{

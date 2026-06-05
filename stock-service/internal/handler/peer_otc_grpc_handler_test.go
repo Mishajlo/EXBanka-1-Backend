@@ -224,7 +224,7 @@ func TestPeerOTC_GetNotFound(t *testing.T) {
 }
 
 func TestPeerOTC_UpdateOffer(t *testing.T) {
-	h, _, _, _ := newPeerOtcHandler(t)
+	h, db, _, _ := newPeerOtcHandler(t)
 	ctx := context.Background()
 
 	createResp, _ := h.CreateNegotiation(ctx, &stockpb.CreateNegotiationRequest{
@@ -237,6 +237,11 @@ func TestPeerOTC_UpdateOffer(t *testing.T) {
 		BuyerId:  &stockpb.PeerForeignBankId{RoutingNumber: 222, Id: "b"},
 		SellerId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "client-3"},
 	})
+
+	// §3.3 turn rule: after the peer's bid the stored lastModifiedBy is the peer
+	// (222), so it is OUR turn. Flip the stored lastModifiedBy to ownRouting
+	// (111) so it is now the PEER'S turn and its counter is in-turn (200).
+	setStoredLastModifiedRouting(t, db, 222, createResp.GetNegotiationId().GetId(), 111)
 
 	_, err := h.UpdateNegotiation(ctx, &stockpb.UpdateNegotiationRequest{
 		PeerBankCode:  "222",

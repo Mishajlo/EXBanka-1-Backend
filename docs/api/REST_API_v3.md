@@ -7419,7 +7419,13 @@ Counter-offer on an existing negotiation.
 
 **`lastModifiedBy` handling (as of 2.8.1):** `lastModifiedBy.routingNumber` is **DERIVED** from the authenticated sender, not trusted from the payload — an inbound counter was by definition last-modified by the peer that PUT it, so the receiving bank persists `lastModifiedBy.routingNumber = the authenticated peer's routing`, **overriding** any claimed value (the counter still succeeds `200`). The opaque `lastModifiedBy.id` is kept verbatim (§2.3). This keeps the stored `lastModifiedBy` trustworthy for the accept guard by construction: a forged `{thisBank}` counter has its routing overridden to the sender's, so the sender can never self-accept it.
 
-**Response 200:** Empty body on success.
+**Turn / closed guards (SI-TX §3.3, as of 2.9.2):** Before persisting the counter the receiving bank checks the stored negotiation row:
+- **Closed:** if the negotiation is no longer ongoing (cancelled / accepted / rejected / expired) → **409 Conflict** (`business_rule_violation`), no mutation.
+- **Out of turn:** a party may counter only when the OTHER side made the last modification. Because the stored `lastModifiedBy.routingNumber` is derived from whoever last acted, the calling peer may PUT a counter only when the stored routing is *this* bank's own routing (we last proposed → it is the peer's turn). If the stored routing is the calling peer's own (it already made the last modification) → **409 Conflict** (`business_rule_violation`), no mutation. Note: immediately after a peer's own bid (`POST /negotiations`) the stored routing is the peer's, so a peer counter right after its own bid is correctly out of turn — the receiving side must counter or accept first.
+
+**Response 200:** Empty body on success (in-turn counter on an ongoing negotiation).
+
+**Response 409:** Out of turn, or the negotiation is closed (per SI-TX §3.3). The stored negotiation is left un-mutated.
 
 ---
 

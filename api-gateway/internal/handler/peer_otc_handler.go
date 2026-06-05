@@ -305,6 +305,7 @@ func (h *PeerOTCHandler) CreateNegotiation(c *gin.Context) {
 // @Success      200
 // @Failure      400 {object} map[string]interface{}
 // @Failure      401 {object} map[string]interface{}
+// @Failure      409 {object} map[string]interface{} "out of turn or negotiation closed (SI-TX §3.3)"
 // @Router       /api/v3/cross-bank-protocol/negotiations/{rid}/{id} [put]
 func (h *PeerOTCHandler) UpdateNegotiation(c *gin.Context) {
 	pbCode, _ := c.Get("peer_bank_code")

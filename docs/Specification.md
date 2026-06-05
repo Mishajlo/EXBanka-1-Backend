@@ -1479,7 +1479,7 @@ These routes are reached by other banks in the SI-TX cohort, not by employees or
 | GET | `/api/v3/cross-bank-protocol/public-stock` | PeerAuth | PeerOTCHandler.GetPublicStocks | Lists own bank's OTC-public holdings. Phase 4. |
 | GET | `/api/v3/cross-bank-protocol/public-option-offers` | PeerAuth | PeerOTCHandler.GetPublicOptionOffers | Phase 6 cross-bank discovery of OPEN option listings. |
 | POST | `/api/v3/cross-bank-protocol/negotiations` | PeerAuth | PeerOTCHandler.CreateNegotiation | Peer-initiated cross-bank OTC offer. Phase 4. |
-| PUT | `/api/v3/cross-bank-protocol/negotiations/:rid/:id` | PeerAuth | PeerOTCHandler.UpdateNegotiation | Counter-offer. Phase 4. |
+| PUT | `/api/v3/cross-bank-protocol/negotiations/:rid/:id` | PeerAuth | PeerOTCHandler.UpdateNegotiation | Counter-offer. Phase 4. SI-TX §3.3 turn/closed guards: **409** if closed or out of turn (2.9.2). |
 | GET | `/api/v3/cross-bank-protocol/negotiations/:rid/:id` | PeerAuth | PeerOTCHandler.GetNegotiation | Read negotiation state. Phase 4. |
 | DELETE | `/api/v3/cross-bank-protocol/negotiations/:rid/:id` | PeerAuth | PeerOTCHandler.DeleteNegotiation | Cancel. Phase 4. |
 | GET | `/api/v3/cross-bank-protocol/negotiations/:rid/:id/accept` | PeerAuth | PeerOTCHandler.AcceptNegotiation | Triggers 4-posting TX via PeerTxService. Phase 4. |
@@ -3019,7 +3019,7 @@ The api-gateway is a uniform pass-through for these; stock-service composes/forw
 |---|---|---|
 | GET | `/api/v3/public-stock` | Returns this bank's OTC-public-flagged holdings (queries `holdings` where `public_quantity > 0 AND security_type = 'stock'`). |
 | POST | `/api/v3/negotiations` | Inbound from a peer. Body is a flat SI-TX `OtcOffer` (with `buyerId`/`sellerId` nested inside, per spec). Persists as a REMOTE row in the unified `otc_negotiations` table (via `OTCNegotiationRepository.UpsertRemoteNeg`); returns a fresh `ForeignBankId` directly (`{routingNumber, id}`), not wrapped. |
-| PUT | `/api/v3/negotiations/:rid/:id` | Counter-offer. Body is the same flat `OtcOffer`. Updates the offer JSON. |
+| PUT | `/api/v3/negotiations/:rid/:id` | Counter-offer. Body is the same flat `OtcOffer`. Updates the offer JSON. Per SI-TX §3.3, before persisting: returns **409** if the negotiation is closed (status ≠ `ongoing`) or if it is not the calling peer's turn (the stored `lastModifiedBy.routingNumber`, derived from the authenticated sender, must equal *this* bank's routing — i.e. we last proposed). Rejected counters persist no mutation. |
 | GET | `/api/v3/negotiations/:rid/:id` | Returns SI-TX `OtcNegotiation` (= `OtcOffer & {isOngoing: boolean}`). `isOngoing` is `true` iff this bank's row has `status="ongoing"`. |
 | DELETE | `/api/v3/negotiations/:rid/:id` | Soft-cancel: row status flips to `cancelled` (NOT physically deleted, per spec §3.5: "DELETE … sets isOngoing to false"). Subsequent `GET` returns 200 with `isOngoing=false`. |
 | GET | `/api/v3/negotiations/:rid/:id/accept` | Accept — composes the 4-posting option-formation `Transaction` and dispatches via `PeerTxService.InitiateOutboundTxWithPostings`. Returns `{transaction_id, status}`. |

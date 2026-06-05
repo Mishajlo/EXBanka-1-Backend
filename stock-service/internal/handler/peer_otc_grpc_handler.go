@@ -704,6 +704,44 @@ func (h *PeerOTCGRPCHandler) UpdateNegotiation(ctx context.Context, req *stockpb
 		return nil, status.Error(codes.InvalidArgument, "offer and negotiation_id required")
 	}
 	peerRouting := peerRoutingForCode(req.GetPeerBankCode())
+
+	// SI-TX §3.3 ("Posting a counter-offer"): "If the receiving bank deems that
+	// it is its turn to make a counter-offer, rather than the [other party's]
+	// bank, or if negotiations are closed, a 409 Conflict response code is
+	// produced." Both guards run on the PERSISTED row BEFORE we persist the new
+	// counter. FailedPrecondition is mapped by the gateway to 409
+	// business_rule_violation, which reaches the peer as the required 409.
+	existing, err := h.negRepo.GetRemoteNegByRoutingAndNative(peerRouting, req.GetNegotiationId().GetId())
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, status.Error(codes.NotFound, "negotiation not found")
+		}
+		return nil, status.Errorf(codes.Internal, "load negotiation: %v", err)
+	}
+	// Closed guard: a counter may only be posted while the negotiation is
+	// ongoing. Cancelled / accepted / rejected / expired → 409.
+	if existing.Status != "ongoing" {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"negotiation is closed (status %q): no counter-offer may be posted", existing.Status)
+	}
+	// Turn guard (§3.3): a party may counter ONLY when the OTHER side made the
+	// last modification. Because we DERIVE lastModifiedBy from the authenticated
+	// sender (HOLE 1), the persisted lastModifiedBy.routingNumber is the side
+	// that last acted. So the calling peer may counter iff WE (ownRouting) last
+	// acted — i.e. it is now the peer's turn. If the stored routing is the peer
+	// itself (it already made the last modification), it is NOT its turn → 409.
+	// A brand-new chain right after the peer's own bid stores routing=peerRouting
+	// (the peer last acted), so an immediate peer PUT is correctly out-of-turn —
+	// the receiving side must counter or accept first (§3.3 intended behaviour).
+	var storedLM contractsitx.OtcOffer
+	if existing.RemoteOfferJSON != nil {
+		_ = json.Unmarshal([]byte(*existing.RemoteOfferJSON), &storedLM)
+	}
+	if storedLM.LastModifiedBy.RoutingNumber != h.ownRouting {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"not your turn: the last counter-offer was made by your side")
+	}
+
 	offer := protoToOffer(req.GetOffer())
 	// Derive lastModifiedBy from the AUTHENTICATED sender (HOLE 1). An inbound
 	// counter was, by definition, last-modified by the peer that PUT it — so the

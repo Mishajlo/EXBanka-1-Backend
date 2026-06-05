@@ -8140,6 +8140,11 @@ paths:
           schema:
             additionalProperties: true
             type: object
+        "409":
+          description: out of turn or negotiation closed (SI-TX §3.3)
+          schema:
+            additionalProperties: true
+            type: object
       summary: 'Peer-to-peer: counter-offer on an existing OTC negotiation'
       tags:
       - PeerOTC

@@ -10638,6 +10638,13 @@ const docTemplate = `{
                             "type": "object",
                             "additionalProperties": true
                         }
+                    },
+                    "409": {
+                        "description": "out of turn or negotiation closed (SI-TX §3.3)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
                     }
                 }
             },
