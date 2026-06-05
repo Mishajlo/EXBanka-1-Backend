@@ -22,8 +22,8 @@ import (
 // PeerResolver resolves a peer bank code to the credentials needed to call
 // its SI-TX /negotiations API.
 //
-// The concrete production implementation is adminResolver (see resolver.go),
-// which wraps transactionpb.PeerBankAdminServiceClient.ResolvePeerByBankCode.
+// The concrete production implementation is adminResolver (defined in this
+// file), which wraps transactionpb.PeerBankAdminServiceClient.ResolvePeerByBankCode.
 // Tests supply a stub.
 type PeerResolver interface {
 	Resolve(ctx context.Context, bankCode string) (baseURL, apiToken, hmacKey string, active, found bool, err error)

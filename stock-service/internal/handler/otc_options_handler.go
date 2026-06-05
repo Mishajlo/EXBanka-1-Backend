@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
+	accountpb "github.com/exbanka/contract/accountpb"
 	stockpb "github.com/exbanka/contract/stockpb"
 	"github.com/exbanka/stock-service/internal/model"
 	"github.com/exbanka/stock-service/internal/repository"
@@ -48,6 +50,49 @@ type OTCOptionsHandler struct {
 	// list as the LOCAL ones (SP-1 Task 7). When unset, ListMyNegotiations
 	// returns local chains only.
 	peerNegs PeerNegotiationLister
+	// SP-2b — cross-bank bid dispatch. When OpenNegotiation's parent :id
+	// resolves to a folded-in REMOTE OTCOffer (a peer-hosted listing), the
+	// handler composes the SI-TX OtcOffer and POSTs it to the seller's bank
+	// via peerDispatch, then records the mirror row via remoteNegWriter. The
+	// bidder account is re-validated against accounts. All three are optional;
+	// when unset, a remote parent :id falls through to the original NotFound.
+	peerDispatch    PeerNegotiationDispatcher
+	remoteNegWriter RemoteNegotiationWriter
+	accounts        OTCAccountClient
+}
+
+// PeerNegotiationDispatcher POSTs a composed SI-TX OtcOffer to a peer bank's
+// /negotiations API and returns the peer-assigned (routingNumber, foreignID).
+// Satisfied by *peerotc.Client (SP-2b).
+type PeerNegotiationDispatcher interface {
+	CreateNegotiation(ctx context.Context, peerBankCode string, offer map[string]any) (int64, string, error)
+}
+
+// RemoteNegotiationWriter persists a REMOTE OTCNegotiation mirror row (the
+// cross-bank chain this bank's bidder just opened on a peer). Satisfied by
+// *repository.OTCNegotiationRepository.UpsertRemoteNeg (SP-2b).
+type RemoteNegotiationWriter interface {
+	UpsertRemoteNeg(n *model.OTCNegotiation) error
+}
+
+// OTCAccountClient is the narrow account-service surface OpenNegotiation needs
+// to validate (and read the account number of) a bidder's account on the
+// cross-bank branch. Satisfied by accountpb.AccountServiceClient (SP-2b).
+type OTCAccountClient interface {
+	GetAccount(ctx context.Context, in *accountpb.GetAccountRequest, opts ...grpc.CallOption) (*accountpb.AccountResponse, error)
+}
+
+// WithPeerOTCDispatch wires the cross-bank bid-dispatch path so OpenNegotiation
+// can place a bid on a peer-hosted (REMOTE) OTC listing (SP-2b). dispatcher
+// POSTs the SI-TX OtcOffer to the seller's bank; remoteNegWriter persists the
+// resulting mirror row; accounts re-validates the bidder account. Without this
+// wire-up, a bid on a remote :id falls through to NotFound (local-only behavior).
+func (h *OTCOptionsHandler) WithPeerOTCDispatch(dispatcher PeerNegotiationDispatcher, remoteNegWriter RemoteNegotiationWriter, accounts OTCAccountClient) *OTCOptionsHandler {
+	cp := *h
+	cp.peerDispatch = dispatcher
+	cp.remoteNegWriter = remoteNegWriter
+	cp.accounts = accounts
+	return &cp
 }
 
 // PeerNegotiationLister fetches the caller's cross-bank negotiation mirror

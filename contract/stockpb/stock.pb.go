@@ -9619,6 +9619,12 @@ type OpenNegotiationRequest struct {
 	ActingPrincipalType string                 `protobuf:"bytes,9,opt,name=acting_principal_type,json=actingPrincipalType,proto3" json:"acting_principal_type,omitempty"`
 	ActingPrincipalId   uint64                 `protobuf:"varint,10,opt,name=acting_principal_id,json=actingPrincipalId,proto3" json:"acting_principal_id,omitempty"`
 	ActingEmployeeId    uint64                 `protobuf:"varint,11,opt,name=acting_employee_id,json=actingEmployeeId,proto3" json:"acting_employee_id,omitempty"`
+	// bidder_account_number is the gateway-resolved account number for
+	// bidder_account_id. The cross-bank (remote) branch threads it through to
+	// the seller's bank in the SI-TX OtcOffer as buyerAccountNumber so the
+	// peer's posting executor debits this exact account on accept (no "first
+	// active <currency> account" guesswork). Empty for local bids.
+	BidderAccountNumber string `protobuf:"bytes,12,opt,name=bidder_account_number,json=bidderAccountNumber,proto3" json:"bidder_account_number,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -9728,6 +9734,13 @@ func (x *OpenNegotiationRequest) GetActingEmployeeId() uint64 {
 		return x.ActingEmployeeId
 	}
 	return 0
+}
+
+func (x *OpenNegotiationRequest) GetBidderAccountNumber() string {
+	if x != nil {
+		return x.BidderAccountNumber
+	}
+	return ""
 }
 
 type CounterNegotiationRequest struct {
@@ -20493,7 +20506,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x11caller_owner_type\x18\x02 \x01(\tR\x0fcallerOwnerType\x12&\n" +
 	"\x0fcaller_owner_id\x18\x03 \x01(\x04R\rcallerOwnerId\"g\n" +
 	" ListNegotiationRevisionsResponse\x12C\n" +
-	"\trevisions\x18\x01 \x03(\v2%.stock.OTCNegotiationRevisionResponseR\trevisions\"\xd4\x03\n" +
+	"\trevisions\x18\x01 \x03(\v2%.stock.OTCNegotiationRevisionResponseR\trevisions\"\x88\x04\n" +
 	"\x16OpenNegotiationRequest\x12&\n" +
 	"\x0fparent_offer_id\x18\x01 \x01(\x04R\rparentOfferId\x12*\n" +
 	"\x11bidder_owner_type\x18\x02 \x01(\tR\x0fbidderOwnerType\x12&\n" +
@@ -20506,7 +20519,8 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\x15acting_principal_type\x18\t \x01(\tR\x13actingPrincipalType\x12.\n" +
 	"\x13acting_principal_id\x18\n" +
 	" \x01(\x04R\x11actingPrincipalId\x12,\n" +
-	"\x12acting_employee_id\x18\v \x01(\x04R\x10actingEmployeeId\"\xaa\x03\n" +
+	"\x12acting_employee_id\x18\v \x01(\x04R\x10actingEmployeeId\x122\n" +
+	"\x15bidder_account_number\x18\f \x01(\tR\x13bidderAccountNumber\"\xaa\x03\n" +
 	"\x19CounterNegotiationRequest\x12%\n" +
 	"\x0enegotiation_id\x18\x01 \x01(\x04R\rnegotiationId\x12*\n" +
 	"\x11caller_owner_type\x18\x02 \x01(\tR\x0fcallerOwnerType\x12&\n" +

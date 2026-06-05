@@ -8191,25 +8191,28 @@ Each OTC option listing (an `OTCOffer` posted by a seller or buyer) can accept m
 
 #### POST /api/v3/otc/options/:id/bid
 
-Open a new negotiation chain by placing the initial bid on an open listing.
+Open a new negotiation chain by placing the initial bid on an open listing. `:id` may resolve to a **LOCAL** listing (an `OTCOffer` this bank hosts) or a folded-in **REMOTE** listing (a peer-bank listing surfaced via the cross-bank discovery feed). The same route handles both — stock-service dispatches by the parent listing's routing (SP-2b):
+
+- **LOCAL listing** — runs the intra-bank first-accept-wins negotiation path (unchanged). Returns a `kind=local` negotiation.
+- **REMOTE listing** — composes the SI-TX `OtcOffer` (with the caller's `buyerId`, the listing's `sellerId`, the resolved `buyerAccountNumber`, and the listing's cascade-cancel `parentOfferId` lot key) and POSTs it to the seller's bank. Records a local **remote** negotiation mirror row and returns a `kind=remote` negotiation carrying the peer-assigned id. **Client bidders only** — a bank/employee-acting-as-bank bidder is rejected with **409** (`cross-bank bidding as the bank is not yet supported`, SP-3). Cross-bank SI-TX has **no FX**, so the bidder account's currency must equal the listing's premium currency.
 
 **Authentication:** Any JWT + `securities.trade` OR `otc.trade.accept` + `ResolveIdentity`
 
-**Path:** `:id` — the parent OTCOffer listing id.
+**Path:** `:id` — the parent OTCOffer listing id (local or remote surrogate id).
 
 **Request Body:**
 
 | Field | Type | Description |
 |---|---|---|
-| `bidder_account_id` | int | Caller's account that will pay/receive premium on accept |
+| `bidder_account_id` | int | Caller's account that will pay/receive premium on accept. For a remote listing it is re-validated (ownership, active, currency==listing premium currency) and its account number is threaded to the seller's bank. |
 | `quantity` | string (decimal) | Initial bid quantity |
 | `strike_price` | string (decimal) | Initial bid strike |
 | `premium` | string (decimal) | Initial bid premium |
 | `settlement_date` | string | RFC3339 or YYYY-MM-DD |
 
-**Response 201:** `{ "negotiation": OTCNegotiationResponse }`. Status `open`.
+**Response 201:** `{ "negotiation": OTCNegotiationResponse }`. Status `open` (local) / `ongoing` (remote, peer status vocabulary). `kind` is `local` or `remote`.
 
-**Response 400/403/409:** Validation, account-ownership, or chain-already-exists (one chain per bidder per listing).
+**Response 400/403/409:** Validation, account-ownership, chain-already-exists (one chain per bidder per listing), or — for a remote listing — a bank bidder (SP-3 deferral) / currency mismatch.
 
 **Response 412:** Parent listing is no longer open (consumed, cancelled, or expired).
 

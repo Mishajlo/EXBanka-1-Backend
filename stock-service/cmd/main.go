@@ -37,6 +37,7 @@ import (
 	kafkaprod "github.com/exbanka/stock-service/internal/kafka"
 	"github.com/exbanka/stock-service/internal/model"
 	"github.com/exbanka/stock-service/internal/otccache"
+	"github.com/exbanka/stock-service/internal/peerotc"
 	"github.com/exbanka/stock-service/internal/provider"
 	"github.com/exbanka/stock-service/internal/repository"
 	"github.com/exbanka/stock-service/internal/service"
@@ -1055,13 +1056,21 @@ func main() {
 	}
 	peerOtcHandler.WithBidsAggregator(peerAgg)
 
+	// SP-2b — cross-bank bid dispatch. The bid route (OpenNegotiation)
+	// dispatches local OR cross-bank based on whether the parent listing is a
+	// local or a folded-in remote OTCOffer. The remote branch POSTs the SI-TX
+	// OtcOffer to the seller's bank via this peerotc.Client (reusing the
+	// existing peerBankAdminClient for peer resolution) and records the mirror.
+	peerNegDispatcher := peerotc.New(peerotc.NewAdminResolver(peerBankAdminClient), nil, cfg.OwnBankCode)
+
 	otcOptionsHandler := handler.NewOTCOptionsHandler(otcOfferSvc, optionContractRepo).
 		WithListings(listingRepo).
 		WithPeerContracts(peerOptionRepo, ownRouting).
 		WithRatings(ratingSvc).
 		WithNegotiations(otcNegotiationSvc).
 		WithRemoteOffers(otcOfferRepo, cfg.OwnBankCode).
-		WithPeerNegotiations(otcNegRepo) // SP-1 Task 7 + SP-2a: unified local+remote negotiation list (REMOTE rows in otc_negotiations)
+		WithPeerNegotiations(otcNegRepo). // SP-1 Task 7 + SP-2a: unified local+remote negotiation list (REMOTE rows in otc_negotiations)
+		WithPeerOTCDispatch(peerNegDispatcher, otcNegRepo, accountClient) // SP-2b: bid route dispatches cross-bank for remote listings
 
 	// Phase 3: OTC stocks marketplace (sell + buy direction). The
 	// service uses narrow OTCStockListingResolver + OTCStockAccountClient

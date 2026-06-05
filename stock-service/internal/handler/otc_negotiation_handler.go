@@ -172,6 +172,18 @@ func (h *OTCOptionsHandler) OpenNegotiation(ctx context.Context, in *stockpb.Ope
 		ActingEmployeeID:    actingEmp,
 	})
 	if err != nil {
+		// The local path could not find the parent listing. It may be a
+		// folded-in REMOTE offer (a peer-hosted listing) — dispatch the bid
+		// cross-bank (SP-2b). Same fallback pattern as ListNegotiationsByListing.
+		if isOTCOfferNotFound(err) {
+			remoteResp, ok, rerr := h.openRemoteNegotiation(ctx, in, ot, oid, qty, strike, premium, settle)
+			if rerr != nil {
+				return nil, rerr
+			}
+			if ok {
+				return remoteResp, nil
+			}
+		}
 		return nil, err
 	}
 	return negToProto(neg), nil
