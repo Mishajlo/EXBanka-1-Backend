@@ -8607,6 +8607,7 @@ Unified cross-bank discovery view: every open OTC option listing on this bank + 
       "kind":                "remote",
       "bank_code":           "222",
       "routing_number":      222,
+      "local_id":            17,
       "offer_id":            "42",
       "seller_id":           "client-7",
       "seller_name":         "",
@@ -8630,6 +8631,16 @@ Unified cross-bank discovery view: every open OTC option listing on this bank + 
   "last_refresh":  "2026-05-16T02:50:00Z"
 }
 ```
+
+**SP-1 provenance + ownership fields (2026-06-04):** Every item in `offers[]` carries:
+
+| Field | Type | Notes |
+|---|---|---|
+| `kind` | string | `"local"` (this bank's listing) or `"remote"` (peer-bank mirror). |
+| `routing_number` | int64 | Bank routing number identifying the hosting bank. |
+| `bank_code` | string | 3-digit bank code. |
+| `local_id` | uint64 | Stable local surrogate id — `RemoteOTCOffer.ID` for remote rows; the numeric offer id for local rows. Use this as `:id` in `GET /api/v3/otc/options/:id`. |
+| `me_owner` | bool | `true` when the acting caller is the listing's poster/seller. Always `false` for remote rows. Omitted (falsy) when not owned. |
 
 **Best-bid / best-ask surface (Part A 2026-05-16).** Three optional fields surface aggregated active-chain pricing so a prospective bidder sees that competition is live before placing an offer at the seller's static ask:
 

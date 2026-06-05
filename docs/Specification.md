@@ -1555,6 +1555,19 @@ Many bidders can each open their own negotiation chain against the same listing;
 | POST   | `/api/v3/me/otc/options/:id/negotiations/:nid/reject`  | OTCOptionsHandler.RejectMyNegotiation       | Reject one chain only |
 | DELETE | `/api/v3/me/otc/options/:id/negotiations/:nid`         | OTCOptionsHandler.CancelMyNegotiation       | Bidder withdraws their own chain |
 | GET    | `/api/v3/public-option-offers`                         | PeerOTCHandler.GetPublicOptionOffers        | Peer-facing discovery endpoint (PeerAuth) |
+| GET    | `/api/v3/me/otc/contracts`                             | OTCOptionsHandler.ListMyContracts           | Caller's LOCAL + REMOTE contracts, merged; each item has `kind`/`routing_number`/`bank_code`/`me_owner` (SP-1 Task 8) |
+| GET    | `/api/v3/otc/contracts/:id`                            | OTCOptionsHandler.GetContract               | Single contract — resolves local→remote; `kind`/`me_owner` stamped in service layer (SP-1 Task 8) |
+
+**SP-1 unified-read semantics (2026-06-04):** All OTC option read endpoints (offers, negotiations, contracts) return items with four provenance/ownership fields:
+
+| Field | Meaning |
+|---|---|
+| `kind` | `"local"` — this bank hosts the record; `"remote"` — sourced from a peer-bank mirror. |
+| `routing_number` | Owning bank's routing number (own for local; the COUNTERPARTY peer for remote). |
+| `bank_code` | 3-digit bank code matching `routing_number`. |
+| `me_owner` | Ownership flag. Semantics differ by resource: **offers + negotiations**: `true` when the caller is the poster/seller (originator); bidders are always `false`. **contracts**: `true` ONLY when the caller is the **buyer/holder** (the seller/writer is always `false`). For remote rows: computed from whether this bank hosts the relevant side. `me_owner` is omitted (falsy proto3 omitempty) when not owned. |
+
+The gateway is a **uniform passthrough** — all provenance and ownership computation happens in the stock-service handler, never in the gateway.
 
 ### Unified Portfolio Routes (B1–B8, 2026-05-28)
 
@@ -1636,6 +1649,12 @@ Response shape: `{entries: [...], total, page, page_size}`. Changelog entries ca
 > - `OTCNegotiationRevision` — append-only history row for one move (BID, COUNTER, ACCEPT, REJECT) within an `OTCNegotiation`. Unique index `(negotiation_id, revision_number)` enforces monotonic ordering. Exposed via `GET /api/v3/me/otc/options/negotiations/:nid/revisions` (authorization: bidder or listing poster only).
 > - `OTCOffer` (existing model) — gained semantic dual-use: legacy single-chain negotiations still mutate it in place; Phase 2 marketplace treats it as an immutable LISTING with status `open|consumed|cancelled` (legacy `PENDING|COUNTERED` aliased as "open" via `IsOpenListing()` helper). Per-bidder chains live in `OTCNegotiation` rows above.
 > - `Holding` (existing model) — gained `OTCSafeAvailable() = Quantity - ReservedQuantity - PublicQuantity` helper used by `OTCStockService.CreateSellOffer` to prevent double-commit of shares already locked by orders or earlier public offers.
+>
+> **SP-1 (Unified OTC Read, 2026-06-04) entities:**
+> - `RemoteOTCOffer` (`remote_otc_offers` table in `stock_db`) — persistent mirror of an OTC option listing discovered on a peer bank via `GET /cross-bank-protocol/public-option-offers`. One row per (PeerRoutingNumber, ForeignOfferID) natural key; the autoincrement `ID` is the **stable local surrogate id** surfaced to the frontend as the unified offer id on all SP-1 read routes, ensuring the same peer listing keeps the same id across cache rebuilds. Fields: `BankCode`, `SellerID` (SI-TX wire id `"client-<N>"` | `"bank"`), `Direction`, `Ticker`, `Amount`, `StrikePrice`, `StrikeCurrency`, `Premium`, `PremiumCurrency`, `SettlementDate`, `PeerCreatedAt`, `Status` (`open`|`cancelled`), `LastSeenAt`. No version column — written only by the single-threaded option refresher and the per-peer reconcile bulk flip (no concurrent read-modify-write). `ReconcilePeerNotSeen(peerRouting, seenForeignIDs)` bulk-flips rows that were not in the most recent peer poll to `status=cancelled` (offer-cancel reconciler).
+> - `OTCNegotiationResponse.kind / routing_number / bank_code / me_owner` (SP-1 Task 7) — four new proto fields stamped in the service layer when building the `ListMyNegotiations` response. `kind` = `"local"` | `"remote"`. `me_owner` = true only when the caller is the parent listing's poster/seller; a chain the caller opened as bidder is always false.
+> - `UnifiedOptionOffer.local_id / me_owner` (SP-1) — `local_id` (proto field 19) is the stable local surrogate id (= `RemoteOTCOffer.ID` for remote rows; numeric `offer_id` for local). `me_owner` (field 20) is true only when the acting caller posted the listing (always false for remote rows).
+> - `OptionContractResponse.kind / routing_number / bank_code / me_owner` (SP-1 Task 8) — provenance fields on the unified contract read. `me_owner` = true ONLY when the caller is the contract's **buyer/holder** (DIFFERENT from offers/negotiations where the poster/seller is the owner). For remote: true iff `direction == "CREDIT"` (this bank holds the buyer side).
 
 **InvestmentFund extension** (Celina 4 / closed-end funds) — `investment_funds` table gains:
 
