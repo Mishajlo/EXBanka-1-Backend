@@ -1162,14 +1162,21 @@ func (s *HoldingReservationService) ExerciseBuyerCreditForPeerOption(
 	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		// The cross-bank contract now lives in the unified option_contracts table
-		// as a REMOTE row (routing_number != ownRouting); peerOptionContractID is
+		// as a REMOTE row (routing_number != OwnRouting()); peerOptionContractID is
 		// its surrogate primary key. Lock the row, read status off the shared
 		// Status column (which carries the PEER vocabulary "active"/"exercising"/
 		// "exercised" on remote rows).
+		//
+		// Defense-in-depth: scope the lookup to routing_number != OwnRouting() so
+		// a caller who passes a LOCAL contract's id (e.g. by mistake or via a
+		// confused caller) cannot trigger the buyer-credit path on a local row —
+		// it would be treated as not-found rather than silently exercised.
 		var contract model.OptionContract
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&contract, peerOptionContractID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("routing_number != ?", model.OwnRouting()).
+			First(&contract, peerOptionContractID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return status.Error(codes.FailedPrecondition, "peer option contract not found")
+				return status.Error(codes.FailedPrecondition, "peer option contract not found (must be a remote/cross-bank contract)")
 			}
 			return err
 		}

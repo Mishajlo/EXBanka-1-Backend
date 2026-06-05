@@ -590,3 +590,88 @@ func TestGuard_ContractGetByOfferID_RemoteRow_NotFound(t *testing.T) {
 		t.Errorf("GetByOfferID(remote contract): want ErrRecordNotFound, got %v", err)
 	}
 }
+
+// TestGuard_ContractListByOwner_ExcludesRemote verifies that ListByOwner
+// filters to routing_number == OwnRouting() and therefore excludes a REMOTE
+// contract even when its buyer_owner_id deliberately collides with the local
+// user's ID (the scenario the routing guard must catch that the old bank_code
+// NULL check could not).
+func TestGuard_ContractListByOwner_ExcludesRemote(t *testing.T) {
+	db := newGuardTestDB(t)
+	model.SetOwnRouting("111")
+	r := NewOptionContractRepository(db)
+
+	ownerID := uint64(7)
+
+	// LOCAL contract: routing 111 (via BeforeCreate), buyer = client/7.
+	localContract := &model.OptionContract{
+		BuyerOwnerType:  model.OwnerClient,
+		BuyerOwnerID:    &ownerID,
+		SellerOwnerType: model.OwnerClient,
+		SellerOwnerID:   &ownerID,
+		StockID:         1,
+		Ticker:          "LOC",
+		Quantity:        decimal.NewFromInt(5),
+		StrikePrice:     decimal.NewFromFloat(50),
+		PremiumPaid:     decimal.NewFromFloat(2),
+		PremiumCurrency: "RSD",
+		StrikeCurrency:  "RSD",
+		SettlementDate:  time.Now().UTC().AddDate(1, 0, 0),
+		BuyerAccountID:  1,
+		SellerAccountID: 2,
+		Status:          model.OptionContractStatusActive,
+		SagaID:          "sg-local-7",
+		PremiumPaidAt:   time.Now().UTC(),
+	}
+	if err := db.Create(localContract).Error; err != nil {
+		t.Fatalf("seed local contract: %v", err)
+	}
+
+	// REMOTE contract: routing 222, buyer = client/7 (same owner — deliberate
+	// collision to prove the routing guard, not the bank_code NULL check, is
+	// what excludes it). BuyerBankCode is populated as a real remote row would be.
+	remoteNativeID := "remote-owner-guard"
+	buyerBankCode := "222"
+	remoteContract := &model.OptionContract{
+		RoutingNumber:   222,
+		NativeID:        &remoteNativeID,
+		BuyerOwnerType:  model.OwnerClient,
+		BuyerOwnerID:    &ownerID, // same owner ID — the critical collision
+		BuyerBankCode:   &buyerBankCode,
+		SellerOwnerType: model.OwnerClient,
+		SellerOwnerID:   &ownerID,
+		StockID:         1,
+		Ticker:          "REM",
+		Quantity:        decimal.NewFromInt(5),
+		StrikePrice:     decimal.NewFromFloat(50),
+		PremiumPaid:     decimal.NewFromFloat(2),
+		PremiumCurrency: "RSD",
+		StrikeCurrency:  "RSD",
+		SettlementDate:  time.Now().UTC().AddDate(1, 0, 0),
+		BuyerAccountID:  3,
+		SellerAccountID: 4,
+		Status:          model.OptionContractStatusActive,
+		SagaID:          "sg-remote-7",
+		PremiumPaidAt:   time.Now().UTC(),
+	}
+	if err := db.Create(remoteContract).Error; err != nil {
+		t.Fatalf("seed remote contract: %v", err)
+	}
+
+	rows, total, err := r.ListByOwner(model.OwnerClient, &ownerID, "buyer", nil, 1, 100)
+	if err != nil {
+		t.Fatalf("ListByOwner: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("ListByOwner total: got %d want 1", total)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ListByOwner rows: got %d want 1", len(rows))
+	}
+	if rows[0].RoutingNumber != model.OwnRouting() {
+		t.Errorf("ListByOwner returned remote row id=%d routing=%d", rows[0].ID, rows[0].RoutingNumber)
+	}
+	if rows[0].ID != localContract.ID {
+		t.Errorf("ListByOwner: got contract id=%d want %d (local)", rows[0].ID, localContract.ID)
+	}
+}

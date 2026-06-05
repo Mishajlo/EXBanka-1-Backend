@@ -107,35 +107,27 @@ func (r *OptionContractRepository) Save(c *model.OptionContract) error {
 // ListByOwner returns option contracts where the owner appears as buyer,
 // seller, or either. owner_id may be nil for OwnerType=bank.
 //
-// Defense-in-depth (Fix #3, 2026-05-16): every variant additionally
-// requires the matched side's bank_code column to be NULL. Today no
-// writer populates buyer_bank_code / seller_bank_code (cross-bank
-// option contracts live in peer_option_contracts instead), so this is a
-// no-op filter. If a future code path ever writes those columns it MUST
-// also update this filter to also accept rows where bank_code = self —
-// the current strict-NULL form fails safe (excludes foreign rows from
-// /me queries) rather than leaking cross-bank rows to a local user with
-// the same owner_id.
+// Guard: remote (cross-bank) contracts now live in this same table as rows
+// with routing_number != OwnRouting(). The authoritative local-only scope is
+// the routing_number == OwnRouting() predicate, consistent with GetByID,
+// GetByOfferID, and ListExpiring. This query is scoped to own routing so it
+// returns only local contracts and remote rows can never appear in /me views
+// even when their buyer_owner_id/seller_owner_id collide with a local user's ID.
 func (r *OptionContractRepository) ListByOwner(ownerType model.OwnerType, ownerID *uint64, role string, statuses []string, page, pageSize int) ([]model.OptionContract, int64, error) {
-	q := r.db.Model(&model.OptionContract{})
+	q := r.db.Model(&model.OptionContract{}).Where("routing_number = ?", model.OwnRouting())
 	switch role {
 	case "buyer":
-		q = scopeOwner(q, "buyer_owner_type", "buyer_owner_id", ownerType, ownerID).
-			Where("buyer_bank_code IS NULL")
+		q = scopeOwner(q, "buyer_owner_type", "buyer_owner_id", ownerType, ownerID)
 	case "seller":
-		q = scopeOwner(q, "seller_owner_type", "seller_owner_id", ownerType, ownerID).
-			Where("seller_bank_code IS NULL")
+		q = scopeOwner(q, "seller_owner_type", "seller_owner_id", ownerType, ownerID)
 	default:
 		// OR over the buyer and seller owner-pair predicates. Inline since
-		// scopeOwner is single-pair. Each side carries its own bank_code
-		// NULL guard so a row matching only one side (e.g. cross-bank
-		// contract stored locally as seller-side) doesn't leak via the
-		// non-matching side's predicate.
+		// scopeOwner is single-pair.
 		if ownerID == nil {
-			q = q.Where("(buyer_owner_type = ? AND buyer_owner_id IS NULL AND buyer_bank_code IS NULL) OR (seller_owner_type = ? AND seller_owner_id IS NULL AND seller_bank_code IS NULL)",
+			q = q.Where("(buyer_owner_type = ? AND buyer_owner_id IS NULL) OR (seller_owner_type = ? AND seller_owner_id IS NULL)",
 				ownerType, ownerType)
 		} else {
-			q = q.Where("(buyer_owner_type = ? AND buyer_owner_id = ? AND buyer_bank_code IS NULL) OR (seller_owner_type = ? AND seller_owner_id = ? AND seller_bank_code IS NULL)",
+			q = q.Where("(buyer_owner_type = ? AND buyer_owner_id = ?) OR (seller_owner_type = ? AND seller_owner_id = ?)",
 				ownerType, *ownerID, ownerType, *ownerID)
 		}
 	}
