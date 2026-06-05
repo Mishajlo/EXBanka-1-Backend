@@ -14,23 +14,22 @@ import (
 
 // OTCOptionsHandler handles REST routes for the OTC options feature
 // (intra-bank Celina 4 / Spec 2 + cross-bank Celina 5 SI-TX). The
-// `client` is the intra-bank service; `peerOTC` is the cross-bank
-// surface used by ExercisePeerContract. `security` resolves tickers to
-// stock IDs; `accounts` backs the resource-ownership checks.
+// `client` is the intra-bank service; cross-bank dispatch (e.g. exercise)
+// is decided inside stock-service behind the unified routes, so the
+// gateway no longer holds a PeerOTC client here. `security` resolves
+// tickers to stock IDs; `accounts` backs the resource-ownership checks.
 type OTCOptionsHandler struct {
 	client   stockpb.OTCOptionsServiceClient
-	peerOTC  stockpb.PeerOTCServiceClient
 	security stockpb.SecurityGRPCServiceClient
 	accounts accountpb.AccountServiceClient
 }
 
 func NewOTCOptionsHandler(
 	client stockpb.OTCOptionsServiceClient,
-	peerOTC stockpb.PeerOTCServiceClient,
 	security stockpb.SecurityGRPCServiceClient,
 	accounts accountpb.AccountServiceClient,
 ) *OTCOptionsHandler {
-	return &OTCOptionsHandler{client: client, peerOTC: peerOTC, security: security, accounts: accounts}
+	return &OTCOptionsHandler{client: client, security: security, accounts: accounts}
 }
 
 type createOTCOfferRequest struct {
@@ -233,7 +232,7 @@ func (h *OTCOptionsHandler) ListMyPostedOffers(c *gin.Context) {
 
 // GetOffer godoc
 // @Summary      Get an OTC option offer by surrogate id (local or remote)
-// @Description  Resolves an OTC option offer by its stable surrogate id (the local_id from the discovery feed). Local offers return the {offer,revisions} body decorated with kind="local" + me_owner. If the id is not a local offer it is resolved from the remote (cross-bank) mirror and returned as a flat body with kind="remote" + me_owner=false.
+// @Description  Resolves an OTC option offer by its stable surrogate id (the local_id from the discovery feed). Local offers return the {offer,revisions} body decorated with kind="local" + me_owner. If the id is not a local offer it is resolved from the remote (cross-bank) mirror and returned as a flat body with kind="remote" + me_owner=false. When the authenticated caller has an own (bidder) negotiation chain against the offer, the offer object also carries my_negotiation_id + my_negotiation_status so the FE can jump straight to its chain (absent/0 otherwise; a poster who never bid has no chain).
 // @Tags         OTCOptions
 // @Security     BearerAuth
 // @Produce      json
@@ -431,17 +430,27 @@ type exerciseRequest struct {
 	// OnBehalfOfFundID, when non-zero, exercises this contract on behalf of a fund (E2).
 	// Caller must be the fund's manager (enforced in stock-service).
 	OnBehalfOfFundID uint64 `json:"on_behalf_of_fund_id,omitempty"`
+	// BuyerAccountNumber is REQUIRED only for cross-bank (remote) contracts: the
+	// buyer's currency account that pays the strike. The gateway validates the
+	// caller owns it before forwarding (the only client-supplied resource on the
+	// money path). LOCAL contracts ignore it — their accounts come from the
+	// persisted contract. (SP-2b Task 5 — unified local+cross-bank exercise.)
+	BuyerAccountNumber string `json:"buyer_account_number,omitempty"`
 }
 
 // ExerciseContract godoc
-// @Summary      Exercise an OTC option contract
+// @Summary      Exercise an OTC option contract (unified local + cross-bank)
+// @Description  Exercises an option contract. The dispatch (local saga vs cross-bank SI-TX) is decided in stock-service from the contract's routing — the frontend uses ONE route regardless of kind. For a cross-bank contract, supply buyer_account_number (the buyer's currency account that pays the strike); the gateway validates the caller owns it. For a local contract the accounts come from the persisted contract and buyer_account_number is ignored.
 // @Tags         OTCOptions
 // @Security     BearerAuth
 // @Accept       json
 // @Produce      json
 // @Param        id path int true "contract id"
-// @Param        body body exerciseRequest false "optional on-behalf client id; accounts come from the contract"
+// @Param        body body exerciseRequest false "optional on-behalf client/fund id; buyer_account_number required only for cross-bank contracts"
 // @Success      201 {object} map[string]interface{}
+// @Failure      400 {object} map[string]interface{}
+// @Failure      403 {object} map[string]interface{}
+// @Failure      404 {object} map[string]interface{}
 // @Router       /api/v3/otc/contracts/{id}/exercise [post]
 func (h *OTCOptionsHandler) ExerciseContract(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -450,78 +459,39 @@ func (h *OTCOptionsHandler) ExerciseContract(c *gin.Context) {
 		return
 	}
 	var req exerciseRequest
-	// Body is optional — only on_behalf_of_client_id may be present.
+	// Body is optional — on_behalf_of_*  and buyer_account_number may be present.
 	_ = c.ShouldBindJSON(&req)
 	identity := c.MustGet("identity").(*middleware.ResolvedIdentity)
+	// OWNERSHIP GATE (cross-bank path): when the caller supplies a settlement
+	// account (the strike money is debited from it on the cross-bank exercise),
+	// they MUST own it. Without this, a client could exercise a contract and
+	// charge the strike to ANOTHER client's account (the verified theft vector
+	// the former cross-bank exercise route guarded against, now folded here).
+	// The buyer account is the ONLY client-supplied resource on this path; the
+	// contract terms + counterparty come from the persisted row in stock-service.
+	if req.BuyerAccountNumber != "" {
+		acct, gerr := h.accounts.GetAccountByNumber(c.Request.Context(), &accountpb.GetAccountByNumberRequest{AccountNumber: req.BuyerAccountNumber})
+		if gerr != nil {
+			handleGRPCError(c, gerr)
+			return
+		}
+		if ownErr := enforceOwnership(c, acct.GetOwnerId()); ownErr != nil {
+			return // enforceOwnership already wrote the 404
+		}
+	}
 	resp, err := h.client.ExerciseContract(c.Request.Context(), &stockpb.ExerciseContractRequest{
 		ContractId:         id,
 		ActorUserId:        int64(ownerToLegacyUserID(identity.OwnerID)),
 		ActorSystemType:    ownerToLegacySystemType(identity.OwnerType),
 		OnBehalfOfClientId: req.OnBehalfOfClientID,
 		OnBehalfOfFundId:   req.OnBehalfOfFundID,
+		BuyerAccountNumber: req.BuyerAccountNumber,
 	})
 	if err != nil {
 		handleGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, resp)
-}
-
-type exercisePeerRequest struct {
-	BuyerAccountNumber string `json:"buyer_account_number"`
-}
-
-// ExercisePeerContract godoc
-// @Summary      Exercise a cross-bank OTC option contract
-// @Description  Buyer-only. Initiates the SI-TX exercise flow: strike money buyer→seller + option markers carrying intent=exercise. Both banks transition the contract to status=exercised on COMMIT_TX, the seller's reservation is consumed and the buyer's holding is credited.
-// @Tags         OTCOptions
-// @Security     BearerAuth
-// @Accept       json
-// @Produce      json
-// @Param        id    path int                  true "peer_option_contracts row id on this bank"
-// @Param        body  body exercisePeerRequest  true "buyer's currency account number that pays the strike"
-// @Success      200   {object} map[string]interface{}
-// @Router       /api/v3/me/otc/contracts/peer/{id}/exercise [post]
-func (h *OTCOptionsHandler) ExercisePeerContract(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		apiError(c, http.StatusBadRequest, ErrValidation, "invalid id")
-		return
-	}
-	var req exercisePeerRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		apiError(c, http.StatusBadRequest, ErrValidation, "invalid body")
-		return
-	}
-	if req.BuyerAccountNumber == "" {
-		apiError(c, http.StatusBadRequest, ErrValidation, "buyer_account_number is required")
-		return
-	}
-	// OWNERSHIP GATE: the caller must own the account the strike money is debited
-	// from. Without this, a client could exercise a contract and charge the strike
-	// to ANOTHER client's account (verified theft vector). Resolve the account and
-	// enforce ownership before dispatch — the strike is the only caller-supplied
-	// account on this path.
-	acct, gerr := h.accounts.GetAccountByNumber(c.Request.Context(), &accountpb.GetAccountByNumberRequest{AccountNumber: req.BuyerAccountNumber})
-	if gerr != nil {
-		handleGRPCError(c, gerr)
-		return
-	}
-	if ownErr := enforceOwnership(c, acct.GetOwnerId()); ownErr != nil {
-		return // enforceOwnership already wrote the 404
-	}
-	resp, err := h.peerOTC.InitiateOptionExercise(c.Request.Context(), &stockpb.InitiateOptionExerciseRequest{
-		PeerOptionContractId: id,
-		BuyerAccountNumber:   req.BuyerAccountNumber,
-	})
-	if err != nil {
-		handleGRPCError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"transaction_id": resp.GetTransactionId(),
-		"status":         resp.GetStatus(),
-	})
 }
 
 // --- OTC trader rating routes (Celina 3) ---------------------------------

@@ -87,6 +87,11 @@ func (h *OTCOptionsHandler) OpenNegotiationChain(c *gin.Context) {
 	if err := ResolveAndCheckAccount(c, h.accounts, identity, req.BidderAccountID, 0); err != nil {
 		return
 	}
+	// stock-service's OpenNegotiation dispatches a local saga OR a cross-bank
+	// SI-TX negotiation depending on whether :id is a local or remote listing.
+	// The remote branch fetches the account itself (for owner/active/currency
+	// validation) and reads the account number directly from account-service —
+	// no need for the gateway to pre-fetch and forward bidder_account_number.
 	resp, err := h.client.OpenNegotiation(c.Request.Context(), &stockpb.OpenNegotiationRequest{
 		ParentOfferId:       parentID,
 		BidderOwnerType:     identity.OwnerType,
@@ -215,11 +220,12 @@ func (h *OTCOptionsHandler) AcceptMyNegotiation(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"winning":            resp.GetWinning(),
-		"parent_offer_id":    resp.GetParentOfferId(),
-		"parent_status":      resp.GetParentStatus(),
-		"cancelled_siblings": resp.GetCancelledSiblings(),
-		"contract":           resp.GetContract(),
+		"winning":                   resp.GetWinning(),
+		"parent_offer_id":           resp.GetParentOfferId(),
+		"parent_status":             resp.GetParentStatus(),
+		"cancelled_siblings":        resp.GetCancelledSiblings(),
+		"contract":                  resp.GetContract(),
+		"cross_bank_transaction_id": resp.GetCrossBankTransactionId(),
 	})
 }
 

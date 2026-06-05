@@ -280,7 +280,10 @@ func (h *PortfolioHandler) ListOTCOffers(c *gin.Context) {
 //	open listings (kind=remote) merged in the in-memory
 //	cache (refreshed every ~5s). Filter by ticker / kind /
 //	bank_code / direction. Pagination is applied in-memory
-//	over the cached snapshot.
+//	over the cached snapshot. Each offer the authenticated
+//	caller has an own (bidder) negotiation chain against
+//	carries my_negotiation_id + my_negotiation_status so the
+//	FE can jump straight to its chain (absent otherwise).
 //
 // @Tags         OTCOptions
 // @Security     BearerAuth
@@ -405,6 +408,13 @@ func (h *PortfolioHandler) listUnifiedOTCOptions(c *gin.Context, ownerOnlySeller
 		}
 		if o.GetActiveChainsCount() > 0 {
 			row["active_chains_count"] = o.GetActiveChainsCount()
+		}
+		// SP-2b — the caller's own (bidder) negotiation chain on this offer, so
+		// the FE can jump straight to it. Omitted when the caller has no chain
+		// here (0 / "").
+		if o.GetMyNegotiationId() > 0 {
+			row["my_negotiation_id"] = o.GetMyNegotiationId()
+			row["my_negotiation_status"] = o.GetMyNegotiationStatus()
 		}
 		offers = append(offers, row)
 	}

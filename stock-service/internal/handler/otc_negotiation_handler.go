@@ -172,6 +172,18 @@ func (h *OTCOptionsHandler) OpenNegotiation(ctx context.Context, in *stockpb.Ope
 		ActingEmployeeID:    actingEmp,
 	})
 	if err != nil {
+		// The local path could not find the parent listing. It may be a
+		// folded-in REMOTE offer (a peer-hosted listing) — dispatch the bid
+		// cross-bank (SP-2b). Same fallback pattern as ListNegotiationsByListing.
+		if isOTCOfferNotFound(err) {
+			remoteResp, ok, rerr := h.openRemoteNegotiation(ctx, in, ot, oid, qty, strike, premium, settle)
+			if rerr != nil {
+				return nil, rerr
+			}
+			if ok {
+				return remoteResp, nil
+			}
+		}
 		return nil, err
 	}
 	return negToProto(neg), nil
@@ -218,6 +230,18 @@ func (h *OTCOptionsHandler) CounterNegotiation(ctx context.Context, in *stockpb.
 		ActingEmployeeID:    optionalPtr(in.GetActingEmployeeId()),
 	})
 	if err != nil {
+		// The chain is not a LOCAL row. It may be a folded-in REMOTE chain
+		// (peer-hosted) — dispatch the counter cross-bank (SP-2b Task 4).
+		if isOTCNegotiationNotFound(err) {
+			rc, ok, rerr := h.resolveRemoteNegAction(in.GetNegotiationId(), ot, oid)
+			if rerr != nil {
+				return nil, rerr
+			}
+			if ok {
+				callerPrincipal := "client-" + strconv.FormatUint(*oid, 10)
+				return h.counterRemoteNegotiation(ctx, rc, callerPrincipal, qty, strike, premium, settle)
+			}
+		}
 		return nil, err
 	}
 	return negToProto(neg), nil
@@ -269,6 +293,19 @@ func (h *OTCOptionsHandler) AcceptNegotiationChain(ctx context.Context, in *stoc
 		OnBehalfOfFundID:    onBehalfOfFundID,
 	})
 	if err != nil {
+		// The chain is not a LOCAL row. It may be a folded-in REMOTE chain
+		// (peer-hosted) — dispatch the accept cross-bank, mirror the status,
+		// and cascade-cancel siblings (SP-2b Task 4). Fund-accept is a
+		// local-only flow; a remote chain never carries on_behalf_of_fund_id.
+		if isOTCNegotiationNotFound(err) {
+			rc, ok, rerr := h.resolveRemoteNegAction(in.GetNegotiationId(), ot, oid)
+			if rerr != nil {
+				return nil, rerr
+			}
+			if ok {
+				return h.acceptRemoteNegotiation(ctx, rc)
+			}
+		}
 		return nil, err
 	}
 	return &stockpb.OTCAcceptNegotiationResponse{
@@ -301,6 +338,17 @@ func (h *OTCOptionsHandler) RejectNegotiation(ctx context.Context, in *stockpb.R
 		ActingEmployeeID:    optionalPtr(in.GetActingEmployeeId()),
 	})
 	if err != nil {
+		// Not a LOCAL row — a REMOTE chain rejects via the SI-TX DELETE
+		// terminal (reject and cancel both DELETE on the peer; SP-2b Task 4).
+		if isOTCNegotiationNotFound(err) {
+			rc, ok, rerr := h.resolveRemoteNegAction(in.GetNegotiationId(), ot, oid)
+			if rerr != nil {
+				return nil, rerr
+			}
+			if ok {
+				return h.cancelRemoteNegotiation(ctx, rc)
+			}
+		}
 		return nil, err
 	}
 	return negToProto(neg), nil
@@ -327,6 +375,17 @@ func (h *OTCOptionsHandler) CancelNegotiation(ctx context.Context, in *stockpb.C
 		ActingEmployeeID:    optionalPtr(in.GetActingEmployeeId()),
 	})
 	if err != nil {
+		// Not a LOCAL row — a REMOTE chain cancels via the SI-TX DELETE
+		// terminal (SP-2b Task 4).
+		if isOTCNegotiationNotFound(err) {
+			rc, ok, rerr := h.resolveRemoteNegAction(in.GetNegotiationId(), ot, oid)
+			if rerr != nil {
+				return nil, rerr
+			}
+			if ok {
+				return h.cancelRemoteNegotiation(ctx, rc)
+			}
+		}
 		return nil, err
 	}
 	return negToProto(neg), nil

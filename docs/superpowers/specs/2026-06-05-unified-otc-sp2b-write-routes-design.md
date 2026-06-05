@@ -33,7 +33,7 @@ The `:rid`/`:id` (foreign routing + foreign negotiation id) needed for the peer 
 
 **Deleted (breaking, authorized by the umbrella's clean-cut):** `POST/GET/PUT/POST-accept/DELETE /api/v3/me/peer-otc/negotiations[...]` and `POST /api/v3/me/otc/contracts/peer/:id/exercise`, plus the gateway `PeerOTCInitiateHandler` + the `OTCOptionsHandler.ExercisePeerContract` handler. The `GET /me/peer-otc/negotiations` LIST is already superseded by the unified `GET /me/otc/options/negotiations` (SP-1).
 
-**Ownership/validation** stays gateway-side (the established Resource Ownership requirement): the gateway still resolves identity, validates the bidder/acceptor account belongs to the caller, and validates input BEFORE the gRPC call. For a cross-bank bid the gateway validates the caller's bidder account (currency-matches-premium, active, owned) exactly as the retiring `CreatePeerNegotiation` did, then passes it to stock-service which performs the dispatch.
+**Ownership/validation** stays gateway-side (the established Resource Ownership requirement): the gateway resolves identity and validates account OWNERSHIP (`ResolveAndCheckAccount`) BEFORE the gRPC call. The currency-matches-premium and active-status checks are performed in STOCK-SERVICE's remote branch, which fetches the bidder account from account-service itself (it needs the account for owner/active/currency validation and to read the account number for `buyerAccountNumber` in the SI-TX wire; no double-fetch from the gateway).
 
 ## 4. New feature — `my_negotiation_id` on offer reads
 
