@@ -75,8 +75,9 @@ func TestOptionContract_AccountIDs_Persist(t *testing.T) {
 	db := testutil.SetupTestDB(t, &OptionContract{})
 	buyer := uint64(1)
 	seller := uint64(2)
+	offerID := uint64(1)
 	c := &OptionContract{
-		OfferID:         1,
+		OfferID:         &offerID,
 		BuyerOwnerType:  OwnerClient,
 		BuyerOwnerID:    &buyer,
 		SellerOwnerType: OwnerClient,

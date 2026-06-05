@@ -55,6 +55,11 @@ func main() {
 
 	cfg := config.Load()
 
+	// Set this bank's routing number once, before any OTC row is created.
+	// BeforeCreate hooks stamp it onto local OTC rows so local-vs-remote is
+	// `routing_number == model.OwnRouting()`.
+	model.SetOwnRouting(cfg.OwnBankCode)
+
 	// --- Database ---
 	db, err := gorm.Open(postgres.Open(cfg.DSN()), &gorm.Config{
 		NowFunc: func() time.Time { return time.Now().UTC() },
@@ -127,16 +132,13 @@ func main() {
 		&model.PriceAlert{},
 		&model.RecurringOrder{},
 		&model.RecurringFundInvestment{},
-		// Phase 4 SI-TX: receiver-side mirror of inbound peer-bank
-		// OTC negotiations. Created/updated by PeerOTCGRPCHandler.
-		&model.PeerOtcNegotiation{},
-		// Cross-bank option contracts written at COMMIT_TX time
-		// when transaction-service finalises an OTC accept TX.
-		&model.PeerOptionContract{},
-		// SP-1: persistent mirror of OTC option offers discovered on peer banks.
-		// Gives each remote listing a stable local surrogate id; reconciliation
-		// flips Status open->cancelled when a peer stops listing it.
-		&model.RemoteOTCOffer{},
+		// SP-2a: cross-bank (REMOTE) OTC negotiations AND option contracts are
+		// folded into the unified OTCNegotiation / OptionContract tables
+		// (routing_number=<peer/counterparty>, native_id=<peer key>) — the
+		// dedicated peer_otc_negotiation + peer_option_contract mirrors were
+		// retired. PeerOTCGRPCHandler writes the Remote* columns; remote contract
+		// rows are written at COMMIT_TX time when transaction-service finalises an
+		// OTC accept TX.
 		// Outbox: durable queue for Kafka events published from inside
 		// sagas. The drainer goroutine (started below) reads pending rows
 		// and publishes them, so a crash between business commit and
@@ -845,8 +847,50 @@ func main() {
 	if err != nil {
 		log.Fatalf("invalid OWN_BANK_CODE %q: %v", cfg.OwnBankCode, err)
 	}
-	peerOtcRepo := repository.NewPeerOtcNegotiationRepository(db)
-	peerOptionRepo := repository.NewPeerOptionContractRepository(db)
+
+	// SP-2a startup assertion: verify no registered peer bank has the same
+	// routing number or bank code as this instance. A pre-existing collision
+	// means cross-bank ingestion would stamp routing_number=OwnRouting on a
+	// "remote" row, making it look local and corrupting money paths. We
+	// fail-fast on an actual collision; on a transient gRPC error we log a
+	// warning and continue (don't block boot on a momentary transaction-service
+	// outage — the T1 registration guard prevents NEW collisions from being
+	// created, so this catches only pre-existing bad data).
+	{
+		startupCtx, startupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		peerListResp, peerListErr := peerBankAdminClient.ListPeerBanks(startupCtx, &transactionpb.ListPeerBanksRequest{ActiveOnly: true})
+		startupCancel()
+		if peerListErr != nil {
+			log.Printf("WARN: startup peer-bank collision check: ListPeerBanks failed (%v) — skipping check; cross-bank ingestion guards remain active per-request", peerListErr)
+		} else if peerListResp != nil {
+			for _, peer := range peerListResp.GetPeerBanks() {
+				peerRouting := int64(0)
+				if rn := peer.GetRoutingNumber(); rn != 0 {
+					peerRouting = rn
+				} else {
+					peerRouting, _ = strconv.ParseInt(peer.GetBankCode(), 10, 64)
+				}
+				if peerRouting == ownRouting || peer.GetBankCode() == cfg.OwnBankCode {
+					log.Fatalf("startup: peer bank %q (routing=%d, code=%s) collides with this bank's own routing/code (%d/%s) — refusing to boot; cross-bank ingestion would masquerade as local. Remove or correct the colliding peer-bank registration before restarting.",
+						peer.GetBankCode(), peerRouting, peer.GetBankCode(), ownRouting, cfg.OwnBankCode)
+				}
+			}
+			log.Printf("startup: peer-bank collision check passed (%d active peers, none collide with own routing %d / code %s)", len(peerListResp.GetPeerBanks()), ownRouting, cfg.OwnBankCode)
+		}
+	}
+
+	// SP-2a: cross-bank (REMOTE) negotiations live in the unified
+	// OTCNegotiation table now, so the peer-OTC handler + reconciler use the
+	// same OTCNegotiationRepository the local negotiation flows use (its
+	// remote-scoped methods key on routing_number != OwnRouting()).
+	otcNegRepo := repository.NewOTCNegotiationRepository(db)
+	// SP-2a: cross-bank (REMOTE) option contracts are folded into the unified
+	// OptionContract table (routing_number=<counterparty>, native_id=
+	// "<crossbank_tx_id>:<posting_index>") — the dedicated peer_option_contract
+	// mirror was retired. The peer-OTC handler / reconciler / expiry cron /
+	// stale-scan all use the same OptionContractRepository the local contract
+	// flows use (its remote-scoped methods key on routing_number != OwnRouting()).
+	peerOptionRepo := optionContractRepo
 
 	// SP-1 Task 9 — safety-net reconciler for missed cross-bank negotiation
 	// state changes. Polls each active peer's GET /negotiations/{rid}/{id}
@@ -858,7 +902,7 @@ func main() {
 	// visibility and manual triggering.
 	negReconcilerEntry := cronRegistry.Register("peer-otc-neg-reconciler", "Safety-net poll for missed cross-bank negotiation cancels (2 min tick)", 2*time.Minute)
 	negReconciler := service.NewPeerOTCNegotiationReconciler(
-		peerOtcRepo, peerOptionRepo, peerBankAdminClient, nil /* default http.Client */, ownRouting, 2*time.Minute,
+		otcNegRepo, peerOptionRepo, peerBankAdminClient, nil /* default http.Client */, ownRouting, 2*time.Minute,
 	).WithNotifier(producer)
 	go func() {
 		ticker := time.NewTicker(2 * time.Minute)
@@ -888,7 +932,7 @@ func main() {
 		}
 	}()
 
-	peerOtcHandler := handler.NewPeerOTCGRPCHandler(peerOtcRepo, peerOptionRepo, holdingRepo, peerTxClient, ownRouting)
+	peerOtcHandler := handler.NewPeerOTCGRPCHandler(otcNegRepo, peerOptionRepo, holdingRepo, peerTxClient, ownRouting)
 	peerOtcHandler.SetHoldingReserver(holdingReservationSvc)
 	peerOtcHandler = peerOtcHandler.WithNotifier(producer)
 	// Phase 6: cross-bank option discovery — the peer endpoint
@@ -919,11 +963,11 @@ func main() {
 	otcExpiry.Start(ctx)
 
 	// Fix R8 (2026-05-16) — daily safety-net scan: any holding_reservation
-	// stuck `active` past 24h whose linked entity (Order / OptionContract /
-	// PeerOptionContract) is in a terminal state gets logged at WARN for
-	// operator follow-up. Does NOT auto-release (risk of yanking the lock
-	// out from under a long-running saga). Run in a background goroutine
-	// that honors ctx cancellation.
+	// stuck `active` past 24h whose linked entity (Order / local or remote
+	// OptionContract) is in a terminal state gets logged at WARN for operator
+	// follow-up. Does NOT auto-release (risk of yanking the lock out from under
+	// a long-running saga). Run in a background goroutine that honors ctx
+	// cancellation.
 	staleScan := service.NewStaleReservationScanner(db, holdingReservationRepo, orderRepo, optionContractRepo, 24*time.Hour, 24*time.Hour, cronRegistry).
 		WithPeerContracts(peerOptionRepo)
 	go staleScan.Run(ctx)
@@ -939,7 +983,7 @@ func main() {
 	// AcceptNegotiation actually mints OptionContract rows + runs the
 	// premium-payment saga (the saga reserves seller shares + buyer
 	// cash before any money moves).
-	otcNegRepo := repository.NewOTCNegotiationRepository(db)
+	// otcNegRepo constructed above (shared with the peer-OTC handler + reconciler).
 	otcNegotiationSvc := service.NewOTCNegotiationService(db, otcOfferRepo, otcNegRepo).
 		WithContractFormer(otcOfferSvc).
 		WithNotifier(producer)
@@ -964,8 +1008,11 @@ func main() {
 		return out, nil
 	}
 	optionRefresher.WithAggregateBids(cacheAgg)
-	remoteOfferRepo := repository.NewRemoteOTCOfferRepository(db)
-	optionRefresher = optionRefresher.WithMirror(remoteOfferRepo)
+	// SP-2a: remote offers are folded into the unified OTCOffer table as
+	// remote rows (routing=<peer>, native_id=<foreign id>). The OTCOffer
+	// repo satisfies both the refresher's mirror interface and GetOffer's
+	// remote getter; the standalone remote_otc_offer mirror is retired.
+	optionRefresher = optionRefresher.WithMirror(otcOfferRepo)
 	// Now that aggregation and mirror are wired, kick off the refresher (gated by cronreg).
 	optionCacheEntry := cronRegistry.Register("option-offer-cache-refresher", "Refreshes unified option offer cache from local + peer banks", 5*time.Second)
 	go func() {
@@ -1013,8 +1060,8 @@ func main() {
 		WithPeerContracts(peerOptionRepo, ownRouting).
 		WithRatings(ratingSvc).
 		WithNegotiations(otcNegotiationSvc).
-		WithRemoteOffers(remoteOfferRepo, cfg.OwnBankCode).
-		WithPeerNegotiations(peerOtcRepo) // SP-1 Task 7: unified local+remote negotiation list
+		WithRemoteOffers(otcOfferRepo, cfg.OwnBankCode).
+		WithPeerNegotiations(otcNegRepo) // SP-1 Task 7 + SP-2a: unified local+remote negotiation list (REMOTE rows in otc_negotiations)
 
 	// Phase 3: OTC stocks marketplace (sell + buy direction). The
 	// service uses narrow OTCStockListingResolver + OTCStockAccountClient

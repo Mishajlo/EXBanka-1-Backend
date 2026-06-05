@@ -20,13 +20,14 @@ import (
 
 // fakePeerNegLister is an in-memory PeerNegotiationLister for the unified
 // ListMyNegotiations merge tests. It returns whatever rows it was given,
-// ignoring the role filter (the handler always passes "" today).
+// ignoring the role filter (the handler always passes "" today). SP-2a:
+// remote chains are now model.OTCNegotiation rows with the Remote* columns set.
 type fakePeerNegLister struct {
-	rows []model.PeerOtcNegotiation
+	rows []model.OTCNegotiation
 	err  error
 }
 
-func (f *fakePeerNegLister) ListByClient(_ int64, _ string, _ string) ([]model.PeerOtcNegotiation, error) {
+func (f *fakePeerNegLister) ListRemoteNegByClient(_ int64, _ string, _ string) ([]model.OTCNegotiation, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -90,7 +91,11 @@ func seedBidderChain(t *testing.T, db *gorm.DB, bidderID uint64, parentOfferID u
 	return neg.ID
 }
 
-func peerRow(id uint64, buyerRouting int64, buyerID string, sellerRouting int64, sellerID, status string) model.PeerOtcNegotiation {
+// peerRow builds a REMOTE model.OTCNegotiation (SP-2a) with the cross-bank
+// parties + offer in the Remote* columns. The row's RoutingNumber is the
+// counterparty/peer routing — the side WE do NOT host (so the unified read
+// shaping treats it as remote and derives bank_code from it).
+func peerRow(id uint64, buyerRouting int64, buyerID string, sellerRouting int64, sellerID, status string) model.OTCNegotiation {
 	offer := contractsitx.OtcOffer{
 		Ticker:         "ACME",
 		Amount:         5,
@@ -99,18 +104,34 @@ func peerRow(id uint64, buyerRouting int64, buyerID string, sellerRouting int64,
 		SettlementDate: "2030-01-01",
 	}
 	js, _ := json.Marshal(offer)
-	return model.PeerOtcNegotiation{
-		ID:                  id,
-		PeerBankCode:        "222",
-		ForeignID:           "neg-uuid",
-		BuyerRoutingNumber:  buyerRouting,
-		BuyerID:             buyerID,
-		SellerRoutingNumber: sellerRouting,
-		SellerID:            sellerID,
-		OfferJSON:           string(js),
-		Status:              status,
-		CreatedAt:           time.Now(),
-		UpdatedAt:           time.Now(),
+	jsStr := string(js)
+	native := "neg-uuid"
+	bR := buyerRouting
+	sR := sellerRouting
+	bID := buyerID
+	sID := sellerID
+	// The peer/counterparty routing is whichever side is NOT ownRouting on the
+	// fixture (111). Tests pass exactly one side as 111, so the OTHER is the
+	// counterparty routing the remote row should be keyed under.
+	peerRouting := buyerRouting
+	if buyerRouting == 111 {
+		peerRouting = sellerRouting
+	}
+	return model.OTCNegotiation{
+		ID:                        id,
+		RoutingNumber:             peerRouting,
+		NativeID:                  &native,
+		BidderOwnerType:           model.OwnerBank,
+		Status:                    status,
+		RemoteOfferJSON:           &jsStr,
+		RemoteBuyerRouting:        &bR,
+		RemoteBuyerID:             &bID,
+		RemoteSellerRouting:       &sR,
+		RemoteSellerID:            &sID,
+		LastActionByPrincipalType: "system",
+		LastActionByOwnerType:     string(model.OwnerBank),
+		CreatedAt:                 time.Now(),
+		UpdatedAt:                 time.Now(),
 	}
 }
 
@@ -151,7 +172,7 @@ func TestListMyNegotiations_LocalBidderChain(t *testing.T) {
 func TestListMyNegotiations_RemoteWeHostBuyer(t *testing.T) {
 	const ownRouting int64 = 111
 	const peerSellerRouting int64 = 222
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		peerRow(55, ownRouting, "client-7", peerSellerRouting, "client-3", "ongoing"),
 	}}
 	h, _ := newUnifiedNegFixture(t, ownRouting, "111", peer)
@@ -178,12 +199,13 @@ func TestListMyNegotiations_RemoteWeHostBuyer(t *testing.T) {
 	if got.GetRoutingNumber() != peerSellerRouting {
 		t.Errorf("routing_number = %d want %d (counterparty seller bank)", got.GetRoutingNumber(), peerSellerRouting)
 	}
-	// bank_code comes from the stored PeerBankCode field (authoritative),
-	// not re-derived from routing. peerRow always seeds PeerBankCode="222".
+	// SP-2a: bank_code is derived from the counterparty routing (the side we
+	// do NOT host). We host the buyer (111), so the counterparty is the
+	// seller's bank (222).
 	if got.GetBankCode() != "222" {
-		t.Errorf("bank_code = %q want 222 (stored PeerBankCode)", got.GetBankCode())
+		t.Errorf("bank_code = %q want 222 (counterparty seller bank)", got.GetBankCode())
 	}
-	// Terms mapped from OfferJSON.
+	// Terms mapped from RemoteOfferJSON.
 	if got.GetQuantity() != "5" {
 		t.Errorf("quantity = %q want 5", got.GetQuantity())
 	}
@@ -201,7 +223,7 @@ func TestListMyNegotiations_RemoteWeHostBuyer(t *testing.T) {
 func TestListMyNegotiations_RemoteWeHostSeller(t *testing.T) {
 	const ownRouting int64 = 111
 	const peerBuyerRouting int64 = 333
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		peerRow(77, peerBuyerRouting, "client-9", ownRouting, "client-7", "ongoing"),
 	}}
 	h, _ := newUnifiedNegFixture(t, ownRouting, "111", peer)
@@ -225,12 +247,10 @@ func TestListMyNegotiations_RemoteWeHostSeller(t *testing.T) {
 	if got.GetRoutingNumber() != peerBuyerRouting {
 		t.Errorf("routing_number = %d want %d (counterparty buyer bank)", got.GetRoutingNumber(), peerBuyerRouting)
 	}
-	// bank_code comes from the stored PeerBankCode field, NOT from the
-	// counterparty's routing number. peerRow seeds PeerBankCode="222"
-	// regardless of which side is buyer/seller, so the value here is "222"
-	// even though peerBuyerRouting is 333.
-	if got.GetBankCode() != "222" {
-		t.Errorf("bank_code = %q want 222 (stored PeerBankCode, not counterparty routing %d)", got.GetBankCode(), peerBuyerRouting)
+	// SP-2a: bank_code is derived from the counterparty routing. We host the
+	// seller (111), so the counterparty is the buyer's bank (333).
+	if got.GetBankCode() != "333" {
+		t.Errorf("bank_code = %q want 333 (counterparty buyer bank)", got.GetBankCode())
 	}
 }
 
@@ -238,7 +258,7 @@ func TestListMyNegotiations_RemoteWeHostSeller(t *testing.T) {
 // a remote peer chain are returned in one list, each with its own kind.
 func TestListMyNegotiations_MergesLocalAndRemote(t *testing.T) {
 	const ownRouting int64 = 111
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		peerRow(55, ownRouting, "client-7", 222, "client-3", "ongoing"),
 	}}
 	h, db := newUnifiedNegFixture(t, ownRouting, "111", peer)
@@ -272,7 +292,7 @@ func TestListMyNegotiations_MergesLocalAndRemote(t *testing.T) {
 // the same status filter as local ones).
 func TestListMyNegotiations_RemoteStatusFilter(t *testing.T) {
 	const ownRouting int64 = 111
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		peerRow(55, ownRouting, "client-7", 222, "client-3", "ongoing"),
 	}}
 	h, _ := newUnifiedNegFixture(t, ownRouting, "111", peer)
@@ -293,7 +313,7 @@ func TestListMyNegotiations_RemoteStatusFilter(t *testing.T) {
 // bank has no cross-bank client identity, so no remote rows are merged.
 func TestListMyNegotiations_BankCallerSkipsRemote(t *testing.T) {
 	const ownRouting int64 = 111
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		peerRow(55, ownRouting, "client-7", 222, "client-3", "ongoing"),
 	}}
 	h, _ := newUnifiedNegFixture(t, ownRouting, "111", peer)

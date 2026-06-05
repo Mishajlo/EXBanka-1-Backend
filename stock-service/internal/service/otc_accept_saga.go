@@ -123,8 +123,9 @@ func (s *OTCOfferService) Accept(ctx context.Context, in AcceptInput) (*model.Op
 	sagaID := uuid.NewString()
 	qty := o.Quantity.IntPart()
 
+	acceptOfferID := o.ID
 	contract := &model.OptionContract{
-		OfferID:         o.ID,
+		OfferID:         &acceptOfferID,
 		BuyerOwnerType:  buyerOwnerType,
 		BuyerOwnerID:    buyerOwnerID,
 		SellerOwnerType: sellerOwnerType,

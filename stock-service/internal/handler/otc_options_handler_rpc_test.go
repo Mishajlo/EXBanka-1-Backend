@@ -44,7 +44,6 @@ func newOTCOptionsHandlerFixture(t *testing.T) *otcOptionsHandlerFixture {
 		&model.OTCOfferRevision{},
 		&model.OptionContract{},
 		&model.OTCOfferReadReceipt{},
-		&model.PeerOptionContract{},
 		&model.Listing{},
 		&model.Stock{},
 	); err != nil {
@@ -242,11 +241,11 @@ func TestOTCOptionsHandler_GetOffer_NotFound(t *testing.T) {
 // fakeRemoteOffers is a stub RemoteOfferGetter for GetOffer's remote-resolution
 // path. row==nil + err set simulates a mirror miss.
 type fakeRemoteOffers struct {
-	row *model.RemoteOTCOffer
+	row *model.OTCOffer
 	err error
 }
 
-func (f *fakeRemoteOffers) GetByID(uint64) (*model.RemoteOTCOffer, error) {
+func (f *fakeRemoteOffers) GetRemoteByID(uint64) (*model.OTCOffer, error) {
 	if f.row != nil {
 		return f.row, nil
 	}
@@ -308,13 +307,20 @@ func TestOTCOptionsHandler_GetOffer_LocalProvenanceAndMeOwner(t *testing.T) {
 // with kind="remote" and me_owner=false.
 func TestOTCOptionsHandler_GetOffer_RemoteResolution(t *testing.T) {
 	fx := newOTCOptionsHandlerFixture(t)
-	remote := &model.RemoteOTCOffer{
-		ID: 555, PeerRoutingNumber: 222, ForeignOfferID: "abc",
-		BankCode: "222", SellerID: "client-9", Direction: model.OTCDirectionSellInitiated,
-		Ticker: "AAPL", Amount: 10, StrikePrice: decimal.NewFromInt(150),
-		StrikeCurrency: "USD", Premium: decimal.NewFromInt(20), PremiumCurrency: "USD",
-		SettlementDate: "2026-12-31T00:00:00Z", PeerCreatedAt: "2026-06-01T00:00:00Z",
-		Status: "open",
+	foreignID := "abc"
+	bankCode := "222"
+	sellerID := "client-9"
+	strikeCcy := "USD"
+	premiumCcy := "USD"
+	remote := &model.OTCOffer{
+		ID: 555, RoutingNumber: 222, NativeID: &foreignID,
+		InitiatorBankCode: &bankCode, RemoteSellerID: &sellerID,
+		InitiatorOwnerType: model.OwnerBank,
+		Direction:          model.OTCDirectionSellInitiated,
+		Ticker:             "AAPL", Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
+		StrikeCurrency: &strikeCcy, Premium: decimal.NewFromInt(20), PremiumCurrency: &premiumCcy,
+		SettlementDate: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
+		Status:         "open",
 	}
 	h := fx.h.WithRemoteOffers(&fakeRemoteOffers{row: remote}, "111")
 
@@ -512,7 +518,7 @@ func TestOTCOptionsHandler_ListMyContracts_HappyPath(t *testing.T) {
 // fix: remote contracts appear only in Contracts[] with kind=remote).
 func TestOTCOptionsHandler_ListMyContracts_WithPeerContracts(t *testing.T) {
 	fx := newOTCOptionsHandlerFixture(t)
-	peerRepo := repository.NewPeerOptionContractRepository(fx.db)
+	peerRepo := repository.NewOptionContractRepository(fx.db)
 	h := fx.h.WithPeerContracts(peerRepo, 111)
 	resp, err := h.ListMyContracts(context.Background(), &stockpb.ListMyContractsRequest{
 		ActorUserId: 7, ActorSystemType: "client",

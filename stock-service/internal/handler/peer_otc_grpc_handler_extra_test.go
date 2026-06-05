@@ -894,29 +894,19 @@ func TestInitiateOptionExercise_SpecPseudoAccountForm(t *testing.T) {
 	// every field value (Ticker, StrikePrice, Quantity, NegotiationID, …)
 	// without going through the RecordOptionContract / OptionDescription
 	// JSON path.
-	if err := db.Create(&model.PeerOptionContract{
-		CrossbankTxID:            "seed:spec-1",
-		PostingIndex:             0,
-		NegotiationRoutingNumber: 111,
-		NegotiationID:            "neg-1",
-		BuyerRoutingNumber:       111,
-		BuyerID:                  "client-1",
-		SellerRoutingNumber:      222,
-		SellerID:                 "seller-1",
-		Ticker:                   "WMT",
-		Quantity:                 10,
-		StrikePrice:              decimal.NewFromInt(50),
-		Currency:                 "RSD",
-		SettlementDate:           "2028-01-01",
-		Direction:                contractsitx.DirectionCredit, // buyer side
-		Status:                   "active",
-	}).Error; err != nil {
+	// SP-2a: REMOTE buyer-side (CREDIT) contract. We host the buyer (111); the
+	// seller's bank (222) is the counterparty, so routing_number=222.
+	if err := db.Create(seedRemoteContractRow(
+		222, "seed:spec-1", 0, contractsitx.DirectionCredit, 111, "neg-1",
+		111, "client-1", 222, "seller-1",
+		"WMT", 10, decimal.NewFromInt(50), "RSD", "2028-01-01", "active",
+	)).Error; err != nil {
 		t.Fatalf("seed contract: %v", err)
 	}
 
 	// Retrieve the auto-assigned ID.
-	var contract model.PeerOptionContract
-	if err := db.Where("negotiation_id = ?", "neg-1").First(&contract).Error; err != nil {
+	var contract model.OptionContract
+	if err := db.Where("remote_negotiation_native_id = ?", "neg-1").First(&contract).Error; err != nil {
 		t.Fatalf("load seeded contract: %v", err)
 	}
 

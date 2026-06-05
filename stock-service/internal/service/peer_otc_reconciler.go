@@ -33,6 +33,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,22 +60,25 @@ type ReconcilerNotifier interface {
 }
 
 // peerOtcNegRepo is the narrow repo surface the reconciler uses. Satisfied
-// by *repository.PeerOtcNegotiationRepository.
+// by *repository.OTCNegotiationRepository (SP-2a — cross-bank negotiations are
+// REMOTE rows in the unified otc_negotiations table). Routing is passed as an
+// int64 (the peer's routing), not a bank-code string.
 type peerOtcNegRepo interface {
-	ListOngoing() ([]model.PeerOtcNegotiation, error)
-	UpdateStatus(peerCode, foreignID, status string) error
+	ListRemoteNegOngoing() ([]model.OTCNegotiation, error)
+	UpdateRemoteNegStatus(routing int64, native, status string) error
 }
 
 // peerContractChecker is the narrow interface the reconciler uses to determine
-// whether a local peer_option_contract row exists for a given negotiation.
-// When the peer reports isOngoing=false, a contract row proves the negotiation
-// was ACCEPTED (not cancelled) — so we reconcile our row to "accepted" instead
-// of "cancelled". Satisfied by *repository.PeerOptionContractRepository.
+// whether a remote option-contract row exists for a given negotiation. When the
+// peer reports isOngoing=false, a contract row proves the negotiation was
+// ACCEPTED (not cancelled) — so we reconcile our row to "accepted" instead of
+// "cancelled". Satisfied by *repository.OptionContractRepository (the unified
+// table; remote contracts folded in by SP-2a).
 type peerContractChecker interface {
-	// HasContractForNegotiation returns true if any peer_option_contracts row
-	// exists with the given negotiation_routing_number + negotiation_id.
+	// HasRemoteContractForNegotiation returns true if any remote option-contract
+	// row exists with the given negotiation routing + native id.
 	// A DB error is returned as (false, err); not-found is (false, nil).
-	HasContractForNegotiation(negotiationRoutingNumber int64, negotiationID string) (bool, error)
+	HasRemoteContractForNegotiation(negRouting int64, negNative string) (bool, error)
 }
 
 // PeerOTCNegotiationReconciler polls every active peer bank for the current
@@ -95,7 +99,7 @@ type PeerOTCNegotiationReconciler struct {
 // 5-second timeout. contractChecker may be nil (disables the acceptance guard —
 // should only be nil in legacy tests; production always passes the real repo).
 func NewPeerOTCNegotiationReconciler(
-	repo *repository.PeerOtcNegotiationRepository,
+	repo *repository.OTCNegotiationRepository,
 	contractChecker peerContractChecker,
 	peerAdmin transactionpb.PeerBankAdminServiceClient,
 	httpClient *http.Client,
@@ -152,7 +156,7 @@ func (r *PeerOTCNegotiationReconciler) RunOnce(ctx context.Context) {
 // reconcile performs one full poll cycle. Per-row errors are logged and
 // skipped — the loop never aborts on a single failure.
 func (r *PeerOTCNegotiationReconciler) reconcile(ctx context.Context) {
-	rows, err := r.repo.ListOngoing()
+	rows, err := r.repo.ListRemoteNegOngoing()
 	if err != nil {
 		log.Printf("peer-otc-reconciler: list ongoing failed: %v", err)
 		return
@@ -176,10 +180,45 @@ func (r *PeerOTCNegotiationReconciler) reconcile(ctx context.Context) {
 	for i := range rows {
 		row := &rows[i]
 		if err := r.reconcileRow(cycleCtx, row, peerMap); err != nil {
-			log.Printf("peer-otc-reconciler: row peer=%s fid=%s error: %v",
-				row.PeerBankCode, row.ForeignID, err)
+			log.Printf("peer-otc-reconciler: row peer=%d fid=%s error: %v",
+				row.RoutingNumber, reconcilerNativeID(row), err)
 		}
 	}
+}
+
+// reconcilerNativeID / reconcilerRemoteBuyer / reconcilerRemoteSeller read the
+// unified remote-row columns the reconciler needs (SP-2a). A REMOTE
+// negotiation carries its parties in the Remote* columns and its foreign id in
+// NativeID; the row's RoutingNumber is the counterparty/peer routing.
+func reconcilerNativeID(n *model.OTCNegotiation) string {
+	if n.NativeID != nil {
+		return *n.NativeID
+	}
+	return ""
+}
+
+func reconcilerRemoteBuyer(n *model.OTCNegotiation) (int64, string) {
+	var r int64
+	var id string
+	if n.RemoteBuyerRouting != nil {
+		r = *n.RemoteBuyerRouting
+	}
+	if n.RemoteBuyerID != nil {
+		id = *n.RemoteBuyerID
+	}
+	return r, id
+}
+
+func reconcilerRemoteSeller(n *model.OTCNegotiation) (int64, string) {
+	var r int64
+	var id string
+	if n.RemoteSellerRouting != nil {
+		r = *n.RemoteSellerRouting
+	}
+	if n.RemoteSellerID != nil {
+		id = *n.RemoteSellerID
+	}
+	return r, id
 }
 
 // peerEntry holds resolved base URL + API key for one peer bank.
@@ -243,19 +282,23 @@ func (r *PeerOTCNegotiationReconciler) buildPeerMap(ctx context.Context) (map[st
 // tick. We never cancel based on ambiguous data.
 func (r *PeerOTCNegotiationReconciler) reconcileRow(
 	ctx context.Context,
-	row *model.PeerOtcNegotiation,
+	row *model.OTCNegotiation,
 	peerMap map[string]peerEntry,
 ) error {
-	peer, ok := peerMap[row.PeerBankCode]
+	// The remote row's RoutingNumber IS the counterparty/peer routing (the
+	// bank that issued the foreign id); its string form is the peer bank code
+	// used to key the resolved-peer map.
+	peerBankCode := strconv.FormatInt(row.RoutingNumber, 10)
+	foreignID := reconcilerNativeID(row)
+	peer, ok := peerMap[peerBankCode]
 	if !ok {
 		// Peer not active or not reachable — skip silently.
 		return nil
 	}
 
 	// Determine the rid to use for the GET request. The ForeignID was
-	// minted by the peer (PeerBankCode), so we use the peer's routing
-	// number. We derive routing from the BuyerRoutingNumber or
-	// SellerRoutingNumber that belongs to the peer (not us).
+	// minted by the peer, so we use the peer's routing number. We derive
+	// routing from whichever party (buyer/seller) belongs to the peer (not us).
 	peerRouting := r.peerRoutingForRow(row)
 	if peerRouting == 0 {
 		// Can't determine peer routing — skip.
@@ -263,10 +306,10 @@ func (r *PeerOTCNegotiationReconciler) reconcileRow(
 	}
 
 	ridStr := fmt.Sprintf("%d", peerRouting)
-	ongoing, err := r.fetcher(ctx, peer.baseURL, peer.apiKey, ridStr, row.ForeignID)
+	ongoing, err := r.fetcher(ctx, peer.baseURL, peer.apiKey, ridStr, foreignID)
 	if err != nil {
 		// False-cancel guard: any error ⇒ skip this row.
-		return fmt.Errorf("poll peer %s: %w", row.PeerBankCode, err)
+		return fmt.Errorf("poll peer %s: %w", peerBankCode, err)
 	}
 	if ongoing {
 		// Peer says still ongoing — nothing to do.
@@ -280,13 +323,13 @@ func (r *PeerOTCNegotiationReconciler) reconcileRow(
 	// An accepted negotiation must never be reconciled to "cancelled".
 	targetStatus := "cancelled"
 	if r.contractChecker != nil {
-		// The NegotiationRoutingNumber in peer_option_contracts is the
-		// routing number of the bank that issued the negotiation ForeignID,
-		// which is the peer routing number for this row.
-		hasContract, checkErr := r.contractChecker.HasContractForNegotiation(peerRouting, row.ForeignID)
+		// The remote contract's negotiation routing is the routing number of
+		// the bank that issued the negotiation ForeignID, which is the peer
+		// routing number for this row.
+		hasContract, checkErr := r.contractChecker.HasRemoteContractForNegotiation(peerRouting, foreignID)
 		if checkErr != nil {
 			// False-cancel guard: contract check error ⇒ skip this row.
-			return fmt.Errorf("contract check peer=%s fid=%s: %w", row.PeerBankCode, row.ForeignID, checkErr)
+			return fmt.Errorf("contract check peer=%s fid=%s: %w", peerBankCode, foreignID, checkErr)
 		}
 		if hasContract {
 			targetStatus = "accepted"
@@ -294,8 +337,8 @@ func (r *PeerOTCNegotiationReconciler) reconcileRow(
 	}
 
 	log.Printf("peer-otc-reconciler: reconciling peer=%s fid=%s → %s (peer reports non-ongoing)",
-		row.PeerBankCode, row.ForeignID, targetStatus)
-	if err := r.repo.UpdateStatus(row.PeerBankCode, row.ForeignID, targetStatus); err != nil {
+		peerBankCode, foreignID, targetStatus)
+	if err := r.repo.UpdateRemoteNegStatus(row.RoutingNumber, foreignID, targetStatus); err != nil {
 		return fmt.Errorf("update status: %w", err)
 	}
 
@@ -307,15 +350,17 @@ func (r *PeerOTCNegotiationReconciler) reconcileRow(
 	return nil
 }
 
-// peerRoutingForRow returns the routing number of the peer bank (PeerBankCode)
-// by choosing whichever routing number in the row does NOT match ownRouting.
-// If both sides are ownRouting (shouldn't happen in practice), returns 0.
-func (r *PeerOTCNegotiationReconciler) peerRoutingForRow(row *model.PeerOtcNegotiation) int64 {
-	if row.BuyerRoutingNumber != r.ownRouting {
-		return row.BuyerRoutingNumber
+// peerRoutingForRow returns the routing number of the peer bank by choosing
+// whichever party routing in the row does NOT match ownRouting. If both sides
+// are ownRouting (shouldn't happen in practice), returns 0.
+func (r *PeerOTCNegotiationReconciler) peerRoutingForRow(row *model.OTCNegotiation) int64 {
+	buyerRouting, _ := reconcilerRemoteBuyer(row)
+	sellerRouting, _ := reconcilerRemoteSeller(row)
+	if buyerRouting != r.ownRouting {
+		return buyerRouting
 	}
-	if row.SellerRoutingNumber != r.ownRouting {
-		return row.SellerRoutingNumber
+	if sellerRouting != r.ownRouting {
+		return sellerRouting
 	}
 	// Both sides are ownRouting — intra-bank or malformed row; skip.
 	return 0
@@ -323,13 +368,15 @@ func (r *PeerOTCNegotiationReconciler) peerRoutingForRow(row *model.PeerOtcNegot
 
 // notifyLocalParty sends a best-effort OTC_OFFER_CANCELLED notification to
 // whichever party in the row is a local client (client-N on ownRouting).
-func (r *PeerOTCNegotiationReconciler) notifyLocalParty(ctx context.Context, row *model.PeerOtcNegotiation) {
+func (r *PeerOTCNegotiationReconciler) notifyLocalParty(ctx context.Context, row *model.OTCNegotiation) {
 	if r.notifier == nil {
 		return
 	}
-	uid, ok := localClientID(r.ownRouting, row.BuyerRoutingNumber, row.BuyerID)
+	buyerRouting, buyerID := reconcilerRemoteBuyer(row)
+	sellerRouting, sellerID := reconcilerRemoteSeller(row)
+	uid, ok := localClientID(r.ownRouting, buyerRouting, buyerID)
 	if !ok {
-		uid, ok = localClientID(r.ownRouting, row.SellerRoutingNumber, row.SellerID)
+		uid, ok = localClientID(r.ownRouting, sellerRouting, sellerID)
 	}
 	if !ok || uid == 0 {
 		return

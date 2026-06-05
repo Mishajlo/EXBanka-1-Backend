@@ -57,9 +57,10 @@ func TestMapOTCErr_Passthrough(t *testing.T) {
 func TestToContractProto_NoTimestamps(t *testing.T) {
 	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	uid := uint64(7)
+	offerID := uint64(5)
 	c := &model.OptionContract{
 		ID:              42,
-		OfferID:         5,
+		OfferID:         &offerID,
 		StockID:         99,
 		Quantity:        decimal.NewFromInt(100),
 		StrikePrice:     decimal.NewFromInt(150),

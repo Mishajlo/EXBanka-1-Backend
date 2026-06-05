@@ -135,7 +135,7 @@ func TestHistory_MergesLocalAndRemote(t *testing.T) {
 	const ownRouting int64 = 111
 	const peerSellerRouting int64 = 222
 	// Remote chain: WE host the buyer (client-7), so me_owner=false.
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		peerRow(55, ownRouting, "client-7", peerSellerRouting, "client-3", "accepted"),
 	}}
 	h, db := newHistoryFixture(t, ownRouting, "111", peer)
@@ -187,7 +187,7 @@ func TestHistory_MergesLocalAndRemote(t *testing.T) {
 func TestHistory_RemoteWeHostSeller_MeOwnerTrue(t *testing.T) {
 	const ownRouting int64 = 111
 	const peerBuyerRouting int64 = 333
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		peerRow(77, peerBuyerRouting, "client-9", ownRouting, "client-7", "accepted"),
 	}}
 	h, _ := newHistoryFixture(t, ownRouting, "111", peer)
@@ -210,7 +210,7 @@ func TestHistory_RemoteWeHostSeller_MeOwnerTrue(t *testing.T) {
 // is NOT surfaced in the history view.
 func TestHistory_RemoteExcludesActiveStatus(t *testing.T) {
 	const ownRouting int64 = 111
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		peerRow(55, ownRouting, "client-7", 222, "client-3", "ongoing"), // active, not terminal
 	}}
 	h, _ := newHistoryFixture(t, ownRouting, "111", peer)
@@ -230,7 +230,7 @@ func TestHistory_RemoteExcludesActiveStatus(t *testing.T) {
 // accepted remote chain but excludes a cancelled/rejected one.
 func TestHistory_RemoteStatusFilterMapping(t *testing.T) {
 	const ownRouting int64 = 111
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		peerRow(55, ownRouting, "client-7", 222, "client-3", "accepted"),
 		peerRow(56, ownRouting, "client-7", 222, "client-3", "cancelled"),
 	}}
@@ -255,7 +255,7 @@ func TestHistory_RemoteStatusFilterMapping(t *testing.T) {
 // cross-bank identity → no remote chains merged.
 func TestHistory_BankCallerSkipsRemote(t *testing.T) {
 	const ownRouting int64 = 111
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		peerRow(55, ownRouting, "client-7", 222, "client-3", "accepted"),
 	}}
 	h, _ := newHistoryFixture(t, ownRouting, "111", peer)

@@ -47,11 +47,11 @@ func seedLocalListing(t *testing.T, db *gorm.DB, offerID, posterID uint64) {
 // remote-id tests. A nil entry for an id models "not a remote mirror" via
 // gorm.ErrRecordNotFound.
 type fakeRemoteOfferGetter struct {
-	byID map[uint64]*model.RemoteOTCOffer
+	byID map[uint64]*model.OTCOffer
 	err  error
 }
 
-func (f *fakeRemoteOfferGetter) GetByID(id uint64) (*model.RemoteOTCOffer, error) {
+func (f *fakeRemoteOfferGetter) GetRemoteByID(id uint64) (*model.OTCOffer, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -61,14 +61,30 @@ func (f *fakeRemoteOfferGetter) GetByID(id uint64) (*model.RemoteOTCOffer, error
 	return nil, gorm.ErrRecordNotFound
 }
 
-// peerRowWithParent is peerRow plus the (ParentOfferRouting, ParentOfferID) lot
-// key that ties a peer chain to a specific remote listing.
-func peerRowWithParent(id uint64, buyerRouting int64, buyerID string, sellerRouting int64, sellerID, status string, parentRouting int64, parentID string) model.PeerOtcNegotiation {
+// remoteMirrorRow builds a folded-in remote OTCOffer row for the listing-view
+// tests: routing=<peer>, native_id=<foreign id>, plus the remote-display
+// columns. Mirrors what the refresher writes via UpsertRemote.
+func remoteMirrorRow(id uint64, peerRouting int64, foreignID, bankCode, sellerID, ticker, status string) *model.OTCOffer {
+	nid := foreignID
+	bc := bankCode
+	sid := sellerID
+	return &model.OTCOffer{
+		ID: id, RoutingNumber: peerRouting, NativeID: &nid,
+		InitiatorBankCode: &bc, RemoteSellerID: &sid,
+		InitiatorOwnerType: model.OwnerBank,
+		Ticker:             ticker, Status: status,
+	}
+}
+
+// peerRowWithParent is peerRow plus the (RemoteParentRouting,
+// RemoteParentNativeID) lot key that ties a remote chain to a specific remote
+// listing (SP-2a).
+func peerRowWithParent(id uint64, buyerRouting int64, buyerID string, sellerRouting int64, sellerID, status string, parentRouting int64, parentID string) model.OTCNegotiation {
 	row := peerRow(id, buyerRouting, buyerID, sellerRouting, sellerID, status)
 	pr := parentRouting
 	pid := parentID
-	row.ParentOfferRouting = &pr
-	row.ParentOfferID = &pid
+	row.RemoteParentRouting = &pr
+	row.RemoteParentNativeID = &pid
 	return row
 }
 
@@ -176,10 +192,10 @@ func TestListingNegotiations_BidderForbidden(t *testing.T) {
 func TestListingNegotiations_RemoteId_OwnChainOnly(t *testing.T) {
 	const ownRouting int64 = 111
 	const peerSellerRouting int64 = 222
-	remote := &fakeRemoteOfferGetter{byID: map[uint64]*model.RemoteOTCOffer{
-		900: {ID: 900, PeerRoutingNumber: peerSellerRouting, ForeignOfferID: "foreign-7", BankCode: "222", SellerID: "client-3"},
+	remote := &fakeRemoteOfferGetter{byID: map[uint64]*model.OTCOffer{
+		900: remoteMirrorRow(900, peerSellerRouting, "foreign-7", "222", "client-3", "", ""),
 	}}
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		// Caller's own chain against the remote listing (matching lot key).
 		peerRowWithParent(55, ownRouting, "client-7", peerSellerRouting, "client-3", "ongoing", peerSellerRouting, "foreign-7"),
 		// Caller's chain against a DIFFERENT remote listing — must be excluded.
@@ -214,8 +230,8 @@ func TestListingNegotiations_RemoteId_OwnChainOnly(t *testing.T) {
 // the caller has no chain returns an empty list, NOT a 404.
 func TestListingNegotiations_RemoteId_NoOwnChain_Empty(t *testing.T) {
 	const ownRouting int64 = 111
-	remote := &fakeRemoteOfferGetter{byID: map[uint64]*model.RemoteOTCOffer{
-		900: {ID: 900, PeerRoutingNumber: 222, ForeignOfferID: "foreign-7", BankCode: "222", SellerID: "client-3"},
+	remote := &fakeRemoteOfferGetter{byID: map[uint64]*model.OTCOffer{
+		900: remoteMirrorRow(900, 222, "foreign-7", "222", "client-3", "", ""),
 	}}
 	h, _ := newListingViewsFixture(t, ownRouting, remote, &fakePeerNegLister{})
 
@@ -251,10 +267,10 @@ func TestListingNegotiations_UnknownId_NotFound(t *testing.T) {
 func TestTimeline_RemoteId_OwnChainOnly(t *testing.T) {
 	const ownRouting int64 = 111
 	const peerSellerRouting int64 = 222
-	remote := &fakeRemoteOfferGetter{byID: map[uint64]*model.RemoteOTCOffer{
-		900: {ID: 900, PeerRoutingNumber: peerSellerRouting, ForeignOfferID: "foreign-7", BankCode: "222", SellerID: "client-3", Ticker: "ACME", Status: "open"},
+	remote := &fakeRemoteOfferGetter{byID: map[uint64]*model.OTCOffer{
+		900: remoteMirrorRow(900, peerSellerRouting, "foreign-7", "222", "client-3", "ACME", "open"),
 	}}
-	peer := &fakePeerNegLister{rows: []model.PeerOtcNegotiation{
+	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
 		peerRowWithParent(55, ownRouting, "client-7", peerSellerRouting, "client-3", "ongoing", peerSellerRouting, "foreign-7"),
 		peerRowWithParent(56, ownRouting, "client-7", peerSellerRouting, "client-3", "ongoing", peerSellerRouting, "foreign-other"),
 	}}
@@ -284,8 +300,8 @@ func TestTimeline_RemoteId_OwnChainOnly(t *testing.T) {
 // no chain on returns the offer header with an empty timeline, not a 404.
 func TestTimeline_RemoteId_NoOwnChain_HeaderOnly(t *testing.T) {
 	const ownRouting int64 = 111
-	remote := &fakeRemoteOfferGetter{byID: map[uint64]*model.RemoteOTCOffer{
-		900: {ID: 900, PeerRoutingNumber: 222, ForeignOfferID: "foreign-7", BankCode: "222", SellerID: "client-3", Ticker: "ACME"},
+	remote := &fakeRemoteOfferGetter{byID: map[uint64]*model.OTCOffer{
+		900: remoteMirrorRow(900, 222, "foreign-7", "222", "client-3", "ACME", ""),
 	}}
 	h, _ := newListingViewsFixture(t, ownRouting, remote, &fakePeerNegLister{})
 

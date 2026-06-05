@@ -17,29 +17,56 @@ import (
 
 type fakeNegRepo struct {
 	mu      sync.Mutex
-	rows    []model.PeerOtcNegotiation
+	rows    []model.OTCNegotiation
 	updates []updateCall
 }
 
 type updateCall struct {
-	peerCode  string
+	routing   int64
 	foreignID string
 	status    string
 }
 
-func (f *fakeNegRepo) ListOngoing() ([]model.PeerOtcNegotiation, error) {
+func (f *fakeNegRepo) ListRemoteNegOngoing() ([]model.OTCNegotiation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]model.PeerOtcNegotiation, len(f.rows))
+	out := make([]model.OTCNegotiation, len(f.rows))
 	copy(out, f.rows)
 	return out, nil
 }
 
-func (f *fakeNegRepo) UpdateStatus(peerCode, foreignID, status string) error {
+func (f *fakeNegRepo) UpdateRemoteNegStatus(routing int64, native, status string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.updates = append(f.updates, updateCall{peerCode, foreignID, status})
+	f.updates = append(f.updates, updateCall{routing, native, status})
 	return nil
+}
+
+// remoteNegRow builds a REMOTE model.OTCNegotiation (SP-2a) the reconciler can
+// read: parties live in the Remote* columns, the foreign id in NativeID, and
+// RoutingNumber is the counterparty/peer routing (the side != ownRouting). The
+// ownRouting passed is the bank's own routing so the helper can pick which side
+// is the peer.
+func remoteNegRow(id uint64, ownRouting, buyerRouting int64, buyerID string, sellerRouting int64, sellerID, foreignID, status string) model.OTCNegotiation {
+	bR := buyerRouting
+	sR := sellerRouting
+	bID := buyerID
+	sID := sellerID
+	native := foreignID
+	peerRouting := buyerRouting
+	if buyerRouting == ownRouting {
+		peerRouting = sellerRouting
+	}
+	return model.OTCNegotiation{
+		ID:                  id,
+		RoutingNumber:       peerRouting,
+		NativeID:            &native,
+		Status:              status,
+		RemoteBuyerRouting:  &bR,
+		RemoteBuyerID:       &bID,
+		RemoteSellerRouting: &sR,
+		RemoteSellerID:      &sID,
+	}
 }
 
 func (f *fakeNegRepo) getUpdates() []updateCall {
@@ -63,7 +90,7 @@ type contractCheckCall struct {
 	negID   string
 }
 
-func (f *fakeContractChecker) HasContractForNegotiation(routing int64, negID string) (bool, error) {
+func (f *fakeContractChecker) HasRemoteContractForNegotiation(routing int64, negID string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, contractCheckCall{routing, negID})
@@ -187,17 +214,8 @@ func TestPeerOTCReconciler_ReconcileRow_FetcherReportsCancelled_FlipsStatus(t *t
 	)
 
 	repo := &fakeNegRepo{
-		rows: []model.PeerOtcNegotiation{
-			{
-				ID:                  1,
-				PeerBankCode:        peerCode,
-				ForeignID:           foreignID,
-				BuyerRoutingNumber:  peerRouting,
-				BuyerID:             buyerID,
-				SellerRoutingNumber: ownRouting,
-				SellerID:            sellerID,
-				Status:              "ongoing",
-			},
+		rows: []model.OTCNegotiation{
+			remoteNegRow(1, ownRouting, peerRouting, buyerID, ownRouting, sellerID, foreignID, "ongoing"),
 		},
 	}
 
@@ -221,7 +239,7 @@ func TestPeerOTCReconciler_ReconcileRow_FetcherReportsCancelled_FlipsStatus(t *t
 		t.Fatalf("expected 1 UpdateStatus call, got %d", len(updates))
 	}
 	u := updates[0]
-	if u.peerCode != peerCode || u.foreignID != foreignID || u.status != "cancelled" {
+	if u.routing != peerRouting || u.foreignID != foreignID || u.status != "cancelled" {
 		t.Errorf("unexpected update: %+v", u)
 	}
 }
@@ -239,17 +257,8 @@ func TestPeerOTCReconciler_ReconcileRow_FetcherError_NoStatusChange(t *testing.T
 	)
 
 	repo := &fakeNegRepo{
-		rows: []model.PeerOtcNegotiation{
-			{
-				ID:                  2,
-				PeerBankCode:        peerCode,
-				ForeignID:           foreignID,
-				BuyerRoutingNumber:  peerRouting,
-				BuyerID:             "client-7",
-				SellerRoutingNumber: ownRouting,
-				SellerID:            "client-5",
-				Status:              "ongoing",
-			},
+		rows: []model.OTCNegotiation{
+			remoteNegRow(2, ownRouting, peerRouting, "client-7", ownRouting, "client-5", foreignID, "ongoing"),
 		},
 	}
 
@@ -289,17 +298,8 @@ func TestPeerOTCReconciler_ReconcileRow_FetcherReportsOngoing_NoChange(t *testin
 	)
 
 	repo := &fakeNegRepo{
-		rows: []model.PeerOtcNegotiation{
-			{
-				ID:                  3,
-				PeerBankCode:        peerCode,
-				ForeignID:           foreignID,
-				BuyerRoutingNumber:  peerRouting,
-				BuyerID:             "client-10",
-				SellerRoutingNumber: ownRouting,
-				SellerID:            "client-20",
-				Status:              "ongoing",
-			},
+		rows: []model.OTCNegotiation{
+			remoteNegRow(3, ownRouting, peerRouting, "client-10", ownRouting, "client-20", foreignID, "ongoing"),
 		},
 	}
 
@@ -331,17 +331,8 @@ func TestPeerOTCReconciler_ReconcileRow_IntraBank_Skipped(t *testing.T) {
 	const ownRouting int64 = 111
 
 	repo := &fakeNegRepo{
-		rows: []model.PeerOtcNegotiation{
-			{
-				ID:                  4,
-				PeerBankCode:        "111",
-				ForeignID:           "neg-intra",
-				BuyerRoutingNumber:  ownRouting,
-				BuyerID:             "client-1",
-				SellerRoutingNumber: ownRouting,
-				SellerID:            "client-2",
-				Status:              "ongoing",
-			},
+		rows: []model.OTCNegotiation{
+			remoteNegRow(4, ownRouting, ownRouting, "client-1", ownRouting, "client-2", "neg-intra", "ongoing"),
 		},
 	}
 
@@ -383,17 +374,8 @@ func TestPeerOTCReconciler_ReconcileRow_NotifiesLocalParty(t *testing.T) {
 	)
 
 	repo := &fakeNegRepo{
-		rows: []model.PeerOtcNegotiation{
-			{
-				ID:                  5,
-				PeerBankCode:        peerCode,
-				ForeignID:           foreignID,
-				BuyerRoutingNumber:  peerRouting,
-				BuyerID:             "client-7",
-				SellerRoutingNumber: ownRouting,
-				SellerID:            sellerID,
-				Status:              "ongoing",
-			},
+		rows: []model.OTCNegotiation{
+			remoteNegRow(5, ownRouting, peerRouting, "client-7", ownRouting, sellerID, foreignID, "ongoing"),
 		},
 	}
 
@@ -438,9 +420,11 @@ func TestPeerRoutingForRow(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			row := &model.PeerOtcNegotiation{
-				BuyerRoutingNumber:  tc.buyerRouting,
-				SellerRoutingNumber: tc.sellerRouting,
+			bR := tc.buyerRouting
+			sR := tc.sellerRouting
+			row := &model.OTCNegotiation{
+				RemoteBuyerRouting:  &bR,
+				RemoteSellerRouting: &sR,
 			}
 			got := r.peerRoutingForRow(row)
 			if got != tc.expectedRouting {
@@ -470,17 +454,9 @@ func TestPeerOTCReconciler_ReconcileRow_BuyerSide_FetcherCalledWithSellerRouting
 	)
 
 	repo := &fakeNegRepo{
-		rows: []model.PeerOtcNegotiation{
-			{
-				ID:                  10,
-				PeerBankCode:        peerCode,
-				ForeignID:           foreignID,
-				BuyerRoutingNumber:  ownRouting, // WE are the buyer
-				BuyerID:             buyerID,
-				SellerRoutingNumber: sellerRouting, // PEER is the seller
-				SellerID:            sellerID,
-				Status:              "ongoing",
-			},
+		rows: []model.OTCNegotiation{
+			// WE are the buyer (ownRouting); the PEER is the seller (sellerRouting).
+			remoteNegRow(10, ownRouting, ownRouting, buyerID, sellerRouting, sellerID, foreignID, "ongoing"),
 		},
 	}
 
@@ -520,17 +496,8 @@ func TestPeerOTCReconciler_ReconcileRow_BuyerSide_PeerCancelled_Cancelled(t *tes
 	)
 
 	repo := &fakeNegRepo{
-		rows: []model.PeerOtcNegotiation{
-			{
-				ID:                  11,
-				PeerBankCode:        peerCode,
-				ForeignID:           foreignID,
-				BuyerRoutingNumber:  ownRouting,
-				BuyerID:             "client-3",
-				SellerRoutingNumber: sellerRouting,
-				SellerID:            "client-4",
-				Status:              "ongoing",
-			},
+		rows: []model.OTCNegotiation{
+			remoteNegRow(11, ownRouting, ownRouting, "client-3", sellerRouting, "client-4", foreignID, "ongoing"),
 		},
 	}
 
@@ -574,17 +541,9 @@ func TestPeerOTCReconciler_ReconcileRow_PeerNonOngoing_ContractExists_Accepted(t
 	)
 
 	repo := &fakeNegRepo{
-		rows: []model.PeerOtcNegotiation{
-			{
-				ID:                  12,
-				PeerBankCode:        peerCode,
-				ForeignID:           foreignID,
-				BuyerRoutingNumber:  ownRouting,
-				BuyerID:             "client-6",
-				SellerRoutingNumber: sellerRouting,
-				SellerID:            "client-8",
-				Status:              "ongoing", // stuck due to missed MarkNegotiationAccepted
-			},
+		rows: []model.OTCNegotiation{
+			// stuck "ongoing" due to a missed MarkNegotiationAccepted webhook.
+			remoteNegRow(12, ownRouting, ownRouting, "client-6", sellerRouting, "client-8", foreignID, "ongoing"),
 		},
 	}
 
@@ -636,17 +595,8 @@ func TestPeerOTCReconciler_ReconcileRow_ContractCheckError_Skipped(t *testing.T)
 	)
 
 	repo := &fakeNegRepo{
-		rows: []model.PeerOtcNegotiation{
-			{
-				ID:                  13,
-				PeerBankCode:        peerCode,
-				ForeignID:           foreignID,
-				BuyerRoutingNumber:  ownRouting,
-				BuyerID:             "client-11",
-				SellerRoutingNumber: sellerRouting,
-				SellerID:            "client-22",
-				Status:              "ongoing",
-			},
+		rows: []model.OTCNegotiation{
+			remoteNegRow(13, ownRouting, ownRouting, "client-11", sellerRouting, "client-22", foreignID, "ongoing"),
 		},
 	}
 

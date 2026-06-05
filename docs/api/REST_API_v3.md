@@ -7091,7 +7091,9 @@ Register a new peer bank.
 ```
 
 **Response 201:** Peer bank object (`api_token_preview` returned, never the full token).
-**Response 400:** Validation error (missing required field).
+**Response 400:** Validation error (missing required field, OR `bank_code`/`routing_number` equals this bank's own — peer-collision rejected; SP-2a).
+
+> **Peer-collision guard (SP-2a):** `POST /api/v3/peer-banks` returns `400 validation_error` when `bank_code` or `routing_number` matches this bank's own configuration. This is enforced at the gRPC service layer (transaction-service `CreatePeerBank` returns `InvalidArgument` → gateway maps to 400). The invariant ensures `routing_number == OwnRouting()` reliably distinguishes local rows from remote (folded-in) rows in the unified OTC tables.
 
 ---
 
@@ -8355,7 +8357,7 @@ No funds or shares are unwound — none are reserved at listing-creation time; r
 
 #### GET /api/v3/otc/options/:id/negotiations
 
-List the negotiation chains against a listing. `:id` is the stable surrogate id from the discovery feed and may resolve to a **LOCAL** listing (an `OTCOffer` this bank hosts) or a **REMOTE** listing (a `remote_otc_offer` mirror of a peer-bank listing). (SP-1 Task 8b extends this to remote ids.)
+List the negotiation chains against a listing. `:id` is the stable surrogate id from the discovery feed and may resolve to a **LOCAL** listing (an `OTCOffer` this bank hosts, `routing_number=own`) or a **REMOTE** listing (a folded-in remote `OTCOffer` row mirroring a peer-bank listing, `routing_number=<peer>`; SP-2a). (SP-1 Task 8b extends this to remote ids.)
 
 **Authentication:** Any JWT + `ResolveIdentity`.
 
@@ -8377,9 +8379,9 @@ Cross-chain interaction timeline for an offer. `:id` may resolve to a **LOCAL** 
 
 **LOCAL `:id` — unchanged:** the offer plus **every** negotiation chain's revisions, merged into a single stream sorted ascending by `created_at`. This is the offer-owner "front page" view — one call returns the whole offer's history across all bidders, so the frontend never needs to fan out per chain. Each entry carries its chain's `negotiation_id` and bidder identity, so the client can render one flat timeline or regroup into per-bidder swimlanes. **Restricted audience:** identical to `GET /api/v3/otc/options/:id/negotiations` — listing poster or employee with `otc.read.all` only. Competing bidders receive **403**.
 
-**REMOTE `:id` — caller's own chain(s) only:** we do not host the listing, so the timeline surfaces only the **caller's own** chain(s) against it (never other parties'). The mirror provides the `offer` header (`kind="remote"`); each of the caller's matching peer chains (lot key `(ParentOfferRouting, ParentOfferID)` == mirror `(PeerRoutingNumber, ForeignOfferID)`) becomes **one** timeline entry — the peer mirror keeps only current terms, not a per-revision history, so there is one entry per chain with `action="COUNTER"`. No matching chain → offer header + **empty timeline** (not 403/404). Only client principals have a cross-bank identity.
+**REMOTE `:id` — caller's own chain(s) only:** we do not host the listing, so the timeline surfaces only the **caller's own** chain(s) against it (never other parties'). The folded-in remote `OTCOffer` row provides the `offer` header (`kind="remote"`); each of the caller's matching peer chains (lot key `(ParentOfferRouting, ParentOfferID)` == remote row `(routing_number, native_id)`) becomes **one** timeline entry — the remote row keeps only current terms, not a per-revision history, so there is one entry per chain with `action="COUNTER"`. No matching chain → offer header + **empty timeline** (not 403/404). Only client principals have a cross-bank identity.
 
-**Path:** `:id` — the surrogate listing id (local OTCOffer or remote mirror).
+**Path:** `:id` — the surrogate listing id (local OTCOffer or folded-in remote OTCOffer row).
 
 **Response 200:**
 
@@ -8636,10 +8638,10 @@ Unified cross-bank discovery view: every open OTC option listing on this bank + 
 
 | Field | Type | Notes |
 |---|---|---|
-| `kind` | string | `"local"` (this bank's listing) or `"remote"` (peer-bank mirror). |
+| `kind` | string | `"local"` (this bank's listing) or `"remote"` (peer-bank mirror). **Derived from `routing_number`:** `kind="local"` iff `routing_number == OwnRouting()`; `kind="remote"` otherwise. There is no `kind` column in the DB — it is a computed, frontend-only label. |
 | `routing_number` | int64 | Bank routing number identifying the hosting bank. |
 | `bank_code` | string | 3-digit bank code. |
-| `local_id` | uint64 | Stable local surrogate id — `RemoteOTCOffer.ID` for remote rows; the numeric offer id for local rows. Use this as `:id` in `GET /api/v3/otc/options/:id`. |
+| `local_id` | uint64 | Stable local surrogate id — the folded-in remote `OTCOffer.id` for remote rows (SP-2a); the numeric offer id for local rows. Use this as `:id` in `GET /api/v3/otc/options/:id`. |
 | `me_owner` | bool | `true` when the acting caller is the listing's poster/seller. Always `false` for remote rows. Omitted (falsy) when not owned. |
 
 **Best-bid / best-ask surface (Part A 2026-05-16).** Three optional fields surface aggregated active-chain pricing so a prospective bidder sees that competition is live before placing an offer at the seller's static ask:
