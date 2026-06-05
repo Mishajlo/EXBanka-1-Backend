@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -67,6 +68,33 @@ func positive(field string, value float64) error {
 // nonNegative checks that a numeric value is >= 0.
 func nonNegative(field string, value float64) error {
 	if value < 0 {
+		return fmt.Errorf("%s must not be negative", field)
+	}
+	return nil
+}
+
+// positiveDecimalString parses a decimal-string money/quantity field and checks
+// it is strictly greater than zero. Used for OTC negotiation amounts (strike,
+// premium, quantity) which arrive as strings. An unparseable value is rejected.
+func positiveDecimalString(field, value string) error {
+	d, err := decimal.NewFromString(value)
+	if err != nil {
+		return fmt.Errorf("%s must be a valid number", field)
+	}
+	if !d.IsPositive() {
+		return fmt.Errorf("%s must be positive", field)
+	}
+	return nil
+}
+
+// nonNegativeDecimalString parses a decimal-string money field and checks it is
+// >= 0. Used where zero is a legitimate value (e.g. a zero premium).
+func nonNegativeDecimalString(field, value string) error {
+	d, err := decimal.NewFromString(value)
+	if err != nil {
+		return fmt.Errorf("%s must be a valid number", field)
+	}
+	if d.IsNegative() {
 		return fmt.Errorf("%s must not be negative", field)
 	}
 	return nil

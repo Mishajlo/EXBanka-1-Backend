@@ -8276,10 +8276,12 @@ Open a new negotiation chain by placing the initial bid on an open listing. `:id
 | Field | Type | Description |
 |---|---|---|
 | `bidder_account_id` | int | Caller's account that will pay/receive premium on accept. For a remote listing it is re-validated (ownership, active, currency==listing premium currency) and its account number is threaded to the seller's bank. |
-| `quantity` | string (decimal) | Initial bid quantity |
-| `strike_price` | string (decimal) | Initial bid strike |
-| `premium` | string (decimal) | Initial bid premium |
+| `quantity` | string (decimal) | Initial bid quantity. Must be **> 0**. |
+| `strike_price` | string (decimal) | Initial bid strike. Must be **> 0**. |
+| `premium` | string (decimal) | Initial bid premium. Must be **>= 0** (zero allowed; negative rejected with 400). |
 | `settlement_date` | string | RFC3339 or YYYY-MM-DD |
+
+The gateway validates `quantity`/`strike_price` as strictly positive and `premium` as non-negative decimals before forwarding (a malformed or non-positive amount ⇒ 400). The same checks apply to the `counter` route below.
 
 **Response 201:** `{ "negotiation": OTCNegotiationResponse }`. Status `open` (local) / `ongoing` (remote, peer status vocabulary). `kind` is `local` or `remote`.
 

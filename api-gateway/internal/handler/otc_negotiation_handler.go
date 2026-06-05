@@ -82,6 +82,23 @@ func (h *OTCOptionsHandler) OpenNegotiationChain(c *gin.Context) {
 		apiError(c, http.StatusBadRequest, ErrValidation, "bidder_account_id is required")
 		return
 	}
+	// Money-safety: amounts must be sane before forwarding. Quantity and strike
+	// strictly positive; premium non-negative (zero premium is legitimate, a
+	// negative one is not).
+	if err := positiveDecimalString("quantity", req.Quantity); err != nil {
+		apiError(c, http.StatusBadRequest, ErrValidation, err.Error())
+		return
+	}
+	if err := positiveDecimalString("strike_price", req.StrikePrice); err != nil {
+		apiError(c, http.StatusBadRequest, ErrValidation, err.Error())
+		return
+	}
+	if req.Premium != "" {
+		if err := nonNegativeDecimalString("premium", req.Premium); err != nil {
+			apiError(c, http.StatusBadRequest, ErrValidation, err.Error())
+			return
+		}
+	}
 	identity := c.MustGet("identity").(*middleware.ResolvedIdentity)
 	// Verify the bidder's account belongs to them before forwarding.
 	if err := ResolveAndCheckAccount(c, h.accounts, identity, req.BidderAccountID, 0); err != nil {
@@ -138,6 +155,21 @@ func (h *OTCOptionsHandler) CounterMyNegotiation(c *gin.Context) {
 	if req.Quantity == "" || req.StrikePrice == "" || req.SettlementDate == "" {
 		apiError(c, http.StatusBadRequest, ErrValidation, "quantity, strike_price, settlement_date are required")
 		return
+	}
+	// Money-safety: same positivity checks as the bid path.
+	if err := positiveDecimalString("quantity", req.Quantity); err != nil {
+		apiError(c, http.StatusBadRequest, ErrValidation, err.Error())
+		return
+	}
+	if err := positiveDecimalString("strike_price", req.StrikePrice); err != nil {
+		apiError(c, http.StatusBadRequest, ErrValidation, err.Error())
+		return
+	}
+	if req.Premium != "" {
+		if err := nonNegativeDecimalString("premium", req.Premium); err != nil {
+			apiError(c, http.StatusBadRequest, ErrValidation, err.Error())
+			return
+		}
 	}
 	identity := c.MustGet("identity").(*middleware.ResolvedIdentity)
 	resp, err := h.client.CounterNegotiation(c.Request.Context(), &stockpb.CounterNegotiationRequest{

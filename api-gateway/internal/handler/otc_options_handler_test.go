@@ -84,6 +84,7 @@ type stubOTCOptionsClient struct {
 	listRevisionsFn          func(*stockpb.ListNegotiationRevisionsRequest) (*stockpb.ListNegotiationRevisionsResponse, error)
 	listByListingFn          func(*stockpb.ListNegotiationsByListingRequest) (*stockpb.ListNegotiationsResponse, error)
 	getTimelineFn            func(*stockpb.GetOfferTimelineRequest) (*stockpb.GetOfferTimelineResponse, error)
+	openNegotiationFn        func(*stockpb.OpenNegotiationRequest) (*stockpb.OTCNegotiationResponse, error)
 }
 
 func (s *stubOTCOptionsClient) CreateOffer(_ context.Context, in *stockpb.CreateOTCOfferRequest, _ ...grpc.CallOption) (*stockpb.OTCOfferResponse, error) {
@@ -168,7 +169,10 @@ func (s *stubOTCOptionsClient) ListReceivedRatings(_ context.Context, in *stockp
 // Phase-2 marketplace RPCs — added by the OTC options refactor. Tests
 // don't exercise these directly (covered by otc_negotiation_handler_test.go
 // and stock-service tests), so the stub returns zero-value responses.
-func (s *stubOTCOptionsClient) OpenNegotiation(_ context.Context, _ *stockpb.OpenNegotiationRequest, _ ...grpc.CallOption) (*stockpb.OTCNegotiationResponse, error) {
+func (s *stubOTCOptionsClient) OpenNegotiation(_ context.Context, in *stockpb.OpenNegotiationRequest, _ ...grpc.CallOption) (*stockpb.OTCNegotiationResponse, error) {
+	if s.openNegotiationFn != nil {
+		return s.openNegotiationFn(in)
+	}
 	return &stockpb.OTCNegotiationResponse{}, nil
 }
 func (s *stubOTCOptionsClient) CounterNegotiation(_ context.Context, _ *stockpb.CounterNegotiationRequest, _ ...grpc.CallOption) (*stockpb.OTCNegotiationResponse, error) {
@@ -228,6 +232,8 @@ func otcOptionsRouter(h *handler.OTCOptionsHandler) *gin.Engine {
 	r.POST("/otc/contracts/:id/exercise", withCli, h.ExerciseContract)
 	r.GET("/me/otc/options/posted", withCli, h.ListMyPostedOffers)
 	r.DELETE("/me/otc/options/:id", withCli, h.CancelMyListing)
+	r.POST("/otc/options/:id/bid", withCli, h.OpenNegotiationChain)
+	r.POST("/me/otc/options/:id/negotiations/:nid/counter", withCli, h.CounterMyNegotiation)
 	return r
 }
 
@@ -426,6 +432,47 @@ func TestGetOffer_NotFound(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/otc/offers/99", nil))
 	require.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// TestOTCOpt_OpenNegotiation_RejectsNegativePremium asserts the gateway rejects
+// a bid with a negative premium (or strike/quantity) with 400 BEFORE forwarding
+// to stock-service. A negative amount is a money-safety violation per the API
+// Gateway Input Validation Requirement; without the check it reached the service
+// and minted an "ongoing" negotiation with premium=-5.
+func TestOTCOpt_OpenNegotiation_RejectsNegativePremium(t *testing.T) {
+	called := false
+	cl := &stubOTCOptionsClient{
+		openNegotiationFn: func(*stockpb.OpenNegotiationRequest) (*stockpb.OTCNegotiationResponse, error) {
+			called = true
+			return &stockpb.OTCNegotiationResponse{}, nil
+		},
+	}
+	r := otcOptionsRouter(otcHandler(cl))
+	body := `{"bidder_account_id":50,"quantity":"1","strike_price":"40","premium":"-5","settlement_date":"2026-12-31"}`
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/options/1/bid", strings.NewReader(body)))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.False(t, called, "stock-service must NOT be called for a negative-premium bid")
+}
+
+// TestOTCOpt_OpenNegotiation_RejectsNonPositiveQuantity asserts a non-positive
+// quantity is rejected with 400.
+func TestOTCOpt_OpenNegotiation_RejectsNonPositiveQuantity(t *testing.T) {
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
+	body := `{"bidder_account_id":50,"quantity":"0","strike_price":"40","premium":"5","settlement_date":"2026-12-31"}`
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/options/1/bid", strings.NewReader(body)))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// TestOTCOpt_CounterNegotiation_RejectsNegativePremium mirrors the bid check on
+// the counter path.
+func TestOTCOpt_CounterNegotiation_RejectsNegativePremium(t *testing.T) {
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
+	body := `{"quantity":"1","strike_price":"40","premium":"-5","settlement_date":"2026-12-31"}`
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("POST", "/me/otc/options/1/negotiations/2/counter", strings.NewReader(body)))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
 func TestOTCOpt_CounterOffer_Success(t *testing.T) {
