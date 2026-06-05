@@ -3047,9 +3047,21 @@ fire on the unified routes' remote-dispatch path:
   into one `contracts[]` array (`kind=remote` for cross-bank rows); the legacy
   `peer_contracts`/`peer_total` fields were removed.
 - **Exercise a remote contract.** `POST /api/v3/otc/contracts/:id/exercise`. Buyer-only
-  (rejects when this bank's row is `direction=DEBIT`); strike-account ownership is
-  enforced gateway-side. Dispatches the 4-posting exercise SI-TX using the
-  OPTION-pseudo-account form (see Exercise lifecycle below).
+  (rejects when this bank's row is `direction=DEBIT`); the strike account
+  (`buyer_account_number`) is the only client-supplied money-path resource and is
+  gated **authoritatively for ALL principals** gateway-side via
+  `ResolveAndCheckAccountByNumber` (client → must own it; employee acting as the bank →
+  must be a BANK account; employee on-behalf → that client's account; `403` on
+  mismatch). **SP-3 Task 5 security fix (2026-06-05):** this replaced an
+  `enforceOwnership` call that returned nil for any non-client principal, which had
+  let a bank-acting employee pay the bank's strike obligation from an **arbitrary
+  account** (including a client's) of the matching currency. stock-service's
+  `exerciseRemoteContract` additionally re-asserts the same predicate
+  (`isBankAccount` for a bank buyer; owner match for a client buyer; active +
+  strike-currency match) **before** dispatching `InitiateOptionExercise`, as
+  defense-in-depth — mirroring the already-hardened bid path (`openRemoteNegotiation`).
+  Dispatches the 4-posting exercise SI-TX using the OPTION-pseudo-account form (see
+  Exercise lifecycle below).
 - **Own-chain list / counter / accept / cancel on a remote chain.** Use the unified
   `GET /api/v3/me/otc/options/negotiations` (remote rows carry `kind="remote"` and a
   `role`) and the per-chain `…/:nid/{counter,accept}` + `DELETE …/:nid`; stock-service

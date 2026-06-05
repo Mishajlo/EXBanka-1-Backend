@@ -609,7 +609,7 @@ func TestOTCOpt_ExerciseContract_CrossBankPassesBuyerAccount(t *testing.T) {
 
 // The exercise theft vector: a client must NOT pay the strike from an account
 // they don't own. The settlement account's owner (999) differs from the caller
-// (42) → 404, and the gRPC ExerciseContract must NOT be invoked (no money moves).
+// (42) → 403, and the gRPC ExerciseContract must NOT be invoked (no money moves).
 func TestOTCOpt_ExerciseContract_CrossBankStrikeAccountNotOwned(t *testing.T) {
 	dispatched := false
 	cl := &stubOTCOptionsClient{
@@ -625,8 +625,83 @@ func TestOTCOpt_ExerciseContract_CrossBankStrikeAccountNotOwned(t *testing.T) {
 	r := otcOptionsRouter(h)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/contracts/8/exercise", strings.NewReader(`{"buyer_account_number":"111000130146666611"}`)))
-	require.Equal(t, http.StatusNotFound, rec.Code, "expected 404 for strike paid from a non-owned account; body=%s", rec.Body.String())
+	require.Equal(t, http.StatusForbidden, rec.Code, "expected 403 for strike paid from a non-owned account; body=%s", rec.Body.String())
 	require.False(t, dispatched, "exercise must NOT dispatch when the strike account is not owned by the caller (theft vector)")
+}
+
+// SP-3 Task 5 gateway gate: a BANK-acting EMPLOYEE exercising cross-bank must
+// bind a BANK account for the strike — binding a CLIENT's account (the verified
+// money-path gap that enforceOwnership left open for non-client principals) →
+// 403, no dispatch. This is the core fix: enforceOwnership returned nil for any
+// non-client caller, leaving the employee ungated.
+func TestOTCOpt_ExerciseContract_EmployeeBankBindingClientAccountForbidden(t *testing.T) {
+	dispatched := false
+	cl := &stubOTCOptionsClient{
+		exerciseFn: func(*stockpb.ExerciseContractRequest) (*stockpb.ExerciseResponse, error) {
+			dispatched = true
+			return &stockpb.ExerciseResponse{}, nil
+		},
+	}
+	// The bound account is a CLIENT account (owner 7, non-bank).
+	acct := &otcStubAccountClient{getByNumFn: func(in *accountpb.GetAccountByNumberRequest) (*accountpb.AccountResponse, error) {
+		return &accountpb.AccountResponse{AccountNumber: in.AccountNumber, OwnerId: 7, AccountKind: "current"}, nil
+	}}
+	h := handler.NewOTCOptionsHandler(cl, &otcStubSecurityClient{}, acct)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/otc/contracts/:id/exercise", setEmployeeBankIdentity(5), h.ExerciseContract)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/contracts/8/exercise", strings.NewReader(`{"buyer_account_number":"111000130146666611"}`)))
+	require.Equal(t, http.StatusForbidden, rec.Code, "bank employee binding a client account must be 403; body=%s", rec.Body.String())
+	require.False(t, dispatched, "THEFT VECTOR: exercise dispatched the strike against a client's account at the bank's routing")
+}
+
+// SP-3 Task 5 gateway gate: a BANK-acting EMPLOYEE exercising cross-bank with a
+// BANK account is allowed → forwarded to the gRPC ExerciseContract.
+func TestOTCOpt_ExerciseContract_EmployeeBankBindingBankAccountForwards(t *testing.T) {
+	var captured *stockpb.ExerciseContractRequest
+	cl := &stubOTCOptionsClient{
+		exerciseFn: func(in *stockpb.ExerciseContractRequest) (*stockpb.ExerciseResponse, error) {
+			captured = in
+			return &stockpb.ExerciseResponse{ContractId: 8, Status: "pending", SagaId: "tx-cb"}, nil
+		},
+	}
+	// A BANK account (account_kind == "bank").
+	acct := &otcStubAccountClient{getByNumFn: func(in *accountpb.GetAccountByNumberRequest) (*accountpb.AccountResponse, error) {
+		return &accountpb.AccountResponse{AccountNumber: in.AccountNumber, OwnerId: 1_000_000_000, AccountKind: "bank"}, nil
+	}}
+	h := handler.NewOTCOptionsHandler(cl, &otcStubSecurityClient{}, acct)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/otc/contracts/:id/exercise", setEmployeeBankIdentity(5), h.ExerciseContract)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/contracts/8/exercise", strings.NewReader(`{"buyer_account_number":"111-BANK-USD-01"}`)))
+	require.Equal(t, http.StatusCreated, rec.Code, "bank employee binding a bank account must forward; body=%s", rec.Body.String())
+	require.NotNil(t, captured)
+	require.Equal(t, "111-BANK-USD-01", captured.BuyerAccountNumber)
+}
+
+// SP-3 Task 5 gateway gate: a LOCAL exercise (no buyer_account_number) by a
+// bank-acting employee is NOT account-gated — the account lookup must NOT fire,
+// and the request forwards with an empty buyer_account_number.
+func TestOTCOpt_ExerciseContract_EmployeeLocalNoAccountGate(t *testing.T) {
+	cl := &stubOTCOptionsClient{
+		exerciseFn: func(in *stockpb.ExerciseContractRequest) (*stockpb.ExerciseResponse, error) {
+			require.Empty(t, in.BuyerAccountNumber)
+			return &stockpb.ExerciseResponse{ContractId: 8, Status: "exercised"}, nil
+		},
+	}
+	acct := &otcStubAccountClient{getByNumFn: func(*accountpb.GetAccountByNumberRequest) (*accountpb.AccountResponse, error) {
+		t.Fatalf("account lookup must NOT happen on the local path (no buyer_account_number)")
+		return nil, nil
+	}}
+	h := handler.NewOTCOptionsHandler(cl, &otcStubSecurityClient{}, acct)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/otc/contracts/:id/exercise", setEmployeeBankIdentity(5), h.ExerciseContract)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/contracts/8/exercise", strings.NewReader(`{}`)))
+	require.Equal(t, http.StatusCreated, rec.Code)
 }
 
 // A LOCAL exercise (no buyer_account_number) skips the ownership gate entirely —

@@ -5746,9 +5746,19 @@ clean-cut) and its behaviour is folded in here.
   runs the cross-bank SI-TX option-exercise flow. **Only the buyer/holder** may
   exercise (the writer/seller side and non-parties get `404` — existence must not
   leak). Supply `buyer_account_number` — the buyer's currency account that pays
-  the strike; the gateway validates the caller owns it before forwarding (the only
-  client-supplied resource on the money path). The contract terms + counterparty
-  come from the persisted remote row.
+  the strike; this is the only client-supplied resource on the money path, so the
+  gateway gates it before forwarding (`403` on mismatch), authoritatively for ALL
+  principals (SP-3 Task 5 security fix):
+  - **client caller** → the account must be owned by that client;
+  - **employee acting AS the bank** (no `on_behalf_of_client_id`) → the account
+    must be a **BANK** account — a bank exercise can no longer pay its strike from
+    a client's account of the matching currency;
+  - **employee on behalf of a client** → the account must be owned by that client.
+
+  stock-service additionally re-asserts the same predicate (bank buyer → bank
+  account; client buyer → that client's account; active + strike-currency match)
+  before dispatch, as defense-in-depth. The contract terms + counterparty come
+  from the persisted remote row.
 
 **Authentication:** Any JWT + one of `otc.trade.accept`, `securities.trade`. Identity middleware: `OwnerIsBankIfEmployee`.
 
@@ -5762,7 +5772,7 @@ clean-cut) and its behaviour is folded in here.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `buyer_account_number` | string | Cross-bank only | The buyer's currency account that pays the strike. Required for a cross-bank (remote) contract; ignored for a local contract. The caller must own it (else `404`). |
+| `buyer_account_number` | string | Cross-bank only | The buyer's currency account that pays the strike. Required for a cross-bank (remote) contract; ignored for a local contract. The caller must be entitled to it per the gate above — a client must own it, a bank-acting employee must bind a BANK account, an on-behalf employee must bind that client's account (else `403`). |
 | `on_behalf_of_client_id` | uint64 | No | Employee acting on behalf of a client. |
 | `on_behalf_of_fund_id` | uint64 | No | *E2, Plan E.* When non-zero, exercises on behalf of an investment fund (local path). The acting employee must be the fund's manager; acquired shares land in `fund_holdings`. |
 
@@ -5773,8 +5783,8 @@ dispatch state (e.g. `pending`).
 
 **Error Responses:**
 - `400` — invalid `id`, or a remote contract exercised without `buyer_account_number`
-- `403` — `on_behalf_of_fund_id` set but acting employee is not the fund's manager
-- `404` — contract not found, the caller is not the buyer/holder of a remote contract, or the supplied settlement account is not owned by the caller
+- `403` — `on_behalf_of_fund_id` set but acting employee is not the fund's manager; or the supplied strike account is not one the caller is entitled to (client not the owner / bank-acting employee binding a non-bank account / on-behalf employee binding a non-matching account)
+- `404` — contract not found, or the caller is not the buyer/holder of a remote contract
 - `409` — business rule (e.g. contract not active/expired, insufficient funds on the cross-bank strike)
 
 > **Breaking change (SP-2b clean-cut):** the legacy

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -124,11 +125,14 @@ type RemoteNegotiationWriter interface {
 	UpsertRemoteNeg(n *model.OTCNegotiation) error
 }
 
-// OTCAccountClient is the narrow account-service surface OpenNegotiation needs
-// to validate (and read the account number of) a bidder's account on the
-// cross-bank branch. Satisfied by accountpb.AccountServiceClient (SP-2b).
+// OTCAccountClient is the narrow account-service surface the cross-bank OTC
+// paths need: OpenNegotiation validates (and reads the account number of) a
+// bidder's account by id; exerciseRemoteContract re-asserts the buyer's
+// strike-debit account by NUMBER before dispatch (SP-3 Task 5 security gate).
+// Satisfied by accountpb.AccountServiceClient (SP-2b / SP-3).
 type OTCAccountClient interface {
 	GetAccount(ctx context.Context, in *accountpb.GetAccountRequest, opts ...grpc.CallOption) (*accountpb.AccountResponse, error)
+	GetAccountByNumber(ctx context.Context, in *accountpb.GetAccountByNumberRequest, opts ...grpc.CallOption) (*accountpb.AccountResponse, error)
 }
 
 // WithPeerOTCDispatch wires the cross-bank bid-dispatch path so OpenNegotiation
@@ -1065,12 +1069,52 @@ func (h *OTCOptionsHandler) exerciseRemoteContract(ctx context.Context, in *stoc
 	}
 
 	// The buyer's settlement account is the only client-supplied resource; the
-	// gateway has already validated the caller owns it. Everything else
+	// gateway has already validated the caller is entitled to it. Everything else
 	// (counterparty, terms, routings) comes from the persisted remote row inside
 	// InitiateOptionExercise.
 	if in.GetBuyerAccountNumber() == "" {
 		return nil, true, status.Error(codes.InvalidArgument, "buyer_account_number is required to exercise a cross-bank contract")
 	}
+
+	// DEFENSE-IN-DEPTH RE-ASSERT (SP-3 Task 5 security gate): the buyer account
+	// number flows straight into InitiateOptionExercise as the strike-DEBIT
+	// posting (peer_otc_grpc_handler.go) with no further ownership check — Reserve
+	// only verifies active + currency. So if the gateway gate were ever bypassed,
+	// a bank exercise could debit the strike from ANY account of the matching
+	// currency, including a client's. Re-assert the same predicates the bid path
+	// uses (openRemoteNegotiation), branching on the buyer party recorded on the
+	// row, BEFORE dispatch. On failure → NotFound (no-leak policy used throughout
+	// this function), and DO NOT dispatch.
+	if h.accounts == nil {
+		return nil, true, status.Error(codes.FailedPrecondition, "account-service client not wired for cross-bank exercise")
+	}
+	acct, gerr := h.accounts.GetAccountByNumber(ctx, &accountpb.GetAccountByNumberRequest{AccountNumber: in.GetBuyerAccountNumber()})
+	if gerr != nil {
+		return nil, true, status.Error(codes.NotFound, "not_found")
+	}
+	if isBankWireID(buyerID) {
+		// BANK buyer — the strike must settle from a BANK account (account_kind
+		// "bank" or the legacy owner sentinel), never a client's.
+		if !isBankAccount(acct) {
+			return nil, true, status.Error(codes.NotFound, "not_found")
+		}
+	} else {
+		// CLIENT buyer ("client-<X>") — the strike account must be owned by that
+		// buyer client. Belt-and-suspenders to the gateway gate.
+		buyerClientID, perr := strconv.ParseUint(strings.TrimPrefix(buyerID, "client-"), 10, 64)
+		if perr != nil || acct.GetOwnerId() != buyerClientID {
+			return nil, true, status.Error(codes.NotFound, "not_found")
+		}
+	}
+	if acct.GetStatus() != "active" {
+		return nil, true, status.Error(codes.FailedPrecondition, "buyer account is not active")
+	}
+	if acct.GetCurrencyCode() != contract.StrikeCurrency {
+		return nil, true, status.Errorf(codes.InvalidArgument,
+			"currency mismatch: account is %s but the contract strike is %s",
+			acct.GetCurrencyCode(), contract.StrikeCurrency)
+	}
+
 	resp, err := h.crossBankExerciser.InitiateOptionExercise(ctx, &stockpb.InitiateOptionExerciseRequest{
 		PeerOptionContractId: contract.ID,
 		BuyerAccountNumber:   in.GetBuyerAccountNumber(),

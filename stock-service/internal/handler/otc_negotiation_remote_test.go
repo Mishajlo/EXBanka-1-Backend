@@ -35,13 +35,20 @@ import (
 )
 
 // fakeOTCAccountClient implements OTCAccountClient: returns a single canned
-// account for any GetAccount call.
+// account for any GetAccount / GetAccountByNumber call.
 type fakeOTCAccountClient struct {
 	acct *accountpb.AccountResponse
 	err  error
 }
 
 func (f *fakeOTCAccountClient) GetAccount(_ context.Context, _ *accountpb.GetAccountRequest, _ ...grpc.CallOption) (*accountpb.AccountResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.acct, nil
+}
+
+func (f *fakeOTCAccountClient) GetAccountByNumber(_ context.Context, _ *accountpb.GetAccountByNumberRequest, _ ...grpc.CallOption) (*accountpb.AccountResponse, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
