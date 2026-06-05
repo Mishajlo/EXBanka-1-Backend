@@ -24,6 +24,11 @@ type fakeMyNegLister struct {
 	remoteRows []model.OTCNegotiation
 	localErr   error
 	remoteErr  error
+	// bankRemoteRows feeds ListRemoteNegByBankParty (SP-3 Task 5b): the bank's
+	// REMOTE bidder chains (party id "employee-<N>"). Role-filtered on the
+	// employee-side; kept separate from remoteRows (the client path).
+	bankRemoteRows []model.OTCNegotiation
+	bankErr        error
 }
 
 func (f *fakeMyNegLister) ListByBidder(
@@ -60,6 +65,28 @@ func (f *fakeMyNegLister) ListRemoteNegByClient(_ int64, clientPrincipal, _ stri
 	for _, r := range f.remoteRows {
 		if (r.RemoteBuyerID != nil && *r.RemoteBuyerID == clientPrincipal) ||
 			(r.RemoteSellerID != nil && *r.RemoteSellerID == clientPrincipal) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeMyNegLister) ListRemoteNegByBankParty(_ int64, role string) ([]model.OTCNegotiation, error) {
+	if f.bankErr != nil {
+		return nil, f.bankErr
+	}
+	out := make([]model.OTCNegotiation, 0, len(f.bankRemoteRows))
+	for _, r := range f.bankRemoteRows {
+		switch role {
+		case "buyer":
+			if r.RemoteBuyerID != nil && hasEmployeePrefix(*r.RemoteBuyerID) {
+				out = append(out, r)
+			}
+		case "seller":
+			if r.RemoteSellerID != nil && hasEmployeePrefix(*r.RemoteSellerID) {
+				out = append(out, r)
+			}
+		default:
 			out = append(out, r)
 		}
 	}
@@ -165,6 +192,49 @@ func TestListUnifiedOptionOffers_StampsMyNegotiation_LocalAndRemote(t *testing.T
 	// Remote offer the caller bid on cross-bank → stamped.
 	require.Equal(t, uint64(88), byTicker["JNJ"].GetMyNegotiationId())
 	require.Equal(t, "ongoing", byTicker["JNJ"].GetMyNegotiationStatus())
+}
+
+// TestListUnifiedOptionOffers_BankBidder_StampsRemote: a bank that bid on a
+// remote offer (party id "employee-<N>") sees its my_negotiation_id stamped on
+// that offer in discovery. The bank's remote bidder chain comes from
+// ListRemoteNegByBankParty (prefix-matched), keyed to the offer by its
+// (RemoteParentRouting, RemoteParentNativeID) lot key. SP-3 Task 5b.
+func TestListUnifiedOptionOffers_BankBidder_StampsRemote(t *testing.T) {
+	model.SetOwnRouting("111")
+	cache := otccache.NewOptionCache()
+	otccache.SetOptionForTest(cache, otccache.OptionSnapshot{
+		Offers: []otccache.OptionOffer{
+			// Remote offer the BANK bid on cross-bank (peer 333, native "xyz").
+			{Kind: "remote", BankCode: "333", RoutingNumber: 333, OfferID: "xyz", LocalID: 900, Ticker: "JNJ", Direction: "sell_initiated"},
+			// A remote offer the bank did NOT bid on.
+			{Kind: "remote", BankCode: "333", RoutingNumber: 333, OfferID: "zzz", LocalID: 901, Ticker: "MSFT", Direction: "sell_initiated"},
+		},
+	})
+
+	lister := &fakeMyNegLister{
+		bankRemoteRows: []model.OTCNegotiation{
+			{ID: 88, RoutingNumber: 333, Status: "ongoing",
+				RemoteBuyerRouting: i64(111), RemoteBuyerID: str("employee-5"),
+				RemoteParentRouting: i64(333), RemoteParentNativeID: str("xyz")},
+		},
+	}
+
+	h := NewOTCHandler(nil).WithOptionCache(cache).WithMyNegotiations(lister, 111)
+	resp, err := h.ListUnifiedOptionOffers(context.Background(), &stockpb.ListUnifiedOptionOffersRequest{
+		Page: 1, PageSize: 10, ActingOwnerType: "bank", ActingOwnerId: 0,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetOffers(), 2)
+
+	byTicker := map[string]*stockpb.UnifiedOptionOffer{}
+	for _, o := range resp.GetOffers() {
+		byTicker[o.GetTicker()] = o
+	}
+	// Remote offer the bank bid on → stamped with the bank's chain.
+	require.Equal(t, uint64(88), byTicker["JNJ"].GetMyNegotiationId())
+	require.Equal(t, "ongoing", byTicker["JNJ"].GetMyNegotiationStatus())
+	// Remote offer the bank did NOT bid on → absent.
+	require.Equal(t, uint64(0), byTicker["MSFT"].GetMyNegotiationId())
 }
 
 func TestListUnifiedOptionOffers_MultipleChains_ActiveWins(t *testing.T) {

@@ -349,6 +349,108 @@ func TestRemoteNeg_ListOngoing_ExcludesLocal(t *testing.T) {
 	}
 }
 
+// TestRemoteNeg_ListByBankParty matches the cross-bank chains WE host where the
+// hosted side is the BANK (party id "employee-<N>"), by prefix — the bank has no
+// single wire principal. It must:
+//   - "buyer"  → only remote rows with remote_buyer_routing==own AND
+//     remote_buyer_id LIKE "employee-%" (our cross-bank bids).
+//   - "seller" → only remote rows with remote_seller_routing==own AND
+//     remote_seller_id LIKE "employee-%" (peer bids on our bank-owned offer).
+//   - ""       → either side.
+//
+// It must EXCLUDE client-party rows (no "employee-" prefix), peer-hosted rows
+// (the bank side hosted by a PEER, routing != own on that side), and never
+// return a LOCAL row.
+func TestRemoteNeg_ListByBankParty(t *testing.T) {
+	db := newRemoteNegTestDB(t)
+	r := NewOTCNegotiationRepository(db)
+	const own int64 = 111
+	const peer int64 = 222
+
+	// (A) WE host the bank as BUYER (our cross-bank bid): buyer routing=own,
+	//     buyer id employee-5; counterparty seller on peer.
+	_ = r.UpsertRemoteNeg(remoteNeg(peer, "neg-bankbuyer", own, "employee-5", peer, "client-3", `{"premium":"1"}`, "ongoing"))
+	// (B) WE host the bank as SELLER (peer bid on our bank-owned offer):
+	//     seller routing=own, seller id employee-9; buyer on peer.
+	_ = r.UpsertRemoteNeg(remoteNeg(peer, "neg-bankseller", peer, "client-7", own, "employee-9", `{"premium":"2"}`, "ongoing"))
+	// (C) WE host a CLIENT buyer (no employee- prefix) — must be excluded from
+	//     the bank lister entirely.
+	_ = r.UpsertRemoteNeg(remoteNeg(peer, "neg-clientbuyer", own, "client-1", peer, "client-3", `{"premium":"3"}`, "ongoing"))
+	// (D) The BANK side is hosted by a PEER (routing != own on the buyer side):
+	//     buyer routing=peer, buyer id employee-2. We do NOT host it → exclude.
+	_ = r.UpsertRemoteNeg(remoteNeg(333, "neg-peerbank", peer, "employee-2", own, "client-4", `{"premium":"4"}`, "ongoing"))
+
+	// LOCAL row (routing stamped to own by BeforeCreate) — must never leak.
+	bidder := uint64(8)
+	local := &model.OTCNegotiation{
+		ParentOfferID:             1,
+		BidderOwnerType:           model.OwnerClient,
+		BidderOwnerID:             &bidder,
+		Quantity:                  decimal.NewFromInt(1),
+		StrikePrice:               decimal.NewFromInt(1),
+		Premium:                   decimal.NewFromInt(1),
+		SettlementDate:            time.Now().UTC(),
+		Status:                    model.OTCNegotiationStatusOpen,
+		LastActionByPrincipalType: "client",
+		LastActionByPrincipalID:   8,
+		LastActionByOwnerType:     "client",
+		LastActionByOwnerID:       &bidder,
+		LastActionAt:              time.Now().UTC(),
+	}
+	if err := db.Create(local).Error; err != nil {
+		t.Fatalf("seed local: %v", err)
+	}
+
+	natives := func(rows []model.OTCNegotiation) map[string]bool {
+		m := map[string]bool{}
+		for i := range rows {
+			if rows[i].RoutingNumber == model.OwnRouting() {
+				t.Errorf("bank lister returned a LOCAL row (routing=%d, native=%v)", rows[i].RoutingNumber, rows[i].NativeID)
+			}
+			if rows[i].NativeID != nil {
+				m[*rows[i].NativeID] = true
+			}
+		}
+		return m
+	}
+
+	// role="buyer" → only (A).
+	buyerRows, err := r.ListRemoteNegByBankParty(own, "buyer")
+	if err != nil {
+		t.Fatalf("buyer: %v", err)
+	}
+	bn := natives(buyerRows)
+	if len(bn) != 1 || !bn["neg-bankbuyer"] {
+		t.Errorf("buyer role = %v, want only {neg-bankbuyer}", bn)
+	}
+
+	// role="seller" → only (B).
+	sellerRows, err := r.ListRemoteNegByBankParty(own, "seller")
+	if err != nil {
+		t.Fatalf("seller: %v", err)
+	}
+	sn := natives(sellerRows)
+	if len(sn) != 1 || !sn["neg-bankseller"] {
+		t.Errorf("seller role = %v, want only {neg-bankseller}", sn)
+	}
+
+	// role="" → both (A) and (B), and NOTHING else.
+	bothRows, err := r.ListRemoteNegByBankParty(own, "")
+	if err != nil {
+		t.Fatalf("both: %v", err)
+	}
+	en := natives(bothRows)
+	if len(en) != 2 || !en["neg-bankbuyer"] || !en["neg-bankseller"] {
+		t.Errorf("both role = %v, want {neg-bankbuyer, neg-bankseller}", en)
+	}
+	// Explicit exclusions: client party + peer-hosted bank party never appear.
+	for _, bad := range []string{"neg-clientbuyer", "neg-peerbank"} {
+		if en[bad] {
+			t.Errorf("bank lister leaked %q (client party or peer-hosted bank side)", bad)
+		}
+	}
+}
+
 // --- small accessors mirroring the handler-package helpers (test-local) ---
 
 func remoteBuyerOf(n *model.OTCNegotiation) (int64, string) {

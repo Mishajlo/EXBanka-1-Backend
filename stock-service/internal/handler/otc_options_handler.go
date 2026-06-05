@@ -185,6 +185,13 @@ func (h *OTCOptionsHandler) WithCrossBankExerciser(e CrossBankExerciser) *OTCOpt
 // peer_otc_negotiation mirror was retired and folded into this table).
 type PeerNegotiationLister interface {
 	ListRemoteNegByClient(ownRouting int64, clientPrincipal, role string) ([]model.OTCNegotiation, error)
+	// ListRemoteNegByBankParty surfaces the REMOTE chains WE host where the
+	// hosted side is the BANK (party id "employee-<N>"). role: "buyer" → our
+	// cross-bank bids; "seller" → peer bids on our bank-owned offer; "" → either.
+	// Lets an employee acting AS THE BANK see/list its own cross-bank chains
+	// (SP-3 Task 5b). The bank has no single wire principal, so this matches by
+	// prefix; a CLIENT caller must never reach it (use ListRemoteNegByClient).
+	ListRemoteNegByBankParty(ownRouting int64, role string) ([]model.OTCNegotiation, error)
 }
 
 // WithPeerNegotiations wires the cross-bank peer-negotiation mirror so

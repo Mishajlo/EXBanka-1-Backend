@@ -43,6 +43,37 @@ func seedLocalListing(t *testing.T, db *gorm.DB, offerID, posterID uint64) {
 	}
 }
 
+// seedBankListing inserts a BANK-owned local OTCOffer with a NativeID (the
+// listing UUID a peer bidder echoes back as the parent lot key). Returns the
+// native id so the test can key the remote chain's RemoteParent* to it.
+func seedBankListing(t *testing.T, db *gorm.DB, offerID uint64, native string) {
+	t.Helper()
+	nid := native
+	o := &model.OTCOffer{
+		ID:                          offerID,
+		RoutingNumber:               model.OwnRouting(),
+		NativeID:                    &nid,
+		InitiatorOwnerType:          model.OwnerBank,
+		InitiatorOwnerID:            nil,
+		Direction:                   "sell_initiated",
+		StockID:                     1,
+		Ticker:                      "ACME",
+		Quantity:                    decimal.NewFromInt(10),
+		StrikePrice:                 decimal.NewFromInt(150),
+		Premium:                     decimal.NewFromInt(20),
+		SettlementDate:              time.Now().AddDate(0, 0, 30),
+		Status:                      "open",
+		LastModifiedByPrincipalType: "employee",
+		LastModifiedByPrincipalID:   1,
+		InitiatorAccountID:          9001,
+		CreatedAt:                   time.Now(),
+		UpdatedAt:                   time.Now(),
+	}
+	if err := db.Create(o).Error; err != nil {
+		t.Fatalf("seed bank listing: %v", err)
+	}
+}
+
 // fakeRemoteOfferGetter is an in-memory RemoteOfferGetter for the per-listing
 // remote-id tests. A nil entry for an id models "not a remote mirror" via
 // gorm.ErrRecordNotFound.
@@ -257,6 +288,87 @@ func TestListingNegotiations_UnknownId_NotFound(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("want NotFound error, got nil")
+	}
+}
+
+// TestListingNegotiations_BankOwnedOffer_PeerBid: a BANK-owned LOCAL offer that
+// a PEER bid on → the bank caller sees the remote chain on THAT listing (a peer
+// bid), correlated by the (RemoteParentRouting, RemoteParentNativeID) lot key.
+// Chains on OTHER bank-owned offers must NOT appear. SP-3 Task 5b.
+func TestListingNegotiations_BankOwnedOffer_PeerBid(t *testing.T) {
+	const ownRouting int64 = 111
+	model.SetOwnRouting("111")
+	const peerBuyerRouting int64 = 222
+	const offerNative = "bank-offer-uuid"
+	// Remote chains where WE host the SELLER as the BANK (employee-9).
+	peer := &fakePeerNegLister{bankRows: []model.OTCNegotiation{
+		// A peer bid on THIS bank-owned listing (matching lot key).
+		peerRowWithParent(70, peerBuyerRouting, "client-7", ownRouting, "employee-9", "ongoing", ownRouting, offerNative),
+		// A peer bid on a DIFFERENT bank-owned listing — must be excluded.
+		peerRowWithParent(71, peerBuyerRouting, "client-8", ownRouting, "employee-9", "ongoing", ownRouting, "other-uuid"),
+		// A free-form chain (no lot key) — must be excluded.
+		peerRow(72, peerBuyerRouting, "client-9", ownRouting, "employee-9", "ongoing"),
+	}}
+	h, db := newListingViewsFixture(t, ownRouting, &fakeRemoteOfferGetter{}, peer)
+	seedBankListing(t, db, 400, offerNative)
+	// A LOCAL chain on the same bank offer (an intra-bank bidder) — should also
+	// appear, proving the merge doesn't drop the local set.
+	seedBidderChain(t, db, 12, 400)
+
+	resp, err := h.ListNegotiationsByListing(context.Background(), &stockpb.ListNegotiationsByListingRequest{
+		ParentOfferId: 400, CallerOwnerType: "bank", CallerOwnerId: 0,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(resp.GetNegotiations()) != 2 {
+		t.Fatalf("want 2 chains (1 local + 1 peer bid on THIS listing), got %d", len(resp.GetNegotiations()))
+	}
+	var sawLocal, sawRemote bool
+	for _, n := range resp.GetNegotiations() {
+		switch n.GetKind() {
+		case "local":
+			sawLocal = true
+		case "remote":
+			sawRemote = true
+			if n.GetId() != 70 {
+				t.Errorf("remote chain id = %d want 70 (the bid on THIS listing)", n.GetId())
+			}
+			// Bank owns the parent listing → me_owner true.
+			if !n.GetMeOwner() {
+				t.Errorf("me_owner=false; the bank owns this listing")
+			}
+		}
+	}
+	if !sawLocal || !sawRemote {
+		t.Errorf("merged list missing a kind: local=%v remote=%v", sawLocal, sawRemote)
+	}
+}
+
+// TestListingNegotiations_ClientOwnedOffer_NoBankMerge: a CLIENT-owned local
+// listing must NOT pull bank-party remote chains (the bank merge is gated on
+// owner_type="bank"). Only the client's local chains appear. SP-3 Task 5b
+// no-leak guard.
+func TestListingNegotiations_ClientOwnedOffer_NoBankMerge(t *testing.T) {
+	const ownRouting int64 = 111
+	peer := &fakePeerNegLister{bankRows: []model.OTCNegotiation{
+		peerRowWithParent(80, 222, "client-7", ownRouting, "employee-9", "ongoing", ownRouting, "x"),
+	}}
+	h, db := newListingViewsFixture(t, ownRouting, &fakeRemoteOfferGetter{}, peer)
+	seedLocalListing(t, db, 500, 3)
+	seedBidderChain(t, db, 7, 500)
+
+	resp, err := h.ListNegotiationsByListing(context.Background(), &stockpb.ListNegotiationsByListingRequest{
+		ParentOfferId: 500, CallerOwnerType: "client", CallerOwnerId: 3,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(resp.GetNegotiations()) != 1 {
+		t.Fatalf("want 1 (client's local chain only, no bank merge), got %d", len(resp.GetNegotiations()))
+	}
+	if resp.GetNegotiations()[0].GetKind() != "local" {
+		t.Errorf("kind = %q want local", resp.GetNegotiations()[0].GetKind())
 	}
 }
 

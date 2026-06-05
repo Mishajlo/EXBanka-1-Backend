@@ -16,6 +16,12 @@ import (
 type MyNegotiationLister interface {
 	ListByBidder(ownerType model.OwnerType, ownerID *uint64, statuses []string, page, pageSize int) ([]model.OTCNegotiation, int64, error)
 	ListRemoteNegByClient(ownRouting int64, clientPrincipal, role string) ([]model.OTCNegotiation, error)
+	// ListRemoteNegByBankParty surfaces the bank's REMOTE bidder chains (party id
+	// "employee-<N>") so a bank that bid on a remote offer sees its
+	// my_negotiation_id on that offer in discovery (SP-3 Task 5b). Prefix-matched
+	// (the bank has no single wire principal); a CLIENT acting identity must never
+	// reach it.
+	ListRemoteNegByBankParty(ownRouting int64, role string) ([]model.OTCNegotiation, error)
 }
 
 // myNegStamp is the caller's resolved chain on one offer.
@@ -153,30 +159,43 @@ func buildMyNegotiationIndex(
 		idx.local[pid] = pickActiveChain(group)
 	}
 
-	// REMOTE bidder chains. Only a client principal has a cross-bank identity.
-	if ownerType == model.OwnerClient && ownerID != nil {
+	// REMOTE bidder chains. Both a CLIENT principal and the BANK (an employee
+	// acting AS THE BANK) can have a cross-bank bidder identity:
+	//
+	//   - CLIENT: exact wire principal "client-<N>" via ListRemoteNegByClient.
+	//   - BANK: party id "employee-<N>" with no single wire principal across
+	//     chains, so prefix-matched via ListRemoteNegByBankParty (SP-3 Task 5b).
+	//     This lets a bank that bid on a remote offer see its my_negotiation_id
+	//     on that offer in discovery.
+	//
+	// Both restrict to the BIDDER (buyer) side: the my-nid feature stamps the
+	// caller's chains AS BIDDER, so seller-side chains (which carry
+	// RemoteParentRouting==ownRouting and can never match a peer-hosted discovery
+	// offer) are excluded by the explicit "buyer" role. A client never reaches
+	// the bank lister and vice versa.
+	var remoteRows []model.OTCNegotiation
+	var rerr error
+	switch {
+	case ownerType == model.OwnerClient && ownerID != nil:
 		principal := "client-" + strconv.FormatUint(*ownerID, 10)
-		// role="buyer": the my-nid feature stamps the caller's chains AS BIDDER,
-		// so restrict to remote_buyer_* (the default "" would also pull seller-side
-		// chains, which carry RemoteParentRouting==ownRouting and so can never
-		// match a peer-hosted discovery offer — inert, but the explicit role keeps
-		// intent clear and trims the query).
-		remoteRows, rerr := lister.ListRemoteNegByClient(ownRouting, principal, "buyer")
-		if rerr != nil {
-			return idx, rerr
+		remoteRows, rerr = lister.ListRemoteNegByClient(ownRouting, principal, "buyer")
+	case ownerType == model.OwnerBank:
+		remoteRows, rerr = lister.ListRemoteNegByBankParty(ownRouting, "buyer")
+	}
+	if rerr != nil {
+		return idx, rerr
+	}
+	remoteGroups := map[string][]*model.OTCNegotiation{}
+	for i := range remoteRows {
+		r := &remoteRows[i]
+		if r.RemoteParentRouting == nil || r.RemoteParentNativeID == nil || *r.RemoteParentNativeID == "" {
+			continue // chain without a resolvable parent key — can't match an offer
 		}
-		remoteGroups := map[string][]*model.OTCNegotiation{}
-		for i := range remoteRows {
-			r := &remoteRows[i]
-			if r.RemoteParentRouting == nil || r.RemoteParentNativeID == nil || *r.RemoteParentNativeID == "" {
-				continue // chain without a resolvable parent key — can't match an offer
-			}
-			key := remoteParentKey(*r.RemoteParentRouting, *r.RemoteParentNativeID)
-			remoteGroups[key] = append(remoteGroups[key], r)
-		}
-		for key, group := range remoteGroups {
-			idx.remote[key] = pickActiveChain(group)
-		}
+		key := remoteParentKey(*r.RemoteParentRouting, *r.RemoteParentNativeID)
+		remoteGroups[key] = append(remoteGroups[key], r)
+	}
+	for key, group := range remoteGroups {
+		idx.remote[key] = pickActiveChain(group)
 	}
 
 	return idx, nil

@@ -8441,6 +8441,8 @@ List the negotiation chains against a listing. `:id` is the stable surrogate id 
 
 **LOCAL `:id` — unchanged audience + behavior.** Returns **every** chain on the listing (any status). **Restricted audience:** only the listing's poster (a client whose `principal_id` matches the offer's initiator) or an employee holding the `otc.read.all` permission may call this. A competing bidder — or any other client — receives **403**; bidders see only their own chain via `GET /api/v3/me/otc/options/negotiations`. Each item is now stamped `kind="local"` + own `routing_number` / `bank_code`; `me_owner` is `false` (the field reflects the *chain's* bidder ownership, not the listing's — a bidder is never the owner).
 
+> **Bank-owned LOCAL listing — peer bids included (SP-3 Task 5b).** When the LOCAL listing is **bank-owned** (`owner_type="bank"`) and a **peer** bank bid on it cross-bank, those peer bids live as REMOTE chains where we host the seller as the bank (party id `employee-<N>`). For a bank caller, the response now also merges those peer bids — correlated to this listing by the remote chain's `(remote_parent_routing, remote_parent_native_id)` lot key == the offer's `(routing_number, native_id)`, so only bids on *this* listing appear (each `kind="remote"`, `me_owner=true` because the bank owns the listing). Client-owned listings are unaffected (no bank merge).
+
 **REMOTE `:id` — caller's own chain(s) only.** We do not host the listing, so we can only surface the **caller's own** chain(s) against it — never other parties' chains. Returns the caller's `peer_otc_negotiation` rows whose `(ParentOfferRouting, ParentOfferID)` lot key matches the mirror's `(PeerRoutingNumber, ForeignOfferID)`, each stamped `kind="remote"` with counterparty provenance and `me_owner` per the seller-side rule. If the caller has no chain on it → **empty list** (not 403/404). Only client principals have a cross-bank identity; a bank/employee caller gets an empty list for a remote id.
 
 **Response 200:** `{ "negotiations": [OTCNegotiationResponse...], "total": int }`.
@@ -8543,6 +8545,14 @@ offer.
 **Paging note:** `page`/`page_size` paginate the LOCAL set; REMOTE chains
 are appended in full after the local page (never silently truncated).
 `total` reflects the local total only.
+
+**Remote-merge principal scope (SP-3 Task 5b):** the REMOTE merge is keyed on
+the caller's cross-bank bidder identity. A **client** caller matches its exact
+wire principal `client-<N>`. A caller acting **as the bank** (`owner_type="bank"`,
+an employee) now also gets the bank's own cross-bank **bid** chains — matched by
+the `employee-<N>` prefix (the bank has no single wire principal across chains).
+The two scopes never cross: a client never receives bank chains, and a bank
+never receives client chains.
 
 ---
 
@@ -8658,7 +8668,7 @@ Resolve a single OTC option offer by its **stable surrogate id** — the `local_
 ```
 - `kind` is always `"remote"` and `me_owner` is always `false` (a peer hosts the listing — it is never ours).
 - `status` is `open` or `cancelled` (cancelled mirror rows are still returned so the FE can render a terminal state rather than a 404).
-- `my_negotiation_id` / `my_negotiation_status` (SP-2b) are present here too when the caller has bid on this remote offer cross-bank (matched on the chain's remote parent routing+native id); omitted/0/"" otherwise.
+- `my_negotiation_id` / `my_negotiation_status` (SP-2b) are present here too when the caller has bid on this remote offer cross-bank (matched on the chain's remote parent routing+native id); omitted/0/"" otherwise. Both a **client** caller (its `client-<N>` chain) and a caller acting **as the bank** (its `employee-<N>` bid chain, SP-3 Task 5b) are stamped; the two principal scopes never cross.
 
 **Response 400:** `{ "error": { "code": "validation_error", "message": "invalid id" } }`
 **Response 404:** `{ "error": { "code": "not_found", "message": "OTC offer not found" } }` — neither a local offer nor a remote mirror row exists for `id`.

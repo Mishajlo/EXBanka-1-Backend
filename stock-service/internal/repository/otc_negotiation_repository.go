@@ -452,6 +452,33 @@ func (r *OTCNegotiationRepository) ListRemoteNegByClient(ownRouting int64, clien
 	return out, err
 }
 
+// ListRemoteNegByBankParty returns REMOTE negotiation chains where the side WE
+// host (routing == ownRouting) is the BANK (party id has the "employee-" prefix).
+// role: "buyer" → we host the bank as buyer (our cross-bank bids); "seller" → we
+// host the bank as the offer's writer (peer bids on our bank-owned offer); "" →
+// either. The bank has no single wire principal, so this matches by prefix, not
+// exact id.
+//
+// Scoped to routing_number != OwnRouting() (same remote scope as
+// ListRemoteNegByClient) so only chains WE host as the bank come back — never a
+// peer-hosted bank side, and never a local row. The "employee-%" LIKE pattern is
+// a constant prefix (no user input), so there is no injection risk.
+func (r *OTCNegotiationRepository) ListRemoteNegByBankParty(ownRouting int64, role string) ([]model.OTCNegotiation, error) {
+	q := r.db.Model(&model.OTCNegotiation{}).Where("routing_number != ?", model.OwnRouting())
+	switch role {
+	case "buyer":
+		q = q.Where("remote_buyer_routing = ? AND remote_buyer_id LIKE ?", ownRouting, "employee-%")
+	case "seller":
+		q = q.Where("remote_seller_routing = ? AND remote_seller_id LIKE ?", ownRouting, "employee-%")
+	default:
+		q = q.Where("(remote_buyer_routing = ? AND remote_buyer_id LIKE ?) OR (remote_seller_routing = ? AND remote_seller_id LIKE ?)",
+			ownRouting, "employee-%", ownRouting, "employee-%")
+	}
+	var out []model.OTCNegotiation
+	err := q.Order("updated_at DESC").Find(&out).Error
+	return out, err
+}
+
 // ListRemoteNegOngoing returns every REMOTE negotiation whose status is
 // "ongoing". Used by the safety-net reconciler to find rows that may have
 // missed a peer-driven cancel webhook.

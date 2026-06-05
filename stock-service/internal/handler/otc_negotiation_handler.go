@@ -477,13 +477,28 @@ func (h *OTCOptionsHandler) ListMyNegotiations(ctx context.Context, in *stockpb.
 		out = append(out, item)
 	}
 
-	// REMOTE merge — cross-bank peer negotiations where the caller is a
-	// party. Only meaningful for client principals (cross-bank party ids
-	// are "client-<N>"); employees acting as the bank have no cross-bank
-	// negotiation identity here.
-	if h.peerNegs != nil && ot == model.OwnerClient && oid != nil {
-		principal := "client-" + strconv.FormatUint(*oid, 10)
-		peerRows, perr := h.peerNegs.ListRemoteNegByClient(h.ownRouting, principal, "")
+	// REMOTE merge — cross-bank peer negotiations where the caller is a party,
+	// restricted to the caller's BIDDER chains (ListMyNegotiations is the
+	// "bids I placed" view). Two principal kinds have a cross-bank identity:
+	//
+	//   - CLIENT (cross-bank party id "client-<N>"): match the exact principal
+	//     via ListRemoteNegByClient.
+	//   - BANK (an employee acting AS THE BANK; party id "employee-<N>"): the
+	//     bank has no single wire principal across chains, so match by the
+	//     "employee-" prefix on the side WE host as BUYER (our cross-bank bids)
+	//     via ListRemoteNegByBankParty (SP-3 Task 5b). Local bank bidder chains
+	//     already come back from the service above; this only adds the remote
+	//     ones. A client caller never reaches the bank lister (and vice versa).
+	if h.peerNegs != nil {
+		var peerRows []model.OTCNegotiation
+		var perr error
+		switch {
+		case ot == model.OwnerClient && oid != nil:
+			principal := "client-" + strconv.FormatUint(*oid, 10)
+			peerRows, perr = h.peerNegs.ListRemoteNegByClient(h.ownRouting, principal, "")
+		case ot == model.OwnerBank:
+			peerRows, perr = h.peerNegs.ListRemoteNegByBankParty(h.ownRouting, "buyer")
+		}
 		if perr != nil {
 			return nil, status.Errorf(codes.Internal, "list peer negotiations: %v", perr)
 		}
@@ -679,6 +694,48 @@ func (h *OTCOptionsHandler) ListNegotiationsByListing(ctx context.Context, in *s
 		item.MeOwner = meOwner
 		out = append(out, item)
 	}
+
+	// REMOTE merge for a BANK-owned LOCAL offer (SP-3 Task 5b). The local
+	// ListByParentOffer above returns only LOCAL chains (routing == own); a
+	// PEER bidding on our bank-owned listing creates a REMOTE row where WE
+	// host the seller (the offer's writer) as the BANK. Surface those bids to
+	// the bank caller so it can act on them. Client-owned listings keep their
+	// existing behavior (no bank merge) — the bank lister is prefix-matched on
+	// "employee-" and a client never reaches it.
+	//
+	// Per-listing correlation: a remote chain ties to THIS listing via its
+	// (RemoteParentRouting, RemoteParentNativeID) lot key == the parent offer's
+	// (RoutingNumber, NativeID). Filtering on that key keeps the response to the
+	// chains on the requested offer, never all bank seller chains.
+	if h.peerNegs != nil && ot == model.OwnerBank {
+		peerRows, perr := h.peerNegs.ListRemoteNegByBankParty(h.ownRouting, "seller")
+		if perr != nil {
+			return nil, status.Errorf(codes.Internal, "list peer negotiations: %v", perr)
+		}
+		parentNative := ""
+		if parentOffer.NativeID != nil {
+			parentNative = *parentOffer.NativeID
+		}
+		for i := range peerRows {
+			row := &peerRows[i]
+			if row.RemoteParentRouting == nil || row.RemoteParentNativeID == nil {
+				continue // free-form chain — not tied to a specific listing
+			}
+			if *row.RemoteParentRouting != parentOffer.RoutingNumber || *row.RemoteParentNativeID != parentNative {
+				continue // a chain on a different bank-owned listing
+			}
+			item, _ := peerNegToProto(row, h.ownRouting)
+			if item == nil {
+				continue
+			}
+			// me_owner: the bank owns the parent listing (we host the seller),
+			// so the chain's parent-offer owner is us — uniform with the local
+			// branch (meOwner is true for a bank caller on its own listing).
+			item.MeOwner = meOwner
+			out = append(out, item)
+		}
+	}
+
 	return &stockpb.ListNegotiationsResponse{
 		Negotiations: out,
 		Total:        int64(len(out)),

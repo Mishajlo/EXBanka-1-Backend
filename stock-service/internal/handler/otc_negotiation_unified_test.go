@@ -25,6 +25,12 @@ import (
 type fakePeerNegLister struct {
 	rows []model.OTCNegotiation
 	err  error
+	// bankRows feeds ListRemoteNegByBankParty (SP-3 Task 5b). When the role
+	// is "buyer"/"seller" the rows are filtered on the matching employee-side;
+	// "" returns all. A separate field keeps the client-path tests (which set
+	// `rows`) unaffected by the bank lister.
+	bankRows []model.OTCNegotiation
+	bankErr  error
 }
 
 func (f *fakePeerNegLister) ListRemoteNegByClient(_ int64, _ string, _ string) ([]model.OTCNegotiation, error) {
@@ -32,6 +38,33 @@ func (f *fakePeerNegLister) ListRemoteNegByClient(_ int64, _ string, _ string) (
 		return nil, f.err
 	}
 	return f.rows, nil
+}
+
+func (f *fakePeerNegLister) ListRemoteNegByBankParty(_ int64, role string) ([]model.OTCNegotiation, error) {
+	if f.bankErr != nil {
+		return nil, f.bankErr
+	}
+	out := make([]model.OTCNegotiation, 0, len(f.bankRows))
+	for _, r := range f.bankRows {
+		switch role {
+		case "buyer":
+			if r.RemoteBuyerID != nil && hasEmployeePrefix(*r.RemoteBuyerID) {
+				out = append(out, r)
+			}
+		case "seller":
+			if r.RemoteSellerID != nil && hasEmployeePrefix(*r.RemoteSellerID) {
+				out = append(out, r)
+			}
+		default:
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func hasEmployeePrefix(id string) bool {
+	const p = "employee-"
+	return len(id) >= len(p) && id[:len(p)] == p
 }
 
 // newUnifiedNegFixture builds an OTCOptionsHandler backed by a sqlite
@@ -309,11 +342,16 @@ func TestListMyNegotiations_RemoteStatusFilter(t *testing.T) {
 	}
 }
 
-// TestListMyNegotiations_BankCallerSkipsRemote: an employee acting as the
-// bank has no cross-bank client identity, so no remote rows are merged.
-func TestListMyNegotiations_BankCallerSkipsRemote(t *testing.T) {
+// TestListMyNegotiations_BankCallerDoesNotSeeClientChains: an employee acting
+// as the bank must NOT receive CLIENT cross-bank chains (those live in the
+// client lister, keyed by exact "client-<N>" principal). The bank lister is
+// prefix-matched on "employee-", so a bank caller with no bank-party chains
+// gets nothing — and a client's remote chain never leaks into the bank view
+// (no-cross-party leak). SP-3 Task 5b.
+func TestListMyNegotiations_BankCallerDoesNotSeeClientChains(t *testing.T) {
 	const ownRouting int64 = 111
 	peer := &fakePeerNegLister{rows: []model.OTCNegotiation{
+		// A CLIENT remote chain — must NEVER appear for a bank caller.
 		peerRow(55, ownRouting, "client-7", 222, "client-3", "ongoing"),
 	}}
 	h, _ := newUnifiedNegFixture(t, ownRouting, "111", peer)
@@ -325,6 +363,75 @@ func TestListMyNegotiations_BankCallerSkipsRemote(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 	if len(resp.GetNegotiations()) != 0 {
-		t.Fatalf("want 0 (bank caller has no cross-bank identity), got %d", len(resp.GetNegotiations()))
+		t.Fatalf("want 0 (bank caller must not see CLIENT chains), got %d", len(resp.GetNegotiations()))
+	}
+}
+
+// TestListMyNegotiations_BankCaller_SeesOwnRemoteBidChain: an employee acting
+// as the bank sees the bank's OWN cross-bank BID chain (we host the bank as the
+// BUYER; party id "employee-<N>"). The surrogate id is present so the bank can
+// act on it. SP-3 Task 5b.
+func TestListMyNegotiations_BankCaller_SeesOwnRemoteBidChain(t *testing.T) {
+	const ownRouting int64 = 111
+	const peerSellerRouting int64 = 222
+	peer := &fakePeerNegLister{bankRows: []model.OTCNegotiation{
+		// WE host the bank as BUYER (our cross-bank bid); counterparty seller on 222.
+		peerRow(91, ownRouting, "employee-5", peerSellerRouting, "client-3", "ongoing"),
+	}}
+	h, _ := newUnifiedNegFixture(t, ownRouting, "111", peer)
+
+	resp, err := h.ListMyNegotiations(context.Background(), &stockpb.ListMyNegotiationsRequest{
+		OwnerType: "bank",
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(resp.GetNegotiations()) != 1 {
+		t.Fatalf("want 1 bank bid chain, got %d", len(resp.GetNegotiations()))
+	}
+	got := resp.GetNegotiations()[0]
+	if got.GetKind() != "remote" {
+		t.Errorf("kind = %q want remote", got.GetKind())
+	}
+	if got.GetId() != 91 {
+		t.Errorf("id = %d want 91 (bank's remote bid surrogate id)", got.GetId())
+	}
+	if got.GetMeOwner() {
+		t.Errorf("me_owner = true; the bank is the BIDDER here, not the listing owner")
+	}
+	if got.GetRoutingNumber() != peerSellerRouting {
+		t.Errorf("routing_number = %d want %d (counterparty seller bank)", got.GetRoutingNumber(), peerSellerRouting)
+	}
+}
+
+// TestListMyNegotiations_ClientCaller_NoBankChainLeak: a client caller must
+// only ever see its OWN exact-principal chains, never the bank's. The bank's
+// remote chain (employee-<N>) lives in bankRows (the bank lister) which a
+// client request never invokes. SP-3 Task 5b no-leak guard.
+func TestListMyNegotiations_ClientCaller_NoBankChainLeak(t *testing.T) {
+	const ownRouting int64 = 111
+	peer := &fakePeerNegLister{
+		// A client chain for client-7 (the caller) — should appear.
+		rows: []model.OTCNegotiation{
+			peerRow(55, ownRouting, "client-7", 222, "client-3", "ongoing"),
+		},
+		// A bank chain — must NOT leak to the client caller.
+		bankRows: []model.OTCNegotiation{
+			peerRow(91, ownRouting, "employee-5", 222, "client-3", "ongoing"),
+		},
+	}
+	h, _ := newUnifiedNegFixture(t, ownRouting, "111", peer)
+
+	resp, err := h.ListMyNegotiations(context.Background(), &stockpb.ListMyNegotiationsRequest{
+		OwnerType: "client", OwnerId: 7,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(resp.GetNegotiations()) != 1 {
+		t.Fatalf("want exactly 1 (client's own chain only), got %d", len(resp.GetNegotiations()))
+	}
+	if resp.GetNegotiations()[0].GetId() != 55 {
+		t.Errorf("id = %d want 55 (client's chain); a bank chain leaked", resp.GetNegotiations()[0].GetId())
 	}
 }
