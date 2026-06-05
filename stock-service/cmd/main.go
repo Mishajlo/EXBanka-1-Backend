@@ -161,6 +161,15 @@ func main() {
 	// safe to remove after one or two deploy cycles.
 	dropLegacyOwnerColumns(db)
 
+	// Backfill the explicit `local` discriminator on the three unified OTC
+	// tables for rows created before the column existed (live + deployed DBs
+	// already hold offers/negotiations/contracts). Without this, every existing
+	// row keeps the column default (local=false) and a LOCAL offer would be
+	// mis-treated as remote — the local/remote isolation inverts. AutoMigrate
+	// above adds the column; this stamps it from routing_number. Idempotent and
+	// safe on every startup (it just re-asserts local = routing==own).
+	backfillLocalDiscriminator(db, model.OwnRouting())
+
 	// Sequence backing OTCStockBuyOffer.AccountReservationOrderID. Offset
 	// start avoids collision with orders.id values used by other reservation
 	// flows (price-alert holds, recurring orders, etc.).
@@ -1371,6 +1380,35 @@ func dropLegacyOwnerColumns(db *gorm.DB) {
 			} else {
 				log.Printf("dropped legacy column %s.%s", t.table, col)
 			}
+		}
+	}
+}
+
+// backfillLocalDiscriminator stamps the explicit `local` column on every
+// pre-existing row in the three unified OTC tables from its routing_number:
+// local = (routing_number == ownRouting). New rows are stamped by BeforeCreate;
+// this one-shot pass repairs rows created before the column existed (which all
+// default to local=false). It only touches rows where the column DISAGREES with
+// routing==own, so it is idempotent: a no-op on subsequent restarts once
+// converged. Per-table rows-affected is logged. A failure is non-fatal but
+// logged loudly — a missed backfill would invert local/remote isolation, so the
+// log line must be visible if it ever errors.
+func backfillLocalDiscriminator(db *gorm.DB, ownRouting int64) {
+	for _, table := range []string{"otc_offers", "otc_negotiations", "option_contracts"} {
+		if !db.Migrator().HasTable(table) || !db.Migrator().HasColumn(table, "local") {
+			continue
+		}
+		// SET local = (routing_number = own) WHERE it currently differs.
+		res := db.Exec(
+			"UPDATE "+table+" SET local = (routing_number = ?) WHERE local IS DISTINCT FROM (routing_number = ?)",
+			ownRouting, ownRouting,
+		)
+		if res.Error != nil {
+			log.Printf("WARN: backfill local discriminator on %s failed: %v", table, res.Error)
+			continue
+		}
+		if res.RowsAffected > 0 {
+			log.Printf("backfilled local discriminator on %d %s rows (own routing %d)", res.RowsAffected, table, ownRouting)
 		}
 	}
 }

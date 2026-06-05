@@ -25,8 +25,8 @@ func (r *OptionContractRepository) Create(c *model.OptionContract) error {
 
 // GetByID fetches a local option contract by primary key.
 //
-// Guard: remote rows (routing_number != OwnRouting()) are treated as
-// not-found so they can never enter the local exercise/expiry paths.
+// Guard: remote rows (local == false) are treated as not-found so they can
+// never enter the local exercise/expiry paths.
 func (r *OptionContractRepository) GetByID(id uint64) (*model.OptionContract, error) {
 	var c model.OptionContract
 	err := r.db.First(&c, id).Error
@@ -36,7 +36,7 @@ func (r *OptionContractRepository) GetByID(id uint64) (*model.OptionContract, er
 	if err != nil {
 		return nil, err
 	}
-	if c.RoutingNumber != model.OwnRouting() {
+	if !c.Local {
 		return nil, gorm.ErrRecordNotFound
 	}
 	return &c, nil
@@ -61,8 +61,8 @@ func (r *OptionContractRepository) GetBySagaID(sagaID string) (*model.OptionCont
 
 // GetByOfferID fetches the local contract minted from a given OTCOffer.
 //
-// Guard: remote rows (routing_number != OwnRouting()) are treated as
-// not-found so they never enter the local accept/exercise/saga paths.
+// Guard: remote rows (local == false) are treated as not-found so they never
+// enter the local accept/exercise/saga paths.
 func (r *OptionContractRepository) GetByOfferID(offerID uint64) (*model.OptionContract, error) {
 	var c model.OptionContract
 	err := r.db.Where("offer_id = ?", offerID).First(&c).Error
@@ -72,7 +72,7 @@ func (r *OptionContractRepository) GetByOfferID(offerID uint64) (*model.OptionCo
 	if err != nil {
 		return nil, err
 	}
-	if c.RoutingNumber != model.OwnRouting() {
+	if !c.Local {
 		return nil, gorm.ErrRecordNotFound
 	}
 	return &c, nil
@@ -108,13 +108,13 @@ func (r *OptionContractRepository) Save(c *model.OptionContract) error {
 // seller, or either. owner_id may be nil for OwnerType=bank.
 //
 // Guard: remote (cross-bank) contracts now live in this same table as rows
-// with routing_number != OwnRouting(). The authoritative local-only scope is
-// the routing_number == OwnRouting() predicate, consistent with GetByID,
-// GetByOfferID, and ListExpiring. This query is scoped to own routing so it
-// returns only local contracts and remote rows can never appear in /me views
-// even when their buyer_owner_id/seller_owner_id collide with a local user's ID.
+// with local == false. The authoritative local-only scope is the local == true
+// predicate, consistent with GetByID, GetByOfferID, and ListExpiring. This
+// query is scoped to local rows so it returns only local contracts and remote
+// rows can never appear in /me views even when their buyer_owner_id/
+// seller_owner_id collide with a local user's ID.
 func (r *OptionContractRepository) ListByOwner(ownerType model.OwnerType, ownerID *uint64, role string, statuses []string, page, pageSize int) ([]model.OptionContract, int64, error) {
-	q := r.db.Model(&model.OptionContract{}).Where("routing_number = ?", model.OwnRouting())
+	q := r.db.Model(&model.OptionContract{}).Where("local = ?", true)
 	switch role {
 	case "buyer":
 		q = scopeOwner(q, "buyer_owner_type", "buyer_owner_id", ownerType, ownerID)
@@ -151,13 +151,13 @@ func (r *OptionContractRepository) ListByOwner(ownerType model.OwnerType, ownerI
 
 // ListExpiring returns up to limit ACTIVE contracts past settlement_date.
 //
-// Guard: only local contracts (routing_number == OwnRouting()) are returned.
-// Remote contracts (folded into this table by SP-2a) have their own expiry path
-// via ListRemoteContractsExpiring and must not enter the local expiry saga.
+// Guard: only local contracts (local == true) are returned. Remote contracts
+// (folded into this table by SP-2a) have their own expiry path via
+// ListRemoteContractsExpiring and must not enter the local expiry saga.
 func (r *OptionContractRepository) ListExpiring(today string, limit int) ([]model.OptionContract, error) {
 	var out []model.OptionContract
-	err := r.db.Where("status = ? AND settlement_date < ? AND routing_number = ?",
-		model.OptionContractStatusActive, today, model.OwnRouting()).
+	err := r.db.Where("status = ? AND settlement_date < ? AND local = ?",
+		model.OptionContractStatusActive, today, true).
 		Order("id ASC").Limit(limit).Find(&out).Error
 	return out, err
 }
@@ -170,8 +170,8 @@ func (r *OptionContractRepository) ListExpiringOn(day time.Time, limit int) ([]m
 	start := day.UTC().Truncate(24 * time.Hour)
 	end := start.Add(24 * time.Hour)
 	var out []model.OptionContract
-	err := r.db.Where("status = ? AND settlement_date >= ? AND settlement_date < ? AND routing_number = ?",
-		model.OptionContractStatusActive, start, end, model.OwnRouting()).
+	err := r.db.Where("status = ? AND settlement_date >= ? AND settlement_date < ? AND local = ?",
+		model.OptionContractStatusActive, start, end, true).
 		Order("id ASC").Limit(limit).Find(&out).Error
 	return out, err
 }
@@ -189,11 +189,11 @@ func (r *OptionContractRepository) ListExpiringOn(day time.Time, limit int) ([]m
 // columns (Quantity/StrikePrice/Ticker/StrikeCurrency/SettlementDate/Status/
 // CrossbankTxID/BuyerBankCode/SellerBankCode).
 //
-// EVERY method below scopes to routing_number != OwnRouting(). This is the SAME
-// guarantee the local-path queries get from their routing_number == OwnRouting()
-// guards: a local row can NEVER satisfy a remote query, and a remote row can
-// NEVER satisfy a local one — so folding the two tables together does not leak
-// remote contracts into the local exercise/expiry sagas.
+// EVERY method below scopes to local == false. This is the SAME guarantee the
+// local-path queries get from their local == true guards: a local row can NEVER
+// satisfy a remote query, and a remote row can NEVER satisfy a local one — so
+// folding the two tables together does not leak remote contracts into the local
+// exercise/expiry sagas.
 // ---------------------------------------------------------------------------
 
 // UpsertRemoteContract inserts the remote contract if its natural key
@@ -214,9 +214,11 @@ func (r *OptionContractRepository) UpsertRemoteContract(c *model.OptionContract)
 	}
 	if res.RowsAffected == 0 {
 		// Row already exists — load it so the caller has the persisted ID.
+		// (routing_number, native_id) is the natural key (DATA); local is the
+		// remote discriminator.
 		var existing model.OptionContract
-		err := r.db.Where("routing_number = ? AND native_id = ? AND routing_number != ?",
-			c.RoutingNumber, c.NativeID, model.OwnRouting()).First(&existing).Error
+		err := r.db.Where("routing_number = ? AND native_id = ? AND local = ?",
+			c.RoutingNumber, c.NativeID, false).First(&existing).Error
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil
@@ -233,14 +235,14 @@ func (r *OptionContractRepository) UpsertRemoteContract(c *model.OptionContract)
 // validation flows where each bank looks up its own row by the embedded
 // OptionDescription.negotiationId + this side's direction. Returns the row
 // regardless of status; callers check status before transitioning. Scoped to
-// routing_number != OwnRouting() so a local row can never be returned.
+// local == false so a local row can never be returned.
 func (r *OptionContractRepository) GetRemoteContractByNegotiationAndDirection(
 	negRouting int64, negNative, direction string,
 ) (*model.OptionContract, error) {
 	var c model.OptionContract
 	err := r.db.Where(
-		"remote_negotiation_routing = ? AND remote_negotiation_native_id = ? AND remote_direction = ? AND routing_number != ?",
-		negRouting, negNative, direction, model.OwnRouting(),
+		"remote_negotiation_routing = ? AND remote_negotiation_native_id = ? AND remote_direction = ? AND local = ?",
+		negRouting, negNative, direction, false,
 	).First(&c).Error
 	if err != nil {
 		return nil, err
@@ -249,7 +251,7 @@ func (r *OptionContractRepository) GetRemoteContractByNegotiationAndDirection(
 }
 
 // GetRemoteContractByID loads a remote contract by primary key. Returns
-// gorm.ErrRecordNotFound when the matched row is LOCAL (routing == own), so the
+// gorm.ErrRecordNotFound when the matched row is LOCAL (local == true), so the
 // remote read paths can never surface a local contract.
 func (r *OptionContractRepository) GetRemoteContractByID(id uint64) (*model.OptionContract, error) {
 	var c model.OptionContract
@@ -257,22 +259,22 @@ func (r *OptionContractRepository) GetRemoteContractByID(id uint64) (*model.Opti
 	if err != nil {
 		return nil, err
 	}
-	if c.RoutingNumber == model.OwnRouting() {
+	if c.Local {
 		return nil, gorm.ErrRecordNotFound
 	}
 	return &c, nil
 }
 
 // SetRemoteContractStatus transitions a remote contract to a new status. Scoped
-// to routing_number != OwnRouting(). SkipHooks: this is a targeted column UPDATE
-// on a REMOTE row — the model's BeforeSave runs ValidateOwner against the
-// (zero-value) struct's owner columns and BeforeUpdate adds a version guard,
-// neither meaningful for a column-scoped remote-row flip; BeforeSave would
-// spuriously reject with "invalid owner_type" (the Task-5 hazard).
+// to local == false. SkipHooks: this is a targeted column UPDATE on a REMOTE
+// row — the model's BeforeSave runs ValidateOwner against the (zero-value)
+// struct's owner columns and BeforeUpdate adds a version guard, neither
+// meaningful for a column-scoped remote-row flip; BeforeSave would spuriously
+// reject with "invalid owner_type" (the Task-5 hazard).
 func (r *OptionContractRepository) SetRemoteContractStatus(id uint64, newStatus string) error {
 	return r.db.Session(&gorm.Session{SkipHooks: true}).
 		Model(&model.OptionContract{}).
-		Where("id = ? AND routing_number != ?", id, model.OwnRouting()).
+		Where("id = ? AND local = ?", id, false).
 		Updates(map[string]any{"status": newStatus, "updated_at": time.Now().UTC()}).Error
 }
 
@@ -286,7 +288,7 @@ func (r *OptionContractRepository) SetRemoteContractStatus(id uint64, newStatus 
 func (r *OptionContractRepository) CompareAndSetRemoteContractStatus(id uint64, from, to string) (bool, error) {
 	res := r.db.Session(&gorm.Session{SkipHooks: true}).
 		Model(&model.OptionContract{}).
-		Where("id = ? AND status = ? AND routing_number != ?", id, from, model.OwnRouting()).
+		Where("id = ? AND status = ? AND local = ?", id, from, false).
 		Updates(map[string]any{"status": to, "updated_at": time.Now().UTC()})
 	if res.Error != nil {
 		return false, res.Error
@@ -297,12 +299,12 @@ func (r *OptionContractRepository) CompareAndSetRemoteContractStatus(id uint64, 
 // HasRemoteContractForNegotiation returns true if at least one remote contract
 // row exists for the given negotiation reference. Used by the reconciler to
 // distinguish an ACCEPTED negotiation (contract formed) from a CANCELLED one
-// (no contract). Scoped to routing_number != OwnRouting().
+// (no contract). Scoped to local == false.
 func (r *OptionContractRepository) HasRemoteContractForNegotiation(negRouting int64, negNative string) (bool, error) {
 	var count int64
 	err := r.db.Model(&model.OptionContract{}).
-		Where("remote_negotiation_routing = ? AND remote_negotiation_native_id = ? AND routing_number != ?",
-			negRouting, negNative, model.OwnRouting()).
+		Where("remote_negotiation_routing = ? AND remote_negotiation_native_id = ? AND local = ?",
+			negRouting, negNative, false).
 		Count(&count).Error
 	if err != nil {
 		return false, err
@@ -313,13 +315,13 @@ func (r *OptionContractRepository) HasRemoteContractForNegotiation(negRouting in
 // ListRemoteContractsExpiring returns up to limit ACTIVE remote contracts whose
 // settlement_date is strictly before `today` (a "YYYY-MM-DD" date string; the
 // SettlementDate date column compares correctly against it in Postgres). Used by
-// the daily expiry cron's cross-bank pass. Scoped to routing_number !=
-// OwnRouting() so remote rows are processed ONLY here and never enter the local
-// expiry saga (and vice-versa). Status filtered on the PEER vocabulary "active".
+// the daily expiry cron's cross-bank pass. Scoped to local == false so remote
+// rows are processed ONLY here and never enter the local expiry saga (and
+// vice-versa). Status filtered on the PEER vocabulary "active".
 func (r *OptionContractRepository) ListRemoteContractsExpiring(today string, limit int) ([]model.OptionContract, error) {
 	var out []model.OptionContract
-	err := r.db.Where("status = ? AND settlement_date < ? AND routing_number != ?",
-		"active", today, model.OwnRouting()).
+	err := r.db.Where("status = ? AND settlement_date < ? AND local = ?",
+		"active", today, false).
 		Order("id ASC").Limit(limit).Find(&out).Error
 	return out, err
 }
@@ -332,12 +334,12 @@ func (r *OptionContractRepository) ListRemoteContractsExpiring(today string, lim
 // discriminator (matched against the COUNTERPARTY routing stored in
 // buyer_bank_code/seller_bank_code). role can be "buyer", "seller", or anything
 // else (= "either"). Pagination is 1-based; pageSize <= 0 disables the limit.
-// Scoped to routing_number != OwnRouting().
+// Scoped to local == false.
 func (r *OptionContractRepository) ListRemoteContractsByLocalParticipant(
 	participantID string, ownRouting int64, role string, page, pageSize int,
 ) ([]model.OptionContract, int64, error) {
 	own := strconv.FormatInt(ownRouting, 10)
-	q := r.db.Model(&model.OptionContract{}).Where("routing_number != ?", model.OwnRouting())
+	q := r.db.Model(&model.OptionContract{}).Where("local = ?", false)
 	switch role {
 	case "buyer":
 		q = q.Where("remote_direction = ? AND buyer_bank_code = ? AND remote_buyer_id = ?", "CREDIT", own, participantID)
@@ -382,14 +384,14 @@ func (r *OptionContractRepository) ListRemoteContractsByLocalParticipant(
 // single wire principal across contracts, so it is matched by PREFIX, not an
 // exact id; the "employee-%" LIKE pattern is a constant prefix (no user input),
 // so there is no injection risk. Pagination is 1-based; pageSize <= 0 disables
-// the limit. Scoped to routing_number != OwnRouting() (same remote scope as
+// the limit. Scoped to local == false (same remote scope as
 // ListRemoteContractsByLocalParticipant) so a LOCAL row can never satisfy it.
 func (r *OptionContractRepository) ListRemoteContractsByBankParty(
 	ownRouting int64, role string, page, pageSize int,
 ) ([]model.OptionContract, int64, error) {
 	own := strconv.FormatInt(ownRouting, 10)
 	const employeePrefix = "employee-%"
-	q := r.db.Model(&model.OptionContract{}).Where("routing_number != ?", model.OwnRouting())
+	q := r.db.Model(&model.OptionContract{}).Where("local = ?", false)
 	switch role {
 	case "buyer":
 		q = q.Where("remote_direction = ? AND buyer_bank_code = ? AND remote_buyer_id LIKE ?", "CREDIT", own, employeePrefix)

@@ -1,8 +1,10 @@
-// Package repository — routing-number guard tests.
+// Package repository — local-discriminator guard tests.
 //
 // Every method that feeds LOCAL-ONLY money paths (accept, cascade, expiry,
-// exercise) must filter to routing_number == OwnRouting() so remote rows
-// that land in the unified tables (Tasks 4-6) can NEVER enter those paths.
+// exercise) must filter to local == true so remote rows that land in the
+// unified tables (Tasks 4-6) can NEVER enter those paths; the remote-scoped
+// methods filter to local == false. The `local` column is THE authoritative
+// discriminator (stamped once in BeforeCreate as routing_number == OwnRouting()).
 //
 // Setup: sqlite :memory:, OwnRouting = 111.
 // Seed one LOCAL offer/negotiation/contract (routing 111 via BeforeCreate)
@@ -276,8 +278,8 @@ func TestGuard_ListOpenForCache_ExcludesRemote(t *testing.T) {
 		t.Fatalf("ListOpenForCache: %v", err)
 	}
 	for _, o := range rows {
-		if o.RoutingNumber != model.OwnRouting() {
-			t.Errorf("ListOpenForCache returned remote row id=%d routing=%d", o.ID, o.RoutingNumber)
+		if !o.Local {
+			t.Errorf("ListOpenForCache returned remote row id=%d (local=%v routing=%d)", o.ID, o.Local, o.RoutingNumber)
 		}
 	}
 	// Must still return the local open offer (sanity check it's not empty).
@@ -299,8 +301,8 @@ func TestGuard_ListExpiringOffers_ExcludesRemote(t *testing.T) {
 		t.Fatalf("ListExpiringOffers: %v", err)
 	}
 	for _, o := range rows {
-		if o.RoutingNumber != model.OwnRouting() {
-			t.Errorf("ListExpiringOffers returned remote row id=%d routing=%d", o.ID, o.RoutingNumber)
+		if !o.Local {
+			t.Errorf("ListExpiringOffers returned remote row id=%d (local=%v routing=%d)", o.ID, o.Local, o.RoutingNumber)
 		}
 	}
 	// Sanity: at least the local expired offer is returned.
@@ -337,8 +339,8 @@ func TestGuard_LockByIDTx_LocalOffer_Succeeds(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if o.RoutingNumber != model.OwnRouting() {
-			t.Errorf("LockByIDTx(local): routing=%d want %d", o.RoutingNumber, model.OwnRouting())
+		if !o.Local {
+			t.Errorf("LockByIDTx(local): Local=%v want true (routing=%d)", o.Local, o.RoutingNumber)
 		}
 		return nil
 	})
@@ -364,8 +366,8 @@ func TestGuard_ListOpenByParentOfferForUpdate_ExcludesRemote(t *testing.T) {
 			return err
 		}
 		for _, n := range rows {
-			if n.RoutingNumber != model.OwnRouting() {
-				t.Errorf("ListOpenByParentOfferForUpdate returned remote row id=%d routing=%d", n.ID, n.RoutingNumber)
+			if !n.Local {
+				t.Errorf("ListOpenByParentOfferForUpdate returned remote row id=%d (local=%v routing=%d)", n.ID, n.Local, n.RoutingNumber)
 			}
 		}
 		if len(rows) == 0 {
@@ -405,8 +407,8 @@ func TestGuard_LockByID_LocalNeg_Succeeds(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if n.RoutingNumber != model.OwnRouting() {
-			t.Errorf("LockByID(local neg): routing=%d want %d", n.RoutingNumber, model.OwnRouting())
+		if !n.Local {
+			t.Errorf("LockByID(local neg): Local=%v want true (routing=%d)", n.Local, n.RoutingNumber)
 		}
 		return nil
 	})
@@ -430,8 +432,8 @@ func TestGuard_ListByBidder_ExcludesRemote(t *testing.T) {
 		t.Fatalf("ListByBidder: %v", err)
 	}
 	for _, n := range rows {
-		if n.RoutingNumber != model.OwnRouting() {
-			t.Errorf("ListByBidder returned remote row id=%d routing=%d", n.ID, n.RoutingNumber)
+		if !n.Local {
+			t.Errorf("ListByBidder returned remote row id=%d (local=%v routing=%d)", n.ID, n.Local, n.RoutingNumber)
 		}
 	}
 }
@@ -448,8 +450,8 @@ func TestGuard_ListByParentOffer_ExcludesRemote(t *testing.T) {
 		t.Fatalf("ListByParentOffer: %v", err)
 	}
 	for _, n := range rows {
-		if n.RoutingNumber != model.OwnRouting() {
-			t.Errorf("ListByParentOffer returned remote row id=%d routing=%d", n.ID, n.RoutingNumber)
+		if !n.Local {
+			t.Errorf("ListByParentOffer returned remote row id=%d (local=%v routing=%d)", n.ID, n.Local, n.RoutingNumber)
 		}
 	}
 	if len(rows) == 0 {
@@ -508,8 +510,8 @@ func TestGuard_ListExpiring_ExcludesRemote(t *testing.T) {
 		t.Fatalf("ListExpiring: %v", err)
 	}
 	for _, c := range rows {
-		if c.RoutingNumber != model.OwnRouting() {
-			t.Errorf("ListExpiring returned remote row id=%d routing=%d", c.ID, c.RoutingNumber)
+		if !c.Local {
+			t.Errorf("ListExpiring returned remote row id=%d (local=%v routing=%d)", c.ID, c.Local, c.RoutingNumber)
 		}
 	}
 	if len(rows) == 0 {
@@ -595,8 +597,8 @@ func TestGuard_ListExpiringOn_ExcludesRemote(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("ListExpiringOn: got %d rows want 1", len(rows))
 	}
-	if rows[0].RoutingNumber != model.OwnRouting() {
-		t.Errorf("ListExpiringOn returned remote row id=%d routing=%d", rows[0].ID, rows[0].RoutingNumber)
+	if !rows[0].Local {
+		t.Errorf("ListExpiringOn returned remote row id=%d (local=%v routing=%d)", rows[0].ID, rows[0].Local, rows[0].RoutingNumber)
 	}
 	if rows[0].ID != localContract.ID {
 		t.Errorf("ListExpiringOn: got contract id=%d want %d (local)", rows[0].ID, localContract.ID)
@@ -627,8 +629,8 @@ func TestGuard_ContractGetByID_LocalRow_Succeeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByID(local contract): %v", err)
 	}
-	if c.RoutingNumber != model.OwnRouting() {
-		t.Errorf("GetByID(local contract): routing=%d want %d", c.RoutingNumber, model.OwnRouting())
+	if !c.Local {
+		t.Errorf("GetByID(local contract): Local=%v want true (routing=%d)", c.Local, c.RoutingNumber)
 	}
 }
 
@@ -754,10 +756,144 @@ func TestGuard_ContractListByOwner_ExcludesRemote(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("ListByOwner rows: got %d want 1", len(rows))
 	}
-	if rows[0].RoutingNumber != model.OwnRouting() {
-		t.Errorf("ListByOwner returned remote row id=%d routing=%d", rows[0].ID, rows[0].RoutingNumber)
+	if !rows[0].Local {
+		t.Errorf("ListByOwner returned remote row id=%d (local=%v routing=%d)", rows[0].ID, rows[0].Local, rows[0].RoutingNumber)
 	}
 	if rows[0].ID != localContract.ID {
 		t.Errorf("ListByOwner: got contract id=%d want %d (local)", rows[0].ID, localContract.ID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Invariant Guard tests — `local` can NEVER diverge from routing == own.
+//
+// These assert the load-bearing invariant directly: across the full mixed set
+// of local + remote rows seeded above, row.Local == (row.RoutingNumber ==
+// OwnRouting()) for EVERY row. If a write path ever stamped the two
+// inconsistently, the local/remote isolation would invert — these tests catch
+// that.
+// ---------------------------------------------------------------------------
+
+// TestInvariant_OfferLocalMatchesRouting asserts the offer table's `local`
+// column never disagrees with routing == own, AND that the local-discriminator
+// query (ListOpenForCache) sees only Local=true rows while the remote row is
+// invisible to it (and vice-versa via GetRemoteByID).
+func TestInvariant_OfferLocalMatchesRouting(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOTCOfferRepository(db)
+	localOfferID, remoteOfferID, _, _, _, _ := seedGuardFixtures(t, db)
+
+	var all []model.OTCOffer
+	if err := db.Find(&all).Error; err != nil {
+		t.Fatalf("list offers: %v", err)
+	}
+	if len(all) == 0 {
+		t.Fatal("no offers seeded")
+	}
+	sawLocal, sawRemote := false, false
+	for _, o := range all {
+		if o.Local != (o.RoutingNumber == model.OwnRouting()) {
+			t.Errorf("offer id=%d: Local=%v but routing==own is %v (routing=%d)",
+				o.ID, o.Local, o.RoutingNumber == model.OwnRouting(), o.RoutingNumber)
+		}
+		if o.Local {
+			sawLocal = true
+		} else {
+			sawRemote = true
+		}
+	}
+	if !sawLocal || !sawRemote {
+		t.Fatalf("fixture must contain both local and remote rows (sawLocal=%v sawRemote=%v)", sawLocal, sawRemote)
+	}
+
+	// A remote row is invisible to the local-discriminator path.
+	if _, err := r.LockByIDTx(db, remoteOfferID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Errorf("LockByIDTx(remote offer): want ErrRecordNotFound, got %v", err)
+	}
+	// A local row is invisible to the remote-discriminator path.
+	if _, err := r.GetRemoteByID(localOfferID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Errorf("GetRemoteByID(local offer): want ErrRecordNotFound, got %v", err)
+	}
+}
+
+// TestInvariant_NegotiationLocalMatchesRouting asserts the negotiation table's
+// `local` column never disagrees with routing == own, and that a remote chain
+// is invisible to the local lock path while a local chain is invisible to the
+// remote read path.
+func TestInvariant_NegotiationLocalMatchesRouting(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOTCNegotiationRepository(db)
+	_, _, localNegID, remoteNegID, _, _ := seedGuardFixtures(t, db)
+
+	var all []model.OTCNegotiation
+	if err := db.Find(&all).Error; err != nil {
+		t.Fatalf("list negotiations: %v", err)
+	}
+	sawLocal, sawRemote := false, false
+	for _, n := range all {
+		if n.Local != (n.RoutingNumber == model.OwnRouting()) {
+			t.Errorf("neg id=%d: Local=%v but routing==own is %v (routing=%d)",
+				n.ID, n.Local, n.RoutingNumber == model.OwnRouting(), n.RoutingNumber)
+		}
+		if n.Local {
+			sawLocal = true
+		} else {
+			sawRemote = true
+		}
+	}
+	if !sawLocal || !sawRemote {
+		t.Fatalf("fixture must contain both local and remote negotiations (sawLocal=%v sawRemote=%v)", sawLocal, sawRemote)
+	}
+
+	// Remote chain invisible to the local lock path.
+	err := db.Transaction(func(tx *gorm.DB) error {
+		_, e := r.LockByID(tx, remoteNegID)
+		return e
+	})
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Errorf("LockByID(remote neg): want ErrRecordNotFound, got %v", err)
+	}
+	// Local chain invisible to the remote read path.
+	if _, err := r.GetRemoteNegByID(localNegID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Errorf("GetRemoteNegByID(local neg): want ErrRecordNotFound, got %v", err)
+	}
+}
+
+// TestInvariant_ContractLocalMatchesRouting asserts the contract table's
+// `local` column never disagrees with routing == own, and that a remote
+// contract is invisible to the local GetByID path while a local contract is
+// invisible to the remote read path.
+func TestInvariant_ContractLocalMatchesRouting(t *testing.T) {
+	db := newGuardTestDB(t)
+	r := NewOptionContractRepository(db)
+	_, _, _, _, localContractID, remoteContractID := seedGuardFixtures(t, db)
+
+	var all []model.OptionContract
+	if err := db.Find(&all).Error; err != nil {
+		t.Fatalf("list contracts: %v", err)
+	}
+	sawLocal, sawRemote := false, false
+	for _, c := range all {
+		if c.Local != (c.RoutingNumber == model.OwnRouting()) {
+			t.Errorf("contract id=%d: Local=%v but routing==own is %v (routing=%d)",
+				c.ID, c.Local, c.RoutingNumber == model.OwnRouting(), c.RoutingNumber)
+		}
+		if c.Local {
+			sawLocal = true
+		} else {
+			sawRemote = true
+		}
+	}
+	if !sawLocal || !sawRemote {
+		t.Fatalf("fixture must contain both local and remote contracts (sawLocal=%v sawRemote=%v)", sawLocal, sawRemote)
+	}
+
+	// Remote contract invisible to the local read path.
+	if _, err := r.GetByID(remoteContractID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Errorf("GetByID(remote contract): want ErrRecordNotFound, got %v", err)
+	}
+	// Local contract invisible to the remote read path.
+	if _, err := r.GetRemoteContractByID(localContractID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Errorf("GetRemoteContractByID(local contract): want ErrRecordNotFound, got %v", err)
 	}
 }

@@ -58,8 +58,8 @@ func (r *OTCNegotiationRepository) GetByID(id uint64) (*model.OTCNegotiation, er
 // before any state mutation (counter/accept/reject/cancel) so concurrent
 // operations on the same chain serialize correctly.
 //
-// Guard: remote rows (routing_number != OwnRouting()) are treated as
-// not-found so they can never enter the local accept/cancel/reject paths.
+// Guard: remote rows (local == false) are treated as not-found so they can
+// never enter the local accept/cancel/reject paths.
 func (r *OTCNegotiationRepository) LockByID(tx *gorm.DB, id uint64) (*model.OTCNegotiation, error) {
 	var n model.OTCNegotiation
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&n, id).Error
@@ -69,7 +69,7 @@ func (r *OTCNegotiationRepository) LockByID(tx *gorm.DB, id uint64) (*model.OTCN
 	if err != nil {
 		return nil, err
 	}
-	if n.RoutingNumber != model.OwnRouting() {
+	if !n.Local {
 		return nil, gorm.ErrRecordNotFound
 	}
 	return &n, nil
@@ -103,11 +103,11 @@ func (r *OTCNegotiationRepository) SaveTx(tx *gorm.DB, n *model.OTCNegotiation) 
 // Used to surface "current bids" on an offer detail view, AND to drive
 // the cascade-cancel step when one chain accepts.
 //
-// Guard: only local chains (routing_number == OwnRouting()) are returned.
-// Remote chains must not be cascade-cancelled by a local accept.
+// Guard: only local chains (local == true) are returned. Remote chains must
+// not be cascade-cancelled by a local accept.
 func (r *OTCNegotiationRepository) ListByParentOffer(parentOfferID uint64) ([]model.OTCNegotiation, error) {
 	var out []model.OTCNegotiation
-	err := r.db.Where("parent_offer_id = ? AND routing_number = ?", parentOfferID, model.OwnRouting()).
+	err := r.db.Where("parent_offer_id = ? AND local = ?", parentOfferID, true).
 		Order("created_at ASC").Find(&out).Error
 	return out, err
 }
@@ -116,9 +116,8 @@ func (r *OTCNegotiationRepository) ListByParentOffer(parentOfferID uint64) ([]mo
 // parent. Used by the accept transaction to cascade-cancel siblings
 // after the winning chain transitions to "accepted".
 //
-// Guard: only local chains (routing_number == OwnRouting()) are locked.
-// Remote chains under a shared parent_offer_id must not be affected by a
-// local cascade-cancel.
+// Guard: only local chains (local == true) are locked. Remote chains under a
+// shared parent_offer_id must not be affected by a local cascade-cancel.
 func (r *OTCNegotiationRepository) ListOpenByParentOfferForUpdate(tx *gorm.DB, parentOfferID uint64) ([]model.OTCNegotiation, error) {
 	var out []model.OTCNegotiation
 	openStatuses := []string{
@@ -126,8 +125,8 @@ func (r *OTCNegotiationRepository) ListOpenByParentOfferForUpdate(tx *gorm.DB, p
 		model.OTCNegotiationStatusCountered,
 	}
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("parent_offer_id = ? AND status IN ? AND routing_number = ?",
-			parentOfferID, openStatuses, model.OwnRouting()).
+		Where("parent_offer_id = ? AND status IN ? AND local = ?",
+			parentOfferID, openStatuses, true).
 		Find(&out).Error
 	return out, err
 }
@@ -142,15 +141,15 @@ func (r *OTCNegotiationRepository) ListOpenByParentOfferForUpdate(tx *gorm.DB, p
 // foreign-bank rows (it would NOT silently leak Bank B's client-1 to
 // Bank A's client-1 with the same numeric id).
 //
-// Guard: routing_number == OwnRouting() ensures remote rows folded into
-// the unified table (Tasks 4-6) never appear in a local bidder's view.
+// Guard: local == true ensures remote rows folded into the unified table
+// (Tasks 4-6) never appear in a local bidder's view.
 func (r *OTCNegotiationRepository) ListByBidder(
 	ownerType model.OwnerType, ownerID *uint64, statuses []string, page, pageSize int,
 ) ([]model.OTCNegotiation, int64, error) {
 	q := r.db.Model(&model.OTCNegotiation{}).
 		Where("bidder_owner_type = ?", ownerType).
 		Where("bidder_bank_code IS NULL").
-		Where("routing_number = ?", model.OwnRouting())
+		Where("local = ?", true)
 	if ownerType == model.OwnerClient {
 		q = q.Where("bidder_owner_id = ?", ownerID)
 	} else {
@@ -201,11 +200,11 @@ func (r *OTCNegotiationRepository) findChainByBidder(
 	db *gorm.DB, parentOfferID uint64, bidderOwnerType model.OwnerType, bidderOwnerID *uint64,
 ) (*model.OTCNegotiation, error) {
 	var n model.OTCNegotiation
-	// Guard: restrict to local chains (routing_number == OwnRouting()) so a
-	// remote chain for the same (parent, bidder) tuple can never trigger a
-	// false "one chain already exists" rejection for a local bidder.
-	q := db.Where("parent_offer_id = ? AND bidder_owner_type = ? AND routing_number = ?",
-		parentOfferID, bidderOwnerType, model.OwnRouting())
+	// Guard: restrict to local chains (local == true) so a remote chain for the
+	// same (parent, bidder) tuple can never trigger a false "one chain already
+	// exists" rejection for a local bidder.
+	q := db.Where("parent_offer_id = ? AND bidder_owner_type = ? AND local = ?",
+		parentOfferID, bidderOwnerType, true)
 	if bidderOwnerType == model.OwnerClient {
 		q = q.Where("bidder_owner_id = ?", bidderOwnerID)
 	} else {
@@ -271,10 +270,10 @@ func (r *OTCNegotiationRepository) AggregateActiveBidsByOffer(offerIDs []uint64)
 	var rows []row
 	err := r.db.Model(&model.OTCNegotiation{}).
 		Select("parent_offer_id, MAX(premium) AS best_bid, MIN(premium) AS best_ask, COUNT(*) AS active_count").
-		Where("parent_offer_id IN ? AND status IN ? AND routing_number = ?", offerIDs, []string{
+		Where("parent_offer_id IN ? AND status IN ? AND local = ?", offerIDs, []string{
 			model.OTCNegotiationStatusOpen,
 			model.OTCNegotiationStatusCountered,
-		}, model.OwnRouting()).
+		}, true).
 		Group("parent_offer_id").
 		Scan(&rows).Error
 	if err != nil {
@@ -299,12 +298,12 @@ func (r *OTCNegotiationRepository) AggregateActiveBidsByOffer(offerIDs []uint64)
 // cross-bank party/offer data is carried in the Remote* columns + the shared
 // Status column (which holds the PEER status vocabulary on remote rows).
 //
-// EVERY method below scopes to routing_number != OwnRouting() (or, when the
-// peer routing is known, == that explicit peer routing). This is the SAME
-// guarantee the local-path queries get from their routing_number ==
-// OwnRouting() guards: a local row can NEVER satisfy a remote query, and a
-// remote row can NEVER satisfy a local one — so folding the two tables
-// together does not leak remote chains into local accept/cascade/exercise.
+// EVERY method below scopes to local == false (and, when the peer routing is
+// known, ALSO matches that explicit peer routing as natural-key data). This is
+// the SAME guarantee the local-path queries get from their local == true
+// guards: a local row can NEVER satisfy a remote query, and a remote row can
+// NEVER satisfy a local one — so folding the two tables together does not leak
+// remote chains into local accept/cascade/exercise.
 // ---------------------------------------------------------------------------
 
 // UpsertRemoteNeg inserts or updates a remote negotiation keyed on the natural
@@ -330,27 +329,28 @@ func (r *OTCNegotiationRepository) UpsertRemoteNeg(n *model.OTCNegotiation) erro
 }
 
 // GetRemoteNegByID loads a REMOTE negotiation by its surrogate primary key.
-// A row whose routing_number == OwnRouting() is a LOCAL chain and is treated as
-// not-found here, so a local surrogate id never resolves through the remote
-// dispatch path. Mirrors OTCOfferRepository.GetRemoteByID (SP-2b Task 4).
+// A LOCAL chain (local == true) is treated as not-found here, so a local
+// surrogate id never resolves through the remote dispatch path. Mirrors
+// OTCOfferRepository.GetRemoteByID (SP-2b Task 4).
 func (r *OTCNegotiationRepository) GetRemoteNegByID(id uint64) (*model.OTCNegotiation, error) {
 	var n model.OTCNegotiation
 	if err := r.db.First(&n, id).Error; err != nil {
 		return nil, err
 	}
-	if n.RoutingNumber == model.OwnRouting() {
+	if n.Local {
 		return nil, gorm.ErrRecordNotFound
 	}
 	return &n, nil
 }
 
 // GetRemoteNegByRoutingAndNative loads a remote negotiation by its (peer
-// routing, native id). Returns ErrRecordNotFound when no remote row matches or
-// when the matched row is local (routing == own).
+// routing, native id) natural key. Returns ErrRecordNotFound when no remote row
+// matches or when the matched row is local (local == true). The routing_number
+// predicate is the natural key (DATA); local is the remote discriminator.
 func (r *OTCNegotiationRepository) GetRemoteNegByRoutingAndNative(routing int64, native string) (*model.OTCNegotiation, error) {
 	var n model.OTCNegotiation
-	err := r.db.Where("routing_number = ? AND native_id = ? AND routing_number != ?",
-		routing, native, model.OwnRouting()).First(&n).Error
+	err := r.db.Where("routing_number = ? AND native_id = ? AND local = ?",
+		routing, native, false).First(&n).Error
 	if err != nil {
 		return nil, err
 	}
@@ -360,11 +360,11 @@ func (r *OTCNegotiationRepository) GetRemoteNegByRoutingAndNative(routing int64,
 // GetRemoteNegByNative looks up a remote negotiation by native_id ALONE (the
 // negotiation UUID, identical on both banks and unique per bank). Used by the
 // accept money-leg validator, which can run on either side and so cannot trust
-// the peer bank code. Scoped to routing_number != OwnRouting() so a local row
-// with a colliding native id (there is none today) could never be returned.
+// the peer bank code. Scoped to local == false so a local row with a colliding
+// native id (there is none today) could never be returned.
 func (r *OTCNegotiationRepository) GetRemoteNegByNative(native string) (*model.OTCNegotiation, error) {
 	var n model.OTCNegotiation
-	err := r.db.Where("native_id = ? AND routing_number != ?", native, model.OwnRouting()).First(&n).Error
+	err := r.db.Where("native_id = ? AND local = ?", native, false).First(&n).Error
 	if err != nil {
 		return nil, err
 	}
@@ -385,7 +385,7 @@ func (r *OTCNegotiationRepository) GetRemoteNegByNative(native string) (*model.O
 func (r *OTCNegotiationRepository) UpdateRemoteNegOffer(routing int64, native, offerJSON string) error {
 	return r.db.Session(&gorm.Session{SkipHooks: true}).
 		Model(&model.OTCNegotiation{}).
-		Where("routing_number = ? AND native_id = ? AND routing_number != ?", routing, native, model.OwnRouting()).
+		Where("routing_number = ? AND native_id = ? AND local = ?", routing, native, false).
 		Updates(map[string]any{"remote_offer_json": offerJSON, "updated_at": time.Now().UTC()}).Error
 }
 
@@ -394,7 +394,7 @@ func (r *OTCNegotiationRepository) UpdateRemoteNegOffer(routing int64, native, o
 func (r *OTCNegotiationRepository) UpdateRemoteNegStatus(routing int64, native, status string) error {
 	return r.db.Session(&gorm.Session{SkipHooks: true}).
 		Model(&model.OTCNegotiation{}).
-		Where("routing_number = ? AND native_id = ? AND routing_number != ?", routing, native, model.OwnRouting()).
+		Where("routing_number = ? AND native_id = ? AND local = ?", routing, native, false).
 		Updates(map[string]any{"status": status, "updated_at": time.Now().UTC()}).Error
 }
 
@@ -406,8 +406,8 @@ func (r *OTCNegotiationRepository) UpdateRemoteNegStatus(routing int64, native, 
 func (r *OTCNegotiationRepository) CompareAndSetRemoteNegStatus(routing int64, native, from, to string) (bool, error) {
 	res := r.db.Session(&gorm.Session{SkipHooks: true}).
 		Model(&model.OTCNegotiation{}).
-		Where("routing_number = ? AND native_id = ? AND status = ? AND routing_number != ?",
-			routing, native, from, model.OwnRouting()).
+		Where("routing_number = ? AND native_id = ? AND status = ? AND local = ?",
+			routing, native, from, false).
 		Updates(map[string]any{"status": to, "updated_at": time.Now().UTC()})
 	if res.Error != nil {
 		return false, res.Error
@@ -424,8 +424,8 @@ func (r *OTCNegotiationRepository) ListRemoteNegBySellerAndParent(
 ) ([]model.OTCNegotiation, error) {
 	var out []model.OTCNegotiation
 	err := r.db.Where(
-		"remote_seller_routing = ? AND remote_seller_id = ? AND status = ? AND remote_parent_routing = ? AND remote_parent_native_id = ? AND routing_number != ?",
-		sellerRouting, sellerID, "ongoing", parentRouting, parentNative, model.OwnRouting()).
+		"remote_seller_routing = ? AND remote_seller_id = ? AND status = ? AND remote_parent_routing = ? AND remote_parent_native_id = ? AND local = ?",
+		sellerRouting, sellerID, "ongoing", parentRouting, parentNative, false).
 		Order("created_at ASC").Find(&out).Error
 	return out, err
 }
@@ -433,9 +433,9 @@ func (r *OTCNegotiationRepository) ListRemoteNegBySellerAndParent(
 // ListRemoteNegByClient returns remote rows where the caller's bank hosts a
 // party matching (ownRouting, clientPrincipal). clientPrincipal is the wire id
 // ("client-<N>"); role narrows to "buyer", "seller" or "" / "both". Scoped to
-// routing_number != OwnRouting() so only remote chains are returned.
+// local == false so only remote chains are returned.
 func (r *OTCNegotiationRepository) ListRemoteNegByClient(ownRouting int64, clientPrincipal, role string) ([]model.OTCNegotiation, error) {
-	q := r.db.Model(&model.OTCNegotiation{}).Where("routing_number != ?", model.OwnRouting())
+	q := r.db.Model(&model.OTCNegotiation{}).Where("local = ?", false)
 	switch role {
 	case "buyer":
 		q = q.Where("remote_buyer_routing = ? AND remote_buyer_id = ?", ownRouting, clientPrincipal)
@@ -459,12 +459,12 @@ func (r *OTCNegotiationRepository) ListRemoteNegByClient(ownRouting int64, clien
 // either. The bank has no single wire principal, so this matches by prefix, not
 // exact id.
 //
-// Scoped to routing_number != OwnRouting() (same remote scope as
-// ListRemoteNegByClient) so only chains WE host as the bank come back — never a
-// peer-hosted bank side, and never a local row. The "employee-%" LIKE pattern is
-// a constant prefix (no user input), so there is no injection risk.
+// Scoped to local == false (same remote scope as ListRemoteNegByClient) so
+// only chains WE host as the bank come back — never a peer-hosted bank side,
+// and never a local row. The "employee-%" LIKE pattern is a constant prefix (no
+// user input), so there is no injection risk.
 func (r *OTCNegotiationRepository) ListRemoteNegByBankParty(ownRouting int64, role string) ([]model.OTCNegotiation, error) {
-	q := r.db.Model(&model.OTCNegotiation{}).Where("routing_number != ?", model.OwnRouting())
+	q := r.db.Model(&model.OTCNegotiation{}).Where("local = ?", false)
 	switch role {
 	case "buyer":
 		q = q.Where("remote_buyer_routing = ? AND remote_buyer_id LIKE ?", ownRouting, "employee-%")
@@ -484,7 +484,7 @@ func (r *OTCNegotiationRepository) ListRemoteNegByBankParty(ownRouting int64, ro
 // missed a peer-driven cancel webhook.
 func (r *OTCNegotiationRepository) ListRemoteNegOngoing() ([]model.OTCNegotiation, error) {
 	var out []model.OTCNegotiation
-	err := r.db.Where("status = ? AND routing_number != ?", "ongoing", model.OwnRouting()).
+	err := r.db.Where("status = ? AND local = ?", "ongoing", false).
 		Order("updated_at ASC").Find(&out).Error
 	return out, err
 }
