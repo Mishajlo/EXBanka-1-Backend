@@ -148,8 +148,8 @@ Client (HTTP/JSON) → API Gateway (Gin, :8080)
 
 | Caller | Calls |
 |---|---|
-| api-gateway | auth, user, client, account, card, transaction, credit, exchange, verification, notification, stock (StockExchange / Security / Order / Portfolio / OTC / Tax / SourceAdmin / **InvestmentFund** (Celina 4) / **OTCOptions** (Spec 2)) |
-| stock-service | account-service (debit/credit/reservations/bank-account), exchange-service (FX), user-service (employee names + actuary limits), client-service (client name resolution), **transaction-service (Spec 3 InterBankService for cross-bank Phase 3 + ReverseInterBankTransfer)** |
+| api-gateway | auth, user, client, account, card, transaction, credit, exchange, verification, notification, stock (StockExchange / Security / Order / Portfolio / OTC / Tax / SourceAdmin / **InvestmentFund** (Celina 4) / **OTCOptions** (Spec 2)), **interbank-service** (2026-06-07 cutover: the whole `/cross-bank-protocol` surface — `PeerTxService`, `PeerBankAdminService` registry, `PeerOTCService` forwarder, `PeerEgressService`, `PeerUserService`) |
+| stock-service | account-service (debit/credit/reservations/bank-account), exchange-service (FX), user-service (employee names + actuary limits), client-service (client name resolution), **interbank-service** (2026-06-07 cutover: `PeerTxService.InitiateOutboundTxWithPostings` for OTC settlement, `PeerBankAdminService.ListPeerBanks` for the discovery poll, and `PeerEgressService.ProxyToPeer` for all outbound OTC HTTP — peer resolution + signing live in interbank-service, not here) |
 | auth-service | user-service (employee lookup). NOTE: auth owns **all** credentials in its own `accounts` table (one row per principal, `principal_type` ∈ {employee, client}); it does **not** gRPC-call client-service for login. Client Accounts are provisioned by auth consuming the `client.client-created` Kafka event. |
 | user-service | auth-service (activation tokens) |
 | client-service | auth-service (activation tokens) |
@@ -3100,7 +3100,7 @@ LOCAL `buy_initiated` offers/bids are **fully supported and unaffected** — the
 
 ### Unified OTC offer discovery
 
-The unified OTC offer view (local + cross-bank) is served by `stock-service`'s `OTCGRPCService.ListUnifiedOffers`. An in-process refresher goroutine in stock-service rebuilds the cache every ~5 s by reading local offers from `OTCService.ListOffers` and HTTP-GETting each active peer bank's `/api/v3/public-stock` (PeerAuth via `X-Api-Key`, resolved through `transaction-service.PeerBankAdminService`). The api-gateway's `GET /api/v3/otc/offers` handler is a thin pass-through over this RPC and owns no cache; query params (`security_type`, `ticker`, `kind`, `bank_code`, pagination) map 1-to-1 onto the gRPC request.
+The unified OTC offer view (local + cross-bank) is served by `stock-service`'s `OTCGRPCService.ListUnifiedOffers`. An in-process refresher goroutine in stock-service rebuilds the cache every ~5 s by reading local offers from `OTCService.ListOffers` and fetching each active peer bank's `/public-stock` (and `/public-option-offers`). As of the 2026-06-07 interbank cutover, stock-service no longer does that HTTP itself: it enumerates peers via `interbank-service.PeerBankAdminService.ListPeerBanks` and fetches each via `interbank-service.PeerEgressService.ProxyToPeer` — peer resolution + `X-Api-Key`/HMAC signing + the actual GET all happen inside interbank-service (the single outbound HTTP egress to permitted peers). The api-gateway's `GET /api/v3/otc/offers` handler is a thin pass-through over this RPC and owns no cache; query params (`security_type`, `ticker`, `kind`, `bank_code`, pagination) map 1-to-1 onto the gRPC request.
 
 ### Lifecycle flows
 
