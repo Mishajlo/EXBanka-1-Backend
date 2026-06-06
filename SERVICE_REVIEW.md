@@ -674,6 +674,12 @@ from service/" rule). Larger refactor; decision.
   gateway-resolved account numbers). ONLY remaining: **D2 gateway-check removal** — pure de-dup (the
   services already enforce, so removing the redundant gateway ownership checks is not a security
   change; leaving them is strictly safer). VERSION 2.16.3.
+  **OWN-1 SUBSTANTIALLY COMPLETE (VERSION 2.16.5):** D2 gateway de-dup done for account (/me + lists,
+  d469db2a), and card/credit/transaction + account-list (226a7ca1). Foreign-resource access is now
+  404 (no leak). KEPT at gateway (correct): stock OTC/order + portfolio account-binding, peer-tx +
+  card-creation account-binding, transaction list-by-client (account-number resolution), payment
+  recipients (not yet service-enforced). RBAC/RequirePermission never touched. All 6 touched modules
+  (contract, account, card, credit, transaction, api-gateway) build+test+lint green.
 - [~] **E** — DROPPED. `GetCompany`/`UpdateCompany` are the read/update half of a **live**
   Company resource (the gateway has a `/companies` group, `CreateCompany` is used, accounts carry
   `company_id`) — "no caller today" ≠ "dead"; the FE creates companies + company accounts and will

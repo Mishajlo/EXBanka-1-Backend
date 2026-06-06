@@ -1,7 +1,14 @@
 # Plan: OWN-1 — move account ownership checks into account-service
 
 Date: 2026-06-06
-Status: PLANNED (not started) — needs a focused, dedicated effort; see "Why not now".
+Status: SUBSTANTIALLY COMPLETE. D0 foundation + service-side enforcement
+(account/card/credit/transaction) + D2 gateway de-dup all done & committed
+(commits 43a2197b, fc233996, 1fbd71b7, 8a77cada, fe29933f, d469db2a, 226a7ca1;
+VERSION → 2.16.5). All 6 touched modules build+test+lint green. Remaining
+(documented, intentional): stock OTC/order + portfolio account-binding stays at
+the gateway (caller-supplied-account/permission-entangled); transaction
+list-by-client stays (gateway-resolved account numbers); payment-recipient
+ownership not yet service-enforced (kept at gateway). RBAC/permissions never moved.
 
 ## Scope boundary (IMPORTANT)
 
