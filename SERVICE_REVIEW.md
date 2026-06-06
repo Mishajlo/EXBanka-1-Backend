@@ -645,8 +645,10 @@ from service/" rule). Larger refactor; decision.
   AccountService + ReservationService now route through it); injected the cache into incoming/
   outgoing reservation services via `WithCache` and evict on every balance mutation
   (CommitIncoming, ReserveOutgoing/SettleOutgoing/ReleaseOutgoing). +end-to-end miniredis tests.
-- [ ] **C** — **Enforce** the daily/monthly limit in `ReserveOutgoing` (mirror `UpdateBalance`).
-  NOTE: changes frozen-interbank reserve behavior (insufficient-limit → NO vote) — user-approved.
+- [x] **C** — DONE (2.15.5): `ReserveOutgoing` now checks daily/monthly limits for client accounts
+  (mirrors `UpdateBalance`); over-limit → `FailedPrecondition` (→ interbank NO vote, like
+  insufficient funds), generic message (no spending/limit leak to the peer bank). +tests.
+  Limit checked at reserve against committed spending (settle accrues it). Bank accounts exempt.
 - [ ] **D** — **OWN-1 now for account-service**: caller identity over gRPC metadata + ownership
   checks across the RPCs; remove the gateway's account ownership checks. Final phase, own plan.
 - [ ] **E** — remove unused RPCs GetCompany/UpdateCompany/GetCurrency (`make proto`).

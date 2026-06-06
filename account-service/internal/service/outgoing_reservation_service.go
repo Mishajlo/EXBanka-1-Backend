@@ -95,6 +95,20 @@ func (s *OutgoingReservationService) ReserveOutgoing(
 				"currency_not_supported: account %s is %s, requested %s",
 				accountNumber, acct.CurrencyCode, currency)
 		}
+		// Enforce the daily/monthly spending limit for client accounts, mirroring
+		// the authoritative check in repository.UpdateBalance — so cross-bank
+		// (SI-TX) outflows are gated like domestic debits. Checked at reserve
+		// against committed spending (settle accrues it); FailedPrecondition so
+		// the interbank caller maps it to a NO vote, like insufficient funds.
+		// Message is generic — never leak our client's spending/limits to a peer bank.
+		if !acct.IsBankAccount {
+			if !acct.DailyLimit.IsZero() && acct.DailySpending.Add(amount).GreaterThan(acct.DailyLimit) {
+				return status.Error(codes.FailedPrecondition, "daily_spending_limit_exceeded")
+			}
+			if !acct.MonthlyLimit.IsZero() && acct.MonthlySpending.Add(amount).GreaterThan(acct.MonthlyLimit) {
+				return status.Error(codes.FailedPrecondition, "monthly_spending_limit_exceeded")
+			}
+		}
 		if acct.AvailableBalance.LessThan(amount) {
 			return status.Errorf(codes.FailedPrecondition,
 				"insufficient available balance: have %s, need %s", acct.AvailableBalance, amount)
