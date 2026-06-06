@@ -104,12 +104,19 @@ func (s *EmployeeService) CreateEmployee(ctx context.Context, emp *model.Employe
 	return nil
 }
 
+// employeeIDCacheKey is the Redis key for a cached employee-by-id. Single source
+// of truth shared by EmployeeService (read/evict) and RoleService (evict on a
+// role-permission change), so the two can never drift.
+func employeeIDCacheKey(id int64) string {
+	return "employee:id:" + strconv.FormatInt(id, 10)
+}
+
 func (s *EmployeeService) GetEmployeeByEmail(email string) (*model.Employee, error) {
 	return s.repo.GetByEmail(email)
 }
 
 func (s *EmployeeService) GetEmployee(id int64) (*model.Employee, error) {
-	cacheKey := "employee:id:" + strconv.FormatInt(id, 10)
+	cacheKey := employeeIDCacheKey(id)
 	if s.cache != nil {
 		var cached model.Employee
 		if err := s.cache.Get(context.Background(), cacheKey, &cached); err == nil {
@@ -191,7 +198,7 @@ func (s *EmployeeService) UpdateEmployee(ctx context.Context, id int64, updates 
 		_ = s.changelogRepo.CreateBatch(entries)
 	}
 	if s.cache != nil {
-		_ = s.cache.Delete(context.Background(), "employee:id:"+strconv.FormatInt(id, 10))
+		_ = s.cache.Delete(context.Background(), employeeIDCacheKey(id))
 		_ = s.cache.Delete(context.Background(), "employee:email:"+emp.Email)
 	}
 
@@ -258,7 +265,7 @@ func (s *EmployeeService) SetEmployeeRoles(ctx context.Context, employeeID int64
 
 	// Invalidate cache
 	if s.cache != nil {
-		_ = s.cache.Delete(ctx, "employee:id:"+strconv.FormatInt(employeeID, 10))
+		_ = s.cache.Delete(ctx, employeeIDCacheKey(employeeID))
 		emp2, err2 := s.repo.GetByID(employeeID)
 		if err2 == nil {
 			_ = s.cache.Delete(ctx, "employee:email:"+emp2.Email)
@@ -315,7 +322,7 @@ func (s *EmployeeService) SetEmployeeAdditionalPermissions(ctx context.Context, 
 
 	// Invalidate cache
 	if s.cache != nil {
-		_ = s.cache.Delete(ctx, "employee:id:"+strconv.FormatInt(employeeID, 10))
+		_ = s.cache.Delete(ctx, employeeIDCacheKey(employeeID))
 		emp2, err2 := s.repo.GetByID(employeeID)
 		if err2 == nil {
 			_ = s.cache.Delete(ctx, "employee:email:"+emp2.Email)

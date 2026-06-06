@@ -99,6 +99,11 @@ func main() {
 	roleSvc := service.NewRoleService(roleRepo, permRepo).
 		WithPublisher(producer).
 		WithDB(db)
+	if redisCache != nil {
+		// Guard against a typed-nil *RedisCache landing in the interface field
+		// (which would defeat the nil check and panic on eviction).
+		roleSvc = roleSvc.WithCache(redisCache)
+	}
 
 	// Seed roles and permissions on startup. The slim seed only inserts
 	// the default role↔permission mappings on a truly fresh DB; subsequent
