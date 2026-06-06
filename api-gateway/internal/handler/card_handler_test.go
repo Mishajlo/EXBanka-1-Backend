@@ -41,7 +41,6 @@ func cardRouter(h *handler.CardHandler) *gin.Engine {
 	r.POST("/cards/:id/pin", withClient, h.SetCardPin)
 	r.POST("/cards/:id/verify-pin", withClient, h.VerifyCardPin)
 	r.POST("/cards/:id/temporary-block", withClient, h.TemporaryBlockCard)
-	r.POST("/cards/:id/client-block", withClient, h.ClientBlockCard)
 	r.POST("/cards/requests", withClient, h.CreateCardRequest)
 	r.GET("/cards/requests/me", withClient, h.ListMyCardRequests)
 	r.GET("/cards/requests", withCtx, h.ListCardRequests)
@@ -164,34 +163,6 @@ func TestCard_BlockCard_BadID(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
-}
-
-func TestCard_ClientBlockCard_OwnerSuccess(t *testing.T) {
-	cc := &stubCardClient{
-		getFn: func(_ *cardpb.GetCardRequest) (*cardpb.CardResponse, error) {
-			return &cardpb.CardResponse{Id: 1, OwnerId: 1}, nil
-		},
-	}
-	h := handler.NewCardHandler(cc, &stubVirtualCardClient{}, &stubCardRequestClient{}, &accountFullStub{})
-	r := cardRouter(h)
-	req := httptest.NewRequest("POST", "/cards/1/client-block", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestCard_ClientBlockCard_NotOwner(t *testing.T) {
-	cc := &stubCardClient{
-		getFn: func(_ *cardpb.GetCardRequest) (*cardpb.CardResponse, error) {
-			return &cardpb.CardResponse{Id: 1, OwnerId: 999}, nil
-		},
-	}
-	h := handler.NewCardHandler(cc, &stubVirtualCardClient{}, &stubCardRequestClient{}, &accountFullStub{})
-	r := cardRouter(h)
-	req := httptest.NewRequest("POST", "/cards/1/client-block", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusForbidden, rec.Code)
 }
 
 func TestCard_UnblockCard_Success(t *testing.T) {

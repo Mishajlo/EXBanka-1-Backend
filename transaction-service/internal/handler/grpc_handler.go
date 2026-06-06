@@ -432,6 +432,10 @@ func (h *TransactionGRPCHandler) GetPaymentRecipient(ctx context.Context, req *p
 	if err != nil {
 		return nil, err
 	}
+	// OWN-1: a client may only read its own recipient (others → 404, no leak).
+	if !ownsTxn(ctx, pr.ClientID) {
+		return nil, service.ErrPaymentRecipientNotFound
+	}
 	return recipientToProto(pr), nil
 }
 
@@ -449,6 +453,14 @@ func (h *TransactionGRPCHandler) ListPaymentRecipients(ctx context.Context, req 
 }
 
 func (h *TransactionGRPCHandler) UpdatePaymentRecipient(ctx context.Context, req *pb.UpdatePaymentRecipientRequest) (*pb.PaymentRecipientResponse, error) {
+	// OWN-1: verify ownership before mutating (foreign/absent → 404, no leak).
+	existing, err := h.recipientSvc.GetByID(req.GetId())
+	if err != nil {
+		return nil, err
+	}
+	if !ownsTxn(ctx, existing.ClientID) {
+		return nil, service.ErrPaymentRecipientNotFound
+	}
 	pr, err := h.recipientSvc.Update(req.GetId(), req.RecipientName, req.AccountNumber)
 	if err != nil {
 		return nil, err
@@ -457,6 +469,14 @@ func (h *TransactionGRPCHandler) UpdatePaymentRecipient(ctx context.Context, req
 }
 
 func (h *TransactionGRPCHandler) DeletePaymentRecipient(ctx context.Context, req *pb.DeletePaymentRecipientRequest) (*pb.DeletePaymentRecipientResponse, error) {
+	// OWN-1: verify ownership before deleting (foreign/absent → 404, no leak).
+	existing, err := h.recipientSvc.GetByID(req.GetId())
+	if err != nil {
+		return nil, err
+	}
+	if !ownsTxn(ctx, existing.ClientID) {
+		return nil, service.ErrPaymentRecipientNotFound
+	}
 	if err := h.recipientSvc.Delete(req.GetId()); err != nil {
 		return nil, err
 	}

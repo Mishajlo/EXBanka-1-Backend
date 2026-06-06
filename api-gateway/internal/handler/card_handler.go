@@ -212,40 +212,6 @@ func (h *CardHandler) BlockCard(c *gin.Context) {
 	c.JSON(http.StatusOK, cardToJSON(resp))
 }
 
-// ClientBlockCard blocks a client's own card.
-// The card's owner_id must match the authenticated client's principal_id.
-// This handler is mounted on the client-authenticated route group (ClientAuthMiddleware).
-// Swagger documentation is combined with the employee BlockCard endpoint above.
-func (h *CardHandler) ClientBlockCard(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		apiError(c, 400, ErrValidation, "invalid id")
-		return
-	}
-
-	// Fetch the card to verify ownership
-	card, err := h.cardClient.GetCard(c.Request.Context(), &cardpb.GetCardRequest{Id: id})
-	if err != nil {
-		handleGRPCError(c, err)
-		return
-	}
-
-	// Verify the card belongs to the authenticated client
-	uid, _ := c.Get("principal_id")
-	userID, ok := uid.(int64)
-	if !ok || uint64(userID) != card.OwnerId {
-		apiError(c, 403, ErrForbidden, "clients can only block their own cards")
-		return
-	}
-
-	resp, err := h.cardClient.BlockCard(middleware.GRPCContextWithChangedBy(c), &cardpb.BlockCardRequest{Id: id})
-	if err != nil {
-		handleGRPCError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, cardToJSON(resp))
-}
-
 // @Summary      Unblock a card
 // @Description  Unblocks a previously blocked card. Requires cards.update permission.
 // @Tags         cards

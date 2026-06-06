@@ -77,3 +77,57 @@ func TestOWN1_GetTransferStatus_ClientForeign_NotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, codes.NotFound, status.Code(err))
 }
+
+// foreignRecipient stubs the recipient facade to return a recipient owned by
+// client 9 for any id — the cross-tenant fixture for the OWN-1 recipient tests.
+func foreignRecipient(rm *mockRecipientFacade) {
+	rm.getByIDFn = func(id uint64) (*model.PaymentRecipient, error) {
+		return &model.PaymentRecipient{ID: id, ClientID: 9}, nil
+	}
+	rm.updateFn = func(id uint64, _, _ *string) (*model.PaymentRecipient, error) {
+		return &model.PaymentRecipient{ID: id, ClientID: 9}, nil
+	}
+	rm.deleteFn = func(uint64) error { return nil }
+}
+
+func TestOWN1_GetPaymentRecipient_ClientForeign_NotFound(t *testing.T) {
+	h := newTestHandler(nil, nil, foreignRecipient)
+	ctx := ctxAs(identity.Caller{PrincipalType: identity.PrincipalClient, PrincipalID: 5})
+	_, err := h.GetPaymentRecipient(ctx, &pb.GetPaymentRecipientRequest{Id: 1})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func TestOWN1_GetPaymentRecipient_ClientOwn_OK(t *testing.T) {
+	h := newTestHandler(nil, nil, func(rm *mockRecipientFacade) {
+		rm.getByIDFn = func(id uint64) (*model.PaymentRecipient, error) {
+			return &model.PaymentRecipient{ID: id, ClientID: 5}, nil
+		}
+	})
+	ctx := ctxAs(identity.Caller{PrincipalType: identity.PrincipalClient, PrincipalID: 5})
+	_, err := h.GetPaymentRecipient(ctx, &pb.GetPaymentRecipientRequest{Id: 1})
+	require.NoError(t, err)
+}
+
+func TestOWN1_UpdatePaymentRecipient_ClientForeign_NotFound(t *testing.T) {
+	h := newTestHandler(nil, nil, foreignRecipient)
+	ctx := ctxAs(identity.Caller{PrincipalType: identity.PrincipalClient, PrincipalID: 5})
+	_, err := h.UpdatePaymentRecipient(ctx, &pb.UpdatePaymentRecipientRequest{Id: 1})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func TestOWN1_DeletePaymentRecipient_ClientForeign_NotFound(t *testing.T) {
+	h := newTestHandler(nil, nil, foreignRecipient)
+	ctx := ctxAs(identity.Caller{PrincipalType: identity.PrincipalClient, PrincipalID: 5})
+	_, err := h.DeletePaymentRecipient(ctx, &pb.DeletePaymentRecipientRequest{Id: 1})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func TestOWN1_DeletePaymentRecipient_Employee_OK(t *testing.T) {
+	h := newTestHandler(nil, nil, foreignRecipient)
+	ctx := ctxAs(identity.Caller{PrincipalType: identity.PrincipalEmployee, PrincipalID: 7})
+	_, err := h.DeletePaymentRecipient(ctx, &pb.DeletePaymentRecipientRequest{Id: 1})
+	require.NoError(t, err)
+}
