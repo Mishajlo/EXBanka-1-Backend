@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 
 	"github.com/exbanka/contract/changelog"
 	kafkamsg "github.com/exbanka/contract/kafka"
@@ -78,6 +80,9 @@ func (s *EmployeeService) CreateEmployee(ctx context.Context, emp *model.Employe
 	}
 
 	if err := s.repo.Create(emp); err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return fmt.Errorf("create employee: %w", ErrEmployeeAlreadyExists)
+		}
 		return fmt.Errorf("create employee: %w", err)
 	}
 	UserEmployeeCreatedTotal.Inc()
@@ -174,6 +179,9 @@ func (s *EmployeeService) UpdateEmployee(ctx context.Context, id int64, updates 
 	}
 
 	if err := s.repo.Update(emp); err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return nil, fmt.Errorf("update employee: %w", ErrEmployeeAlreadyExists)
+		}
 		return nil, err
 	}
 
@@ -208,7 +216,7 @@ func (s *EmployeeService) UpdateEmployee(ctx context.Context, id int64, updates 
 func (s *EmployeeService) SetEmployeeRoles(ctx context.Context, employeeID int64, roleNames []string, changedBy int64) error {
 	emp, err := s.repo.GetByIDWithRoles(employeeID)
 	if err != nil {
-		return fmt.Errorf("employee %d not found: %w", employeeID, err)
+		return fmt.Errorf("employee not found: %w", ErrEmployeeNotFound)
 	}
 
 	// Capture old roles for changelog.
@@ -218,7 +226,7 @@ func (s *EmployeeService) SetEmployeeRoles(ctx context.Context, employeeID int64
 	if s.roleSvc != nil {
 		for _, name := range roleNames {
 			if !s.roleSvc.ValidRole(name) {
-				return fmt.Errorf("SetEmployeeRoles(employee=%d, role=%s): %w", employeeID, name, ErrRoleNotFound)
+				return fmt.Errorf("set employee roles: unknown role %q: %w", name, ErrRoleNotFound)
 			}
 		}
 	}
@@ -266,7 +274,7 @@ func (s *EmployeeService) SetEmployeeRoles(ctx context.Context, employeeID int64
 func (s *EmployeeService) SetEmployeeAdditionalPermissions(ctx context.Context, employeeID int64, permCodes []string, changedBy int64) error {
 	emp, err := s.repo.GetByIDWithRoles(employeeID)
 	if err != nil {
-		return fmt.Errorf("employee %d not found: %w", employeeID, err)
+		return fmt.Errorf("employee not found: %w", ErrEmployeeNotFound)
 	}
 
 	beforePerms := s.ResolvePermissions(emp)
@@ -283,7 +291,7 @@ func (s *EmployeeService) SetEmployeeAdditionalPermissions(ctx context.Context, 
 	}
 
 	if len(perms) != len(permCodes) {
-		return fmt.Errorf("SetEmployeeAdditionalPermissions(employee=%d): %w", employeeID, ErrPermissionNotInCatalog)
+		return fmt.Errorf("set additional permissions: %w", ErrPermissionNotInCatalog)
 	}
 
 	if err := s.repo.SetAdditionalPermissions(employeeID, perms); err != nil {

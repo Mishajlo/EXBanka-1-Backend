@@ -9,7 +9,21 @@ import (
 	kafkamsg "github.com/exbanka/contract/kafka"
 	"github.com/exbanka/user-service/internal/model"
 	"github.com/stretchr/testify/assert"
+	"gorm.io/gorm"
 )
+
+// TestCreateEmployee_DuplicateMapsToAlreadyExists: a unique-constraint violation
+// (translated to gorm.ErrDuplicatedKey) must surface as ErrEmployeeAlreadyExists
+// (HTTP 409), not a raw DB error (HTTP 500).
+func TestCreateEmployee_DuplicateMapsToAlreadyExists(t *testing.T) {
+	repo := newMockRepo()
+	repo.createErr = gorm.ErrDuplicatedKey
+	svc := NewEmployeeService(repo, nil, nil, nil)
+
+	emp := &model.Employee{FirstName: "Dup", LastName: "E", Email: "dup@x.com", Username: "dup", JMBG: "0101990710024"}
+	err := svc.CreateEmployee(context.Background(), emp)
+	assert.ErrorIs(t, err, ErrEmployeeAlreadyExists)
+}
 
 // spyEmployeePublisher records the force-refresh (RolePermissionsChanged) events
 // EmployeeService emits on per-employee permission changes.
