@@ -320,7 +320,90 @@ revocation wiring, (7) gateway: `contract/authredis` + JWKS cache + local verify
 reads + `token_expired`/`unauthorized` split, (8) docs + VERSION + lint + tests.
 
 ## 3. user-service
-_pending_
+
+**Responsibilities:** Employee CRUD + credentials, roles & permissions (seeded),
+employee limits, actuary limits, limit blueprints, changelog/audit reads. Four gRPC
+services (UserService, EmployeeLimitService, ActuaryService, BlueprintService). Own
+Postgres + Redis (employee lookup cache) + transactional **outbox** + crons.
+
+### Findings (Claude's opinion)
+
+**Overall: user-service is well-built** — much healthier than auth-service was. Layering
+is clean, caching is correct, no god-objects, no dead RPCs. Two things genuinely worth
+doing.
+
+#### 🔴 3.1 — Force-refresh gap on PER-EMPLOYEE permission changes (HIGH, completes Phase B)
+auth's `role_perm_change_consumer` bumps the revocation epoch (`user_revoked_at`) only on
+`TopicUserRolePermissionsChanged`. user-service publishes that event when a **role's**
+permissions change (`role_service.go:294`, listing all affected employees) ✅ — but
+**`SetEmployeeRoles` and `SetEmployeeAdditionalPermissions`** (changing ONE employee's
+access directly) publish **nothing** auth consumes (`employee_service.go` ~212–315 has no
+publish). `UpdateEmployee` publishes `employee-updated`, which auth does NOT consume for
+the epoch either.
+- **Effect:** an admin changing an individual employee's roles/permissions does **not**
+  force-refresh them — their access token keeps the OLD permissions until it expires
+  (≤15 min). This is the §1.3b force-refresh we just built, with a hole on the
+  per-employee path.
+- **Fix:** any path that changes an employee's *effective* permissions
+  (`SetEmployeeRoles`, `SetEmployeeAdditionalPermissions`, and `UpdateEmployee` if it
+  touches roles) must publish `RolePermissionsChanged` for that employee id. This is
+  user-service's slice of Phase D (claims-invalidation), via the existing Kafka path
+  (decided: keep the consumer).
+
+#### 🟡 3.2 — Error standardization (your explicit concern; mostly good, one real bug)
+user-service already has typed sentinels (`service/errors.go` via `svcerr`) — good. But
+usage is inconsistent:
+- **Real bug:** `CreateEmployee` does NOT map a duplicate email/JMBG (DB unique-constraint)
+  to `ErrEmployeeAlreadyExists` — it wraps the raw DB error (`employee_service.go:81`) →
+  handler passthrough → `codes.Unknown` → **HTTP 500 instead of 409**. Same risk on
+  `UpdateEmployee` email/JMBG change. → catch the constraint (`gorm`/pg unique violation)
+  and return `ErrEmployeeAlreadyExists`.
+- **Consistency:** several handlers use ad-hoc `status.Errorf(codes.NotFound, …)`
+  (`grpc_handler.go` GetEmployee:~98, GetRole:~186, UpdateRolePermissions:~206,
+  ListChangelog/ListAllChangelogs:~278/311) instead of the existing sentinels. They mostly
+  return the *right* code, so this is style-consistency, not bugs — but you asked for
+  standard errors, so align them on the sentinel→passthrough pattern `blueprint_handler`
+  already uses (`errors.Is(err, gorm.ErrRecordNotFound)` → sentinel).
+- `hierarchy.go` returns `status.Error(codes.PermissionDenied, …)` directly (works,
+  inconsistent) — could use an `ErrHierarchyDenied` sentinel.
+- **NOT problems (audit over-flagged):** employee-id embedded in error *chains* is
+  server-log-only (the wire message comes from the sentinel, like auth's email); JMBG
+  validation messages ("must be 13 digits") are helpful UX, not a leak. Leave those.
+
+#### 🟢 3.3 — Minor cache staleness on role-template perm change (optional)
+A **role's** permission change bumps auth's epoch (force-refresh) but does NOT evict
+user-service's `employee:id` cache → `GetEmployee` can return stale resolved-permissions
+for ≤5 min. It's metadata only (NOT the authz gate — auth/token is), so acceptable.
+Optional: on role-perm change, evict the cache of employees holding that role.
+
+#### ✅ 3.4 — No dead RPCs (verified)
+The audit flagged `ListEmployeeFullNames` + `UpdateUsedLimit` as unused, but BOTH are used
+by **stock-service** (`investment_fund_handler.go:398` fund-manager names;
+`stock-service/internal/grpc/user_client.go:88,105` actuary used-limit tracking) — the
+agent only checked the gateway. **Keep both.** All 33 RPCs are used. The
+`UpdateRolePermissions` (bulk) vs `AssignPermissionToRole`/`RevokePermissionFromRole`
+(granular) pair is intentional (different REST verbs), not redundant.
+
+#### ✅ 3.5 — Layering / caching / structure are clean
+Handlers are thin translators (no DB/Redis), repos query-only, logic in services. Outbox
+pattern (`outbox_relay.go`) is correct and used for the reliability-critical
+`supervisor-demoted` cross-service event; relay honors `ctx.Done()`. Cache degrades
+gracefully (nil-guarded). `grpc_client/client_limit_adapter.go` (user→client-service for
+blueprint application) is a thin, appropriate adapter. No god-objects (largest ~409 lines).
+
+#### OWN-1 (ownership relocation) — barely applies here
+Employees are admin-managed resources, not client-`/me`-owned, so there's no per-resource
+ownership check to relocate. The `/me` employee-profile read is self-access derived from
+the JWT (gateway-side), no change needed.
+
+### Decision / agreed action items (DECIDED 2026-06-06)
+- [x] **3.1 — fix the force-refresh gap.** Publish `RolePermissionsChanged` from
+  `SetEmployeeRoles` / `SetEmployeeAdditionalPermissions` (+ `UpdateEmployee` if it changes
+  roles) so per-employee access changes force-refresh that employee. Completes Phase B.
+- [x] **3.2 — error standardization: BOTH.** Map duplicate email/JMBG → `ErrEmployeeAlreadyExists`
+  (409, not 500), AND replace ad-hoc `status.Errorf` with sentinel passthrough across handlers.
+- [x] **3.3 — add cache eviction.** On a role-perm change, evict the `employee:id` cache of
+  employees holding that role.
 
 ## 4. notification-service
 _pending_

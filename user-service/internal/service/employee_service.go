@@ -14,7 +14,6 @@ import (
 	"github.com/exbanka/contract/changelog"
 	kafkamsg "github.com/exbanka/contract/kafka"
 	"github.com/exbanka/user-service/internal/cache"
-	kafkaprod "github.com/exbanka/user-service/internal/kafka"
 	"github.com/exbanka/user-service/internal/model"
 )
 
@@ -26,7 +25,7 @@ type OutboxInserter interface {
 
 type EmployeeService struct {
 	repo          EmployeeRepo
-	producer      *kafkaprod.Producer
+	producer      EmployeeEventPublisher
 	cache         *cache.RedisCache
 	roleSvc       *RoleService
 	changelogRepo ChangelogRepo
@@ -43,7 +42,7 @@ func (s *EmployeeService) WithOutbox(repo OutboxInserter) *EmployeeService {
 	return &cp
 }
 
-func NewEmployeeService(repo EmployeeRepo, producer *kafkaprod.Producer, cache *cache.RedisCache, roleSvc *RoleService, changelogRepo ...ChangelogRepo) *EmployeeService {
+func NewEmployeeService(repo EmployeeRepo, producer EmployeeEventPublisher, cache *cache.RedisCache, roleSvc *RoleService, changelogRepo ...ChangelogRepo) *EmployeeService {
 	svc := &EmployeeService{repo: repo, producer: producer, cache: cache, roleSvc: roleSvc}
 	if len(changelogRepo) > 0 {
 		svc.changelogRepo = changelogRepo[0]
@@ -259,6 +258,7 @@ func (s *EmployeeService) SetEmployeeRoles(ctx context.Context, employeeID int64
 	}
 
 	s.emitSupervisorDemotedIfLost(employeeID, changedBy, beforePerms)
+	s.publishEmployeePermissionsChanged(employeeID, "set_employee_roles")
 	return nil
 }
 
@@ -315,7 +315,29 @@ func (s *EmployeeService) SetEmployeeAdditionalPermissions(ctx context.Context, 
 	}
 
 	s.emitSupervisorDemotedIfLost(employeeID, changedBy, beforePerms)
+	s.publishEmployeePermissionsChanged(employeeID, "set_employee_permissions")
 	return nil
+}
+
+// publishEmployeePermissionsChanged force-refreshes a single employee at the
+// gateway after THEIR effective permissions change (roles or additional
+// permissions). auth-service consumes RolePermissionsChanged and bumps that
+// employee's revocation epoch, so the change takes effect immediately instead
+// of lingering until the access token expires. Best-effort; DB state is
+// canonical. Mirrors RoleService.publishRolePermissionsChanged but scoped to a
+// single employee (no role to fan out from).
+func (s *EmployeeService) publishEmployeePermissionsChanged(employeeID int64, source string) {
+	if s.producer == nil {
+		return
+	}
+	msg := kafkamsg.RolePermissionsChangedMessage{
+		AffectedEmployeeIDs: []int64{employeeID},
+		ChangedAt:           time.Now().Unix(),
+		Source:              source,
+	}
+	if err := s.producer.PublishRolePermissionsChanged(context.Background(), msg); err != nil {
+		log.Printf("warn: employee-perm-changed: publish for employee %d: %v", employeeID, err)
+	}
 }
 
 func ValidatePassword(password string) error {

@@ -47,6 +47,15 @@ type RolePermPublisher interface {
 	PublishRolePermissionsChanged(ctx context.Context, msg kafkamsg.RolePermissionsChangedMessage) error
 }
 
+// EmployeeEventPublisher is the narrow Kafka surface EmployeeService needs.
+// An interface (not the concrete producer) so the publish paths — including the
+// per-employee force-refresh via RolePermissionsChanged — are unit-testable.
+type EmployeeEventPublisher interface {
+	PublishEmployeeCreated(ctx context.Context, msg kafkamsg.EmployeeCreatedMessage) error
+	PublishEmployeeUpdated(ctx context.Context, msg kafkamsg.EmployeeCreatedMessage) error
+	PublishRolePermissionsChanged(ctx context.Context, msg kafkamsg.RolePermissionsChangedMessage) error
+}
+
 type PermissionRepo interface {
 	Create(p *model.Permission) error
 	GetByCode(code string) (*model.Permission, error)
