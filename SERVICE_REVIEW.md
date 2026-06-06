@@ -507,7 +507,64 @@ registry are well-separated. No Redis — correct for this service. inbox_cleanu
 - **D — wire consumer dedup** once C lands (consumers call the idempotent writes / claim).
 
 ## 5. client-service
-_pending_
+
+**Responsibilities:** Bank client CRUD (profile), client limits, changelog. Own
+Postgres + Redis cache. NOTE: client *credentials* live in auth-service's unified
+Account table — client-service has **no** ValidateCredentials RPC (the CLAUDE.md
+client-login note is stale), and client *active-state* is auth's `SetAccountStatus`.
+
+### Findings (Claude's opinion)
+
+**Overall: small, clean service that mirrors user-service.** The one real issue is the
+same duplicate-→-500 bug as user-service, and here it also leaks PII.
+
+#### 🔴 5.1 — Duplicate email/JMBG → 500 **and leaks PII** (the real bug)
+`CreateClient` wraps the raw DB error (`client_service.go:89` → `fmt.Errorf("create
+client: %w", err)`), `UpdateClient` likewise (`:175`). The `ErrClientAlreadyExists`
+sentinel (`errors.go:21`) is defined but **unused**, and `TranslateError` is off in the
+gorm config (`cmd/main.go:31`). So a duplicate returns **HTTP 500** instead of 409 —
+and worse, the Postgres unique-constraint error string (which includes the **email /
+JMBG value**) propagates as the wire error message. → enable `TranslateError`; map
+`gorm.ErrDuplicatedKey` → `ErrClientAlreadyExists` in Create + Update (the clean
+sentinel message also closes the PII leak). Same fix shape as user-service §3.2.
+
+#### 🟢 5.2 — Minor error-consistency (match user-service decisions)
+- `SetClientLimits` upsert error returned raw (`client_limit_service.go:104`) → wrap so
+  it doesn't surface as `Unknown`/500 (low value; optional).
+- `ListChangelog`/`ListAllChangelogs` use ad-hoc `status.Errorf` (InvalidArgument/Internal)
+  — **leave as-is**, consistent with the call I made in user-service §3.2 (defensible codes).
+
+#### ✅ 5.3 — No dead RPCs (GetClientByEmail kept)
+All 9 RPCs are used. `GetClientByEmail` is **seeder-only** now (production client login
+moved to auth's Account table) but the seeder genuinely depends on it for a create
+pre-check — **keep it** (removing breaks the seeder; not dead like notification's SendEmail).
+
+#### 🟢 5.5 — Dead sentinels (vestiges of the moved credential flow)
+`ErrInvalidCredentials` + `ErrAccountNotActivated` (`errors.go`) are referenced **only** by
+a sentinel→code table test — no production path uses them since client credential/login
+validation moved to auth-service's Account table (same root cause as the stale CLAUDE.md
+client-login note). → **remove** both sentinels + their test rows (dead-code cleanup).
+
+#### ✅ 5.4 — Layering / caching clean; no cross-cutting gaps
+Handler thin, repo query-only, logic in service; Redis cache invalidated on update,
+graceful degradation; optimistic-lock (Version) handled via `BeforeUpdate` + RowsAffected.
+- **Phase D (claims-invalidation):** client *deactivation* is auth's `SetAccountStatus`,
+  which already bumps the revocation epoch (done in the auth pass) → **no gap here**.
+- **No force-refresh gap** (clients have a fixed `client` role; no per-client permission
+  changes like employees' §3.1).
+- **OWN-1:** client profile `/me` read is self-access (gateway-derived); CRUD is admin —
+  nothing to relocate.
+
+### Decision / agreed action items (DONE — VERSION 2.15.0→2.15.1)
+- [x] **5.1** — enabled `TranslateError`; map duplicate email/JMBG → `ErrClientAlreadyExists`
+  (409, no PII) in CreateClient + UpdateClient. Unit tests now assert the 409 sentinel and
+  that the message does **not** echo the email/JMBG.
+- [x] **5.2** — wrapped the SetClientLimits upsert error in a coded `ErrLimitPersistFailed`
+  (Internal); left the changelog ad-hoc codes (consistent with user-service). No RPC removal.
+- [x] **5.5** — removed dead sentinels `ErrInvalidCredentials` + `ErrAccountNotActivated`
+  (+ their table-test rows).
+- **5.3 / 5.4** — no action: RPCs all used, layering/caching clean, no Phase-D / force-refresh
+  / OWN-1 gap (client deactivation is auth's `SetAccountStatus`, already epoch-bumped).
 
 ## 6. account-service
 _pending_
