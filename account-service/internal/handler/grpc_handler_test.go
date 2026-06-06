@@ -498,9 +498,6 @@ func TestUpdateAccountName_ServiceError(t *testing.T) {
 	assert.Equal(t, codes.AlreadyExists, status.Code(err))
 }
 
-
-
-
 // ---------------------------------------------------------------------------
 // UpdateAccountLimits tests
 // ---------------------------------------------------------------------------
@@ -548,9 +545,6 @@ func TestUpdateAccountLimits_InvalidValue(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 }
-
-
-
 
 // ---------------------------------------------------------------------------
 // UpdateAccountStatus tests
@@ -607,10 +601,6 @@ func TestUpdateAccountStatus_AlreadyInState(t *testing.T) {
 // ---------------------------------------------------------------------------
 // In-app notification emit tests (Plan B4: ACCOUNT_OPENED / ACCOUNT_STATUS_CHANGED)
 // ---------------------------------------------------------------------------
-
-
-
-
 
 // ---------------------------------------------------------------------------
 // UpdateBalance tests

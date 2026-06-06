@@ -10,8 +10,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/exbanka/contract/authredis"
 	authpb "github.com/exbanka/contract/authpb"
+	"github.com/exbanka/contract/authredis"
 	"github.com/exbanka/contract/identity"
 )
 

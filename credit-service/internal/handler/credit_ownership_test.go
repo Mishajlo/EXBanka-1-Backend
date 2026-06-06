@@ -10,9 +10,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/exbanka/credit-service/internal/model"
 	pb "github.com/exbanka/contract/creditpb"
 	"github.com/exbanka/contract/identity"
+	"github.com/exbanka/credit-service/internal/model"
 )
 
 func ctxAs(c identity.Caller) context.Context {
