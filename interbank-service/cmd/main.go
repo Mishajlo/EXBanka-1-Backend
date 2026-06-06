@@ -24,12 +24,14 @@ import (
 
 	accountpb "github.com/exbanka/contract/accountpb"
 	adminpb "github.com/exbanka/contract/adminpb"
+	clientpb "github.com/exbanka/contract/clientpb"
 	"github.com/exbanka/contract/cronreg"
 	"github.com/exbanka/contract/metrics"
 	shared "github.com/exbanka/contract/shared"
 	"github.com/exbanka/contract/shared/grpcmw"
 	stockpb "github.com/exbanka/contract/stockpb"
 	pb "github.com/exbanka/contract/transactionpb"
+	userpb "github.com/exbanka/contract/userpb"
 	"github.com/exbanka/interbank-service/internal/config"
 	"github.com/exbanka/interbank-service/internal/handler"
 	"github.com/exbanka/interbank-service/internal/model"
@@ -84,6 +86,28 @@ func main() {
 		optionRecorder = stockpb.NewPeerOTCServiceClient(stockConn)
 	}
 
+	// client-service + user-service — used by the /user friendly-name resolver
+	// (inbound /cross-bank-protocol/user). Lazy dials; missing connection just
+	// means /user resolution errors at call time.
+	clientConn, clientErr := grpc.NewClient(cfg.ClientGRPCAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(grpcmw.UnaryClientSagaContextInterceptor()),
+	)
+	if clientErr != nil {
+		log.Printf("interbank-service: warn: client-service connection failed: %v", clientErr)
+	} else {
+		defer func() { _ = clientConn.Close() }()
+	}
+	userConn, userErr := grpc.NewClient(cfg.UserGRPCAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(grpcmw.UnaryClientSagaContextInterceptor()),
+	)
+	if userErr != nil {
+		log.Printf("interbank-service: warn: user-service connection failed: %v", userErr)
+	} else {
+		defer func() { _ = userConn.Close() }()
+	}
+
 	// Repositories.
 	peerBankRepo := repository.NewPeerBankRepository(db)
 	peerIdemRepo := repository.NewPeerIdempotenceRepository(db)
@@ -129,6 +153,20 @@ func main() {
 	peerBankAdminHandler := handler.NewPeerBankAdminGRPCHandler(peerBankRepo, cfg.OwnBankCode)
 	peerEgressHandler := handler.NewPeerEgressGRPCHandler(peerBankRepo, &http.Client{Timeout: 30 * time.Second}, cfg.OwnBankCode)
 
+	// Inbound /cross-bank-protocol forwarders: interbank-service is the single
+	// cross-bank backend, so it fronts the OTC surface (→ stock-service) and the
+	// /user friendly-name surface (→ client/user-service). The OTC + user DOMAINS
+	// stay in their owning services; these only forward.
+	var peerOTCForwarder *handler.PeerOTCForwarder
+	if stockConn != nil {
+		peerOTCForwarder = handler.NewPeerOTCForwarder(stockpb.NewPeerOTCServiceClient(stockConn))
+	}
+	peerUserHandler := handler.NewPeerUserGRPCHandler(
+		clientpb.NewClientServiceClient(clientConn),
+		userpb.NewUserServiceClient(userConn),
+		ownRouting, cfg.OwnBankDisplayName,
+	)
+
 	// Recovery crons (forward-resume + peer status reconcile).
 	service.NewOutboundReplayCron(outRepo, peerHTTPClient, service.PeerLookupFunc(peerLookup), cronRegistry).
 		WithLocalReversal(peerTxHandler.ReverseOutboundLocal).
@@ -160,6 +198,10 @@ func main() {
 			pb.RegisterPeerTxServiceServer(s, peerTxHandler)
 			pb.RegisterPeerBankAdminServiceServer(s, peerBankAdminHandler)
 			pb.RegisterPeerEgressServiceServer(s, peerEgressHandler)
+			pb.RegisterPeerUserServiceServer(s, peerUserHandler)
+			if peerOTCForwarder != nil {
+				stockpb.RegisterPeerOTCServiceServer(s, peerOTCForwarder)
+			}
 			adminpb.RegisterAdminCronServer(s, cronreg.NewGRPCServer(cronRegistry))
 			shared.RegisterHealthCheck(s, "interbank-service")
 			metrics.InitializeGRPCMetrics(s)

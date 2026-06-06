@@ -317,6 +317,26 @@ message GetPeersStateResponse {
   repeated PeerReachability peers = 1;
 }
 
+// PeerUserService resolves one of THIS bank's users (client-<N> / employee-<N>)
+// to display names for a peer's friendly-name lookup (the SI-TX GET /user/{rid}/{id}
+// surface, §9). interbank-service implements it by forwarding to client-service /
+// user-service, so the api-gateway can route the ENTIRE /cross-bank-protocol
+// surface — including /user — to the single interbank backend.
+service PeerUserService {
+  rpc ResolvePeerUser(ResolvePeerUserRequest) returns (ResolvePeerUserResponse);
+}
+
+message ResolvePeerUserRequest {
+  int64  routing_number = 1; // must equal this bank's own routing, else not found
+  string id             = 2; // "client-<N>" | "employee-<N>"
+}
+
+message ResolvePeerUserResponse {
+  bool   found             = 1; // false ⇒ unknown user / foreign routing (gateway maps to 404)
+  string bank_display_name = 2;
+  string display_name      = 3;
+}
+
 message SiTxIdempotenceKey {
   int64 routing_number = 1;
   string locally_generated_key = 2;

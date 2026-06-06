@@ -28,9 +28,14 @@ type Config struct {
 	// Downstream gRPC dependencies.
 	AccountGRPCAddr string
 	StockGRPCAddr   string
+	// Forwarding targets for the inbound /cross-bank-protocol surface this
+	// service fronts: OTC → stock-service; friendly-name /user → client+user.
+	ClientGRPCAddr string
+	UserGRPCAddr   string
 
-	// Bank identity (3-digit routing prefix).
-	OwnBankCode string
+	// Bank identity (3-digit routing prefix) + display name surfaced on /user.
+	OwnBankCode        string
+	OwnBankDisplayName string
 
 	// Receiver-side 202-async deadline: how long HandleNewTx waits for the
 	// background reserve worker before returning pending.
@@ -49,7 +54,10 @@ func Load() *Config {
 		MetricsPort:         getEnv("INTERBANK_METRICS_PORT", "9108"),
 		AccountGRPCAddr:     getEnv("ACCOUNT_GRPC_ADDR", "localhost:50055"),
 		StockGRPCAddr:       getEnv("STOCK_GRPC_ADDR", "localhost:50060"),
+		ClientGRPCAddr:      getEnv("CLIENT_GRPC_ADDR", "localhost:50054"),
+		UserGRPCAddr:        getEnv("USER_GRPC_ADDR", "localhost:50052"),
 		OwnBankCode:         getEnv("OWN_BANK_CODE", "111"),
+		OwnBankDisplayName:  getEnv("OWN_BANK_DISPLAY_NAME", "EXBanka"),
 		ReceiveSyncDeadline: getDuration("SITX_RECEIVE_SYNC_DEADLINE", 5*time.Second),
 	}
 }

@@ -39,9 +39,13 @@ interbank-service/  (module github.com/exbanka/interbank-service, added to go.wo
   Dockerfile
 ```
 
-### gRPC surface (the only business API; api-gateway is the HTTP front)
-- `transactionpb.PeerTxService` — HandleNewTx, HandleCommitTx, HandleRollbackTx, InitiateOutboundTx, InitiateOutboundTxWithPostings, GetTxStatus. (reused proto)
-- `transactionpb.PeerBankAdminService` — List/Get/Create/Update/Delete PeerBank, ResolvePeerByAPIToken, ResolvePeerByBankCode. (reused proto)
+### gRPC surface — interbank-service is the SINGLE backend for the WHOLE `/cross-bank-protocol`
+The api-gateway routes *every* `/cross-bank-protocol/*` request to interbank-service; it is the protocol coordinator/engine. It serves these natively and **forwards the domain ones** to their owners (OTC → stock-service, /user → client/user-service), so those domains stay where they belong while interbank-service is the one inbound boundary.
+
+- `transactionpb.PeerTxService` — HandleNewTx, HandleCommitTx, HandleRollbackTx, InitiateOutboundTx, InitiateOutboundTxWithPostings, GetTxStatus. (own engine; reused proto)
+- `transactionpb.PeerBankAdminService` — List/Get/Create/Update/Delete PeerBank, ResolvePeerByAPIToken, ResolvePeerByBankCode. (own registry; reused proto)
+- `stockpb.PeerOTCService` — GetPublicStocks, GetPublicOptionOffers, Create/Update/Get/Delete/Accept Negotiation. **Implemented as a transparent forwarder to stock-service** (the OTC domain owner). The internal option-leg RPCs stay Unimplemented here (interbank CALLS those on stock during settlement; the gateway never invokes them on interbank).
+- **NEW** `transactionpb.PeerUserService.ResolvePeerUser` — the SI-TX `/user/{rid}/{id}` friendly-name lookup; forwards to client-service/user-service and composes the display name (own-routing gated, NotFound-tolerant).
 - **NEW** `transactionpb.PeerEgressService`:
   - `CheckPeerReachability(peer_bank_code) → PeerReachability` — signed `GET /public-stock` probe of ONE peer; reports `{reachable, status_code, latency_ms, error, checked_at, active, base_url, routing}`. Powers the admin "verify on add" flow (the caller chains CreatePeerBank → CheckPeerReachability; registration itself stays a pure DB write).
   - `GetPeersState() → [PeerReachability]` — probes ALL registered peers concurrently (per-peer bounded timeout); the cross-peer fleet health view.

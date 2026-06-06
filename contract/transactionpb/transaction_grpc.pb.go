@@ -1457,6 +1457,120 @@ var PeerEgressService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	PeerUserService_ResolvePeerUser_FullMethodName = "/transaction.PeerUserService/ResolvePeerUser"
+)
+
+// PeerUserServiceClient is the client API for PeerUserService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// PeerUserService resolves one of THIS bank's users (client-<N> / employee-<N>)
+// to display names for a peer's friendly-name lookup (the SI-TX GET /user/{rid}/{id}
+// surface, §9). interbank-service implements it by forwarding to client-service /
+// user-service, so the api-gateway can route the ENTIRE /cross-bank-protocol
+// surface — including /user — to the single interbank backend.
+type PeerUserServiceClient interface {
+	ResolvePeerUser(ctx context.Context, in *ResolvePeerUserRequest, opts ...grpc.CallOption) (*ResolvePeerUserResponse, error)
+}
+
+type peerUserServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewPeerUserServiceClient(cc grpc.ClientConnInterface) PeerUserServiceClient {
+	return &peerUserServiceClient{cc}
+}
+
+func (c *peerUserServiceClient) ResolvePeerUser(ctx context.Context, in *ResolvePeerUserRequest, opts ...grpc.CallOption) (*ResolvePeerUserResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolvePeerUserResponse)
+	err := c.cc.Invoke(ctx, PeerUserService_ResolvePeerUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PeerUserServiceServer is the server API for PeerUserService service.
+// All implementations must embed UnimplementedPeerUserServiceServer
+// for forward compatibility.
+//
+// PeerUserService resolves one of THIS bank's users (client-<N> / employee-<N>)
+// to display names for a peer's friendly-name lookup (the SI-TX GET /user/{rid}/{id}
+// surface, §9). interbank-service implements it by forwarding to client-service /
+// user-service, so the api-gateway can route the ENTIRE /cross-bank-protocol
+// surface — including /user — to the single interbank backend.
+type PeerUserServiceServer interface {
+	ResolvePeerUser(context.Context, *ResolvePeerUserRequest) (*ResolvePeerUserResponse, error)
+	mustEmbedUnimplementedPeerUserServiceServer()
+}
+
+// UnimplementedPeerUserServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedPeerUserServiceServer struct{}
+
+func (UnimplementedPeerUserServiceServer) ResolvePeerUser(context.Context, *ResolvePeerUserRequest) (*ResolvePeerUserResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolvePeerUser not implemented")
+}
+func (UnimplementedPeerUserServiceServer) mustEmbedUnimplementedPeerUserServiceServer() {}
+func (UnimplementedPeerUserServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafePeerUserServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to PeerUserServiceServer will
+// result in compilation errors.
+type UnsafePeerUserServiceServer interface {
+	mustEmbedUnimplementedPeerUserServiceServer()
+}
+
+func RegisterPeerUserServiceServer(s grpc.ServiceRegistrar, srv PeerUserServiceServer) {
+	// If the following call panics, it indicates UnimplementedPeerUserServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&PeerUserService_ServiceDesc, srv)
+}
+
+func _PeerUserService_ResolvePeerUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolvePeerUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerUserServiceServer).ResolvePeerUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerUserService_ResolvePeerUser_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerUserServiceServer).ResolvePeerUser(ctx, req.(*ResolvePeerUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// PeerUserService_ServiceDesc is the grpc.ServiceDesc for PeerUserService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var PeerUserService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "transaction.PeerUserService",
+	HandlerType: (*PeerUserServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ResolvePeerUser",
+			Handler:    _PeerUserService_ResolvePeerUser_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "transaction/transaction.proto",
+}
+
+const (
 	PeerBankAdminService_ListPeerBanks_FullMethodName         = "/transaction.PeerBankAdminService/ListPeerBanks"
 	PeerBankAdminService_GetPeerBank_FullMethodName           = "/transaction.PeerBankAdminService/GetPeerBank"
 	PeerBankAdminService_CreatePeerBank_FullMethodName        = "/transaction.PeerBankAdminService/CreatePeerBank"

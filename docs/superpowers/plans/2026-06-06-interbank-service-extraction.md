@@ -25,7 +25,7 @@
 ## Integration checklist (LATER — when deploy/Helm is possible; NOT in this task)
 
 - [ ] Provision `interbank_db` (Postgres, port 5443) + Helm/k8s manifests + docker-compose / docker-compose-remote entries (gRPC 50062, http 9108, env, depends_on account+stock+db).
-- [ ] api-gateway: point `PeerTxServiceClient` + `PeerBankAdminServiceClient` (and the new `PeerEgressServiceClient`) at `interbank-service:50062` instead of `transaction-service`.
+- [ ] api-gateway: point **every** `/cross-bank-protocol` gRPC client at `interbank-service:50062` — `PeerTxServiceClient`, `PeerBankAdminServiceClient`, `PeerEgressServiceClient`, the `PeerOTCServiceClient` used by `PeerOTCHandler` (was → stock-service), and switch `PeerUserHandler` from its direct client/user clients to interbank's `PeerUserServiceClient`. interbank-service is the single cross-bank backend; it forwards OTC → stock-service and /user → client/user-service. (stock-service still *serves* `PeerOTCService`, but now interbank — not the gateway — calls it.)
 - [ ] api-gateway: expose the peer health surface — `GET /api/v3/peer-banks/{id}/reachability` → `PeerEgressService.CheckPeerReachability`, and `GET /api/v3/peer-banks/state` → `GetPeersState`; optionally have the `POST /api/v3/peer-banks` (create) handler chain a `CheckPeerReachability` and return the probe alongside the created row ("verify on add").
 - [ ] stock-service: route outbound OTC/discovery egress (`peerotc.Client`, `otccache` fetches) through `PeerEgressService.ProxyToPeer` instead of dialing peers directly; drop its direct HTTP egress.
 - [ ] transaction-service: delete the engine (the 14 files), drop the 3 tables from its AutoMigrate, remove PeerTx/PeerBankAdmin registration + crons; keep local payments/transfers/fees.
