@@ -32,7 +32,19 @@ The unified login endpoint auto-detects whether the principal is an employee or 
 
 Employee routes additionally require specific permissions (see per-endpoint notes). Client routes require `role="client"` in the JWT.
 
-Access tokens expire after 15 minutes. Use the refresh token to obtain a new pair.
+Access tokens are **ES256-signed JWTs** (15 min). The gateway verifies them
+locally against auth-service's published public keys (no per-request validation
+hop) and consults a revocation denylist. Two distinct 401 outcomes tell the
+client what to do:
+
+- **`401 token_expired`** — the access token is past `exp`, OR its claims are
+  stale (permissions/roles/account state changed). **Refresh** the token (the
+  refresh token is still valid) and retry — do **not** log the user out.
+- **`401 unauthorized`** — the token is invalid/malformed, or the session was
+  revoked (logout / revoke-session / revoke-all). The refresh token is also
+  dead; the client must **re-authenticate** (log in again).
+
+Use the refresh token (`POST /api/v3/auth/refresh`) to obtain a new pair.
 
 ---
 

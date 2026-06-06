@@ -111,6 +111,13 @@ func (m *mockAuthClient) ResendActivationEmail(_ context.Context, _ *authpb.Rese
 // helper
 // ---------------------------------------------------------------------------
 
+// vfy wraps an auth client into a TokenVerifier with NO local keys, so Verify
+// falls back to the client's gRPC ValidateToken — letting the legacy
+// mock-ValidateToken tests exercise the same code paths.
+func vfy(c authpb.AuthServiceClient) *TokenVerifier {
+	return NewTokenVerifier(nil, nil, c)
+}
+
 func serveWithMiddleware(mw gin.HandlerFunc) (*gin.Engine, *httptest.ResponseRecorder, *http.Request) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -208,11 +215,11 @@ func TestAnyAuthMiddleware_EmployeeToken_SetsUserID(t *testing.T) {
 			Email:         "emp@example.com",
 		},
 	}
-	r, w, req := serveWithMiddleware(AnyAuthMiddleware(client))
+	r, w, req := serveWithMiddleware(AnyAuthMiddleware(vfy(client)))
 	// Replace the handler so we can inspect context values
 	gin.SetMode(gin.TestMode)
 	r2 := gin.New()
-	r2.Use(AnyAuthMiddleware(client))
+	r2.Use(AnyAuthMiddleware(vfy(client)))
 	r2.GET("/test", func(c *gin.Context) {
 		uid, exists := c.Get("principal_id")
 		require.True(t, exists, "principal_id should be set in context")
@@ -240,7 +247,7 @@ func TestAnyAuthMiddleware_ClientToken_SetsUserID(t *testing.T) {
 	}
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(AnyAuthMiddleware(client))
+	r.Use(AnyAuthMiddleware(vfy(client)))
 	r.GET("/test", func(c *gin.Context) {
 		uid, exists := c.Get("principal_id")
 		require.True(t, exists, "principal_id should be set in context for client tokens")
@@ -270,7 +277,7 @@ func TestAuthMiddleware_RejectsClientToken(t *testing.T) {
 	}
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(AuthMiddleware(client))
+	r.Use(AuthMiddleware(vfy(client)))
 	r.GET("/test", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})

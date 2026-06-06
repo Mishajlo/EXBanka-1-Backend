@@ -114,6 +114,10 @@ type Deps struct {
 	// RateLimit configures the gateway's rate-limit buckets (Phase A).
 	// Zero-value (nil Redis) disables limiting.
 	RateLimit RateLimitConfig
+
+	// TokenVerifier verifies access tokens for AuthMiddleware/AnyAuthMiddleware
+	// (local ES256 with gRPC fallback). Built in cmd/main.go.
+	TokenVerifier *middleware.TokenVerifier
 }
 
 // Handlers bundles every HTTP handler the gateway exposes. The constructor
@@ -188,6 +192,9 @@ type Handlers struct {
 	// RateLimit carries the rate-limit wiring from Deps so SetupV3 can apply
 	// the global + strict-auth buckets (Phase A).
 	RateLimit RateLimitConfig
+
+	// TokenVerifier backs AuthMiddleware/AnyAuthMiddleware (local ES256 verify).
+	TokenVerifier *middleware.TokenVerifier
 }
 
 // NewHandlers wires every handler from the supplied gRPC client deps.
@@ -254,5 +261,6 @@ func NewHandlers(d Deps) *Handlers {
 	h.Role.Audit = d.AuditProducer
 	h.Tax.Audit = d.AuditProducer
 	h.RateLimit = d.RateLimit
+	h.TokenVerifier = d.TokenVerifier
 	return h
 }

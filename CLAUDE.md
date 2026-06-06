@@ -203,7 +203,7 @@ The Notification Service has a PostgreSQL database (`notification_db`, port 5441
 - Middleware uses `system_type` to route to `AuthMiddleware` (employee) or `AnyAuthMiddleware` (client + employee).
 
 **Token types** (auth-service):
-- Access token: short-lived JWT (15 min), stateless validation. Claims include `user_id`, `roles []string`, `permissions []string`, and `system_type` (`employee` or `client`).
+- Access token: short-lived JWT (15 min), **ES256-signed (asymmetric)**. auth-service holds the private key and exposes the public keys via the `GetSigningKeys` gRPC (JWKS-style, with `kid` + rotation overlap). The **api-gateway verifies access tokens LOCALLY** (caching the public keys; no per-request `ValidateToken` hop) and consults two Redis denylists written by auth: `blacklist:sid:<sid>` (hard revocation — logout/revoke → gateway returns 401 `unauthorized`) and `user_revoked_at:<principal_id>` (per-user epoch vs the token's `iat` — claims changed/revoke-all → gateway returns 401 `token_expired` so the client silently refreshes). Redis key formats live in `contract/authredis`. Claims include `principal_id`, `principal_type`, `roles`, `permissions`, and `sid` (session id). `JWT_SECRET` is legacy (no longer signs); set `JWT_EC_PRIVATE_KEY`/`JWT_EC_KID` for a persistent key, else one is generated at startup.
 - Refresh token: long-lived (168h), stored in `auth_db` and revocable
 - Activation token: 24h, triggers email with activation link via Kafka → notification-service
 - Password reset token: 1h, triggers email with reset link via Kafka → notification-service

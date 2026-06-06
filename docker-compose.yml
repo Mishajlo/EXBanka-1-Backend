@@ -321,6 +321,11 @@ services:
       USER_GRPC_ADDR: "user-service:50052"
       KAFKA_BROKERS: kafka:9092
       JWT_SECRET: docker-test-secret-change-me
+      # Access tokens are signed with ES256. Set JWT_EC_PRIVATE_KEY to a PEM
+      # ECDSA P-256 key (with JWT_EC_KID) to keep tokens valid across restarts;
+      # left unset, auth-service generates an ephemeral key at startup (dev).
+      JWT_EC_PRIVATE_KEY: "${JWT_EC_PRIVATE_KEY:-}"
+      JWT_EC_KID: "${JWT_EC_KID:-}"
       JWT_ACCESS_EXPIRY: 15m
       JWT_REFRESH_EXPIRY: 168h
       REDIS_ADDR: redis:6379

@@ -103,7 +103,7 @@ func SetupV3(r *gin.Engine, h *Handlers) {
 
 	// ── /me/* (AnyAuthMiddleware) ────────────────────────────────
 	me := v3.Group("/me")
-	me.Use(middleware.AnyAuthMiddleware(h.Auth.Client()))
+	me.Use(middleware.AnyAuthMiddleware(h.TokenVerifier))
 	{
 		me.GET("", middleware.RequireClientToken(), h.Me.GetMe)
 
@@ -312,7 +312,7 @@ func SetupV3(r *gin.Engine, h *Handlers) {
 
 	// ── Stock exchanges (AnyAuth — market data is browsable) ────
 	stockExchanges := v3.Group("/stock-exchanges")
-	stockExchanges.Use(middleware.AnyAuthMiddleware(h.Auth.Client()))
+	stockExchanges.Use(middleware.AnyAuthMiddleware(h.TokenVerifier))
 	{
 		stockExchanges.GET("", h.StockExchange.ListExchanges)
 		stockExchanges.GET("/:id", h.StockExchange.GetExchange)
@@ -320,7 +320,7 @@ func SetupV3(r *gin.Engine, h *Handlers) {
 
 	// ── Securities (AnyAuth — market data is browsable) ─────────
 	securities := v3.Group("/securities")
-	securities.Use(middleware.AnyAuthMiddleware(h.Auth.Client()))
+	securities.Use(middleware.AnyAuthMiddleware(h.TokenVerifier))
 	{
 		securities.GET("/stocks", h.Securities.ListStocks)
 		securities.GET("/stocks/:id", h.Securities.GetStock)
@@ -340,12 +340,12 @@ func SetupV3(r *gin.Engine, h *Handlers) {
 	// legacy /api/v3/otc/offers group). Browsing is AnyAuth; buying
 	// requires the securities/otc trade permission.
 	otcStocksRead := v3.Group("/otc/stocks")
-	otcStocksRead.Use(middleware.AnyAuthMiddleware(h.Auth.Client()))
+	otcStocksRead.Use(middleware.AnyAuthMiddleware(h.TokenVerifier))
 	{
 		otcStocksRead.GET("", h.Portfolio.ListOTCOffers)
 	}
 	otcStocksTrade := v3.Group("/otc/stocks")
-	otcStocksTrade.Use(middleware.AnyAuthMiddleware(h.Auth.Client()))
+	otcStocksTrade.Use(middleware.AnyAuthMiddleware(h.TokenVerifier))
 	otcStocksTrade.Use(middleware.RequirePermissionOrClient(middleware.PermAny, perms.Otc.Trade.Accept, perms.Securities.Trade.Any))
 	otcStocksTrade.Use(middleware.ResolveIdentity(middleware.OwnerIsBankIfEmployee))
 	{
@@ -358,7 +358,7 @@ func SetupV3(r *gin.Engine, h *Handlers) {
 
 	// ── OTC option trading (Spec 2) — read endpoints ─────────────
 	otcRead := v3.Group("/otc")
-	otcRead.Use(middleware.AnyAuthMiddleware(h.Auth.Client()))
+	otcRead.Use(middleware.AnyAuthMiddleware(h.TokenVerifier))
 	otcRead.Use(middleware.ResolveIdentity(middleware.OwnerIsBankIfEmployee))
 	{
 		// (Phase 8) /otc/offers/:id renamed to /otc/options/:id.
@@ -383,7 +383,7 @@ func SetupV3(r *gin.Engine, h *Handlers) {
 	}
 	// Trading actions require both securities.trade AND otc.trade.
 	otcOptionsTrade := v3.Group("/otc")
-	otcOptionsTrade.Use(middleware.AnyAuthMiddleware(h.Auth.Client()))
+	otcOptionsTrade.Use(middleware.AnyAuthMiddleware(h.TokenVerifier))
 	otcOptionsTrade.Use(middleware.RequirePermissionOrClient(middleware.PermAll, perms.Securities.Trade.Any, perms.Otc.Trade.Accept))
 	otcOptionsTrade.Use(middleware.ResolveIdentity(middleware.OwnerIsBankIfEmployee))
 	{
@@ -447,7 +447,7 @@ func SetupV3(r *gin.Engine, h *Handlers) {
 
 	// ── Browser-facing verifications (AnyAuthMiddleware) ────────
 	verifications := v3.Group("/verifications")
-	verifications.Use(middleware.AnyAuthMiddleware(h.Auth.Client()))
+	verifications.Use(middleware.AnyAuthMiddleware(h.TokenVerifier))
 	{
 		verifications.POST("", h.Verification.CreateVerification)
 		verifications.GET("/:id/status", h.Verification.GetVerificationStatus)
@@ -456,7 +456,7 @@ func SetupV3(r *gin.Engine, h *Handlers) {
 
 	// ── Employee/admin routes (AuthMiddleware + RequirePermission) ─
 	protected := v3.Group("/")
-	protected.Use(middleware.AuthMiddleware(h.Auth.Client()))
+	protected.Use(middleware.AuthMiddleware(h.TokenVerifier))
 	{
 		// Employees
 		employees := protected.Group("/employees")
@@ -1068,7 +1068,7 @@ func SetupV3(r *gin.Engine, h *Handlers) {
 	// ── Investment fund browsing + invest/redeem (AnyAuth) ──────
 	// Browsing (List/Get) doesn't read identity; invest/redeem do.
 	fundsAny := v3.Group("/investment-funds")
-	fundsAny.Use(middleware.AnyAuthMiddleware(h.Auth.Client()))
+	fundsAny.Use(middleware.AnyAuthMiddleware(h.TokenVerifier))
 	{
 		fundsAny.GET("", h.Fund.ListFunds)
 		fundsAny.GET("/:id", h.Fund.GetFund)

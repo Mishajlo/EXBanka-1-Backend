@@ -3,10 +3,11 @@ package cache
 import (
 	"context"
 	"encoding/json"
-	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/exbanka/contract/authredis"
 )
 
 type RedisCache struct {
@@ -97,5 +98,5 @@ func (c *RedisCache) GetUserRevokedAt(ctx context.Context, userID int64) (int64,
 }
 
 func userRevokedAtKey(userID int64) string {
-	return "user_revoked_at:" + strconv.FormatInt(userID, 10)
+	return authredis.UserRevokedAtKey(userID)
 }

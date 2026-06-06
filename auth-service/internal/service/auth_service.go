@@ -18,6 +18,7 @@ import (
 	kafkaprod "github.com/exbanka/auth-service/internal/kafka"
 	"github.com/exbanka/auth-service/internal/model"
 	"github.com/exbanka/auth-service/internal/repository"
+	"github.com/exbanka/contract/authredis"
 	kafkamsg "github.com/exbanka/contract/kafka"
 	userpb "github.com/exbanka/contract/userpb"
 )
@@ -386,9 +387,9 @@ func (s *AuthService) SigningKeys() ([]PublicKeyInfo, error) {
 }
 
 // sessionBlacklistKey is the Redis key the gateway and auth both consult to
-// hard-revoke every access token carrying a given session id (sid). Defined
-// once here and mirrored by the gateway's contract/authredis helper.
-func sessionBlacklistKey(sid string) string { return "blacklist:sid:" + sid }
+// hard-revoke every access token carrying a given session id (sid). The format
+// is owned by contract/authredis so the two services can't drift.
+func sessionBlacklistKey(sid string) string { return authredis.SessionBlacklistKey(sid) }
 
 // blacklistSession hard-revokes every access token tied to a session id. The
 // gateway sees the key on its next local verify and returns 401 unauthorized
