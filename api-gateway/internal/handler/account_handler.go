@@ -650,14 +650,11 @@ func (h *AccountHandler) ListMyAccounts(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"accounts": accounts, "total": resp.Total})
 }
 
-// GetMyAccount serves GET /api/me/accounts/:id — fetches account and verifies ownership.
+// GetMyAccount serves GET /api/me/accounts/:id. OWN-1: ownership is enforced by
+// account-service (the caller identity is propagated in gRPC metadata) — a client
+// reading another client's account gets 404 from the service. The gateway just
+// surfaces it; permissions remain gateway-side via AnyAuthMiddleware.
 func (h *AccountHandler) GetMyAccount(c *gin.Context) {
-	userID, _ := c.Get("principal_id")
-	uid, ok := userID.(int64)
-	if !ok {
-		apiError(c, 401, ErrUnauthorized, "invalid token claims")
-		return
-	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		apiError(c, 400, ErrValidation, "invalid id")
@@ -666,10 +663,6 @@ func (h *AccountHandler) GetMyAccount(c *gin.Context) {
 	resp, err := h.accountClient.GetAccount(c.Request.Context(), &accountpb.GetAccountRequest{Id: id})
 	if err != nil {
 		handleGRPCError(c, err)
-		return
-	}
-	if resp.OwnerId != uint64(uid) {
-		apiError(c, 403, ErrForbidden, "access denied")
 		return
 	}
 	c.JSON(http.StatusOK, accountToJSON(resp))
@@ -691,12 +684,6 @@ func (h *AccountHandler) GetMyAccount(c *gin.Context) {
 // @Failure      404  {object}  map[string]interface{}
 // @Router       /api/v2/me/accounts/{id}/activity [get]
 func (h *AccountHandler) GetMyAccountActivity(c *gin.Context) {
-	userID, _ := c.Get("principal_id")
-	uid, ok := userID.(int64)
-	if !ok {
-		apiError(c, 401, ErrUnauthorized, "invalid token claims")
-		return
-	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		apiError(c, 400, ErrValidation, "invalid id")
@@ -708,13 +695,11 @@ func (h *AccountHandler) GetMyAccountActivity(c *gin.Context) {
 		pageSize = 200
 	}
 
+	// OWN-1: account-service enforces ownership on GetAccount + GetLedgerEntries
+	// (caller identity is propagated) — a foreign account returns 404.
 	acct, err := h.accountClient.GetAccount(c.Request.Context(), &accountpb.GetAccountRequest{Id: id})
 	if err != nil {
 		handleGRPCError(c, err)
-		return
-	}
-	if acct.OwnerId != uint64(uid) {
-		apiError(c, 403, ErrForbidden, "access denied")
 		return
 	}
 
