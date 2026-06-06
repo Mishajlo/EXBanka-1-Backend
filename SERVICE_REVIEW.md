@@ -649,8 +649,17 @@ from service/" rule). Larger refactor; decision.
   (mirrors `UpdateBalance`); over-limit → `FailedPrecondition` (→ interbank NO vote, like
   insufficient funds), generic message (no spending/limit leak to the peer bank). +tests.
   Limit checked at reserve against committed spending (settle accrues it). Bank accounts exempt.
-- [ ] **D** — **OWN-1 now for account-service**: caller identity over gRPC metadata + ownership
-  checks across the RPCs; remove the gateway's account ownership checks. Final phase, own plan.
+- [~] **D** — OWN-1 PLANNED, not yet implemented. Investigation revealed it is a CROSS-SERVICE
+  platform change, not an account-scoped one: today only `x-changed-by` (a single user id, for
+  audit) is propagated — there is NO principal_type/principal_id/on_behalf identity in gRPC
+  metadata, so the foundation must be built in shared `contract/` first (D0), used by ALL services.
+  And the money RPCs (UpdateBalance, Reserve*/Commit*/Settle*/Release*, ReserveFunds, PartialSettle)
+  are SERVICE-TO-SERVICE with no caller identity — ownership can only apply to the user-facing tier
+  (GetAccount, UpdateAccountName/Limits/Status, ListAccountsByClient, GetLedgerEntries, CreateAccount).
+  Getting the trusted-service-vs-user split wrong breaks transfers/OTC/loans or opens an auth hole in
+  the money service. Full plan: docs/superpowers/plans/2026-06-06-own1-account-ownership-in-service.md
+  (D0 foundation → D1 enforce additively → D2 remove gateway checks). Deferred to a dedicated effort
+  (security-critical money path; another agent is concurrently editing shared contract/).
 - [~] **E** — DROPPED. `GetCompany`/`UpdateCompany` are the read/update half of a **live**
   Company resource (the gateway has a `/companies` group, `CreateCompany` is used, accounts carry
   `company_id`) — "no caller today" ≠ "dead"; the FE creates companies + company accounts and will
