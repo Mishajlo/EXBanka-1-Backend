@@ -467,7 +467,37 @@ registry are well-separated. No Redis — correct for this service. inbox_cleanu
   call site) → (D) consumers: `FetchMessage`+`CommitMessages` (commit only after success),
   bounded retry, dead-letter on exhaustion, idempotent processing keyed on `IdempotencyKey`.
 - [x] **4.2 — remove `SendEmail` (gRPC) + `GetDeliveryStatus`** (0 callers; email is Kafka-only;
-  GetDeliveryStatus is an unimplemented stub). Done in phase A.
+  GetDeliveryStatus is an unimplemented stub). **DONE — phase A, commit fce9c8d (2.13.1).**
+
+#### Phase progress + concrete design for B–D (remaining)
+- **A — dead RPCs: DONE** (fce9c8d).
+- **B — reliability core: DONE** — shared `runConsumer` (FetchMessage + CommitMessages manual
+  commit, bounded retry w/ backoff, `notification.dead-letter` topic on exhaustion, no-commit if
+  the DLQ write itself fails); all 6 consumers refactored (`handleMessage` returns error;
+  retryable=transient DB/SMTP, non-retryable=malformed/bad-template→nil; verification push is
+  best-effort so it never re-inserts the inbox on retry). `Producer.WriteDeadLetter` + DLQ topic
+  in EnsureTopics. Stops the silent message loss independently of idempotency. Original design ↓.
+- ~~**B — reliability core (manual-commit + retry + DLQ), notification-side only, self-contained
+  & green, the BIGGEST win (stops silent loss):**~~ add a shared `runConsumer(ctx, name, reader,
+  dlq, handle MessageHandler) ` in `internal/consumer/` using `FetchMessage` + `CommitMessages`
+  (commit ONLY after success); bounded retry w/ backoff; on exhaustion write to a new
+  `notification.dead-letter` topic then commit (poison message never stalls the partition); if
+  the DLQ write itself fails, do NOT commit (retry rather than lose). Refactor each consumer's
+  `handleMessage` to RETURN error; `Start` delegates to `runConsumer`. Add the DLQ topic to
+  EnsureTopics. Single-insert handlers are atomic so retry is duplicate-safe without keys.
+  **Email caveat:** its `EmailSentMessage` confirmation semantics need care — only publish the
+  final outcome (after retries/DLQ), and return the send error to trigger retry. Tests: each
+  `handleMessage` now returns error.
+- **C — idempotency keys (cross-service producer sweep):** add `IdempotencyKey string` to
+  `SendEmailMessage`, `GeneralNotificationMessage`, the admin/business audit messages, and the
+  verification-challenge message (`contract/kafka/messages.go`); stamp a UUID in each service's
+  producer `Publish*` path (auto-gen if empty — "set at every producer" without touching every
+  call site). Touches ~8 services that emit these. Then add `idempotency_key` columns +
+  `ON CONFLICT DO NOTHING` writes to `admin_audit_log`, `business_audit_log`, `mobile_inbox`
+  (general_notification already has `CreateWithIdempotency`); email dedup via a small
+  `processed_messages(key)` claim table. Consumers dedup on the key (skip when empty → safe
+  during rollout).
+- **D — wire consumer dedup** once C lands (consumers call the idempotent writes / claim).
 
 ## 5. client-service
 _pending_
