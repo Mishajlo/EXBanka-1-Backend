@@ -212,7 +212,9 @@ The Notification Service has a PostgreSQL database (`notification_db`, port 5441
 
 **Employee creation flow:** API Gateway → User service (create employee) → Auth service (create activation token) → Kafka → Notification service (send activation email).
 
-**Client login flow:** API Gateway (`POST /api/auth/client-login`) → Auth service (`ClientLogin` RPC) → Client service (`ValidateCredentials` RPC) → Auth service generates JWT with `role="client"` and issues refresh token. The client JWT is validated by `AnyAuthMiddleware` in the API Gateway for `/api/me/*` routes.
+**Client login flow:** Clients and employees share one unified login: API Gateway (`POST /api/v3/auth/login`) → Auth service (`Login` RPC). **Auth-service owns all credentials** in its own `accounts` table — every row carries a `principal_type` of `employee` or `client`, and `Login` looks the account up by email and verifies the password against that row's hash. There is **no** client-service `ValidateCredentials` hop (client-service stores only the client *profile*). A client's auth Account is provisioned asynchronously: client-service publishes `client.client-created` to Kafka and auth-service's `client_consumer` creates the corresponding Account. On success `Login` mints an ES256 JWT whose `principal_type`/`system_type` is `client` and issues a refresh token; the gateway verifies it locally and `AnyAuthMiddleware` admits it on `/api/me/*` routes.
+
+**Client (and employee) deactivation → force-refresh:** Disabling an account via `SetAccountStatus(active=false)` revokes all of that account's refresh sessions **and** bumps the per-principal revocation epoch (`user_revoked_at:<principal_id>` in Redis), so the gateway rejects the still-valid access token immediately (401 `token_expired`). This is principal-type-agnostic — client deactivation is fully covered by the same path as employee deactivation; there is no separate client claims-invalidation channel.
 
 **JMBG (Jedinstveni Matični Broj Građana):**
 - Unique 13-digit national identification number required for all employees
