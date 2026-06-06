@@ -74,7 +74,7 @@ func TestValidateToken_RevokedByEpoch_RejectsToken(t *testing.T) {
 	}
 
 	// Revoke epoch in the future relative to the token's iat (1h ahead).
-	if err := redis.SetUserRevokedAt(context.Background(), 42, time.Now().Add(1*time.Hour).Unix(), 15*time.Minute); err != nil {
+	if err := redis.SetUserRevokedAt(context.Background(), "employee", 42, time.Now().Add(1*time.Hour).Unix(), 15*time.Minute); err != nil {
 		t.Fatalf("set epoch: %v", err)
 	}
 
@@ -90,7 +90,7 @@ func TestValidateToken_RevokedByEpoch_FreshTokenStillValid(t *testing.T) {
 	svc, redis, jwtSvc := newAuthServiceWithRealCache(t)
 
 	// Cutoff in the past.
-	if err := redis.SetUserRevokedAt(context.Background(), 42, time.Now().Add(-1*time.Hour).Unix(), 15*time.Minute); err != nil {
+	if err := redis.SetUserRevokedAt(context.Background(), "employee", 42, time.Now().Add(-1*time.Hour).Unix(), 15*time.Minute); err != nil {
 		t.Fatalf("set epoch: %v", err)
 	}
 
@@ -137,7 +137,7 @@ func TestValidateToken_RevokedByEpoch_CacheHitPathAlsoChecksEpoch(t *testing.T) 
 	}
 
 	// Now revoke.
-	if err := redis.SetUserRevokedAt(context.Background(), 7, time.Now().Add(1*time.Hour).Unix(), 15*time.Minute); err != nil {
+	if err := redis.SetUserRevokedAt(context.Background(), "employee", 7, time.Now().Add(1*time.Hour).Unix(), 15*time.Minute); err != nil {
 		t.Fatalf("set epoch: %v", err)
 	}
 

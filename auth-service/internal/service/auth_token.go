@@ -131,16 +131,17 @@ func blacklistSession(ctx context.Context, c *cache.RedisCache, accessExp time.D
 	}
 }
 
-// hardRevokeUser bumps the per-user revocation epoch so EVERY access token the
-// user currently holds is rejected (used for revoke-all and account-disable,
-// where there is no single session to target). Refresh tokens are revoked
-// separately by the caller, so the net effect is a full logout.
-func hardRevokeUser(ctx context.Context, c *cache.RedisCache, accessExp time.Duration, userID int64) {
-	if c == nil || userID == 0 {
+// hardRevokeUser bumps the per-principal revocation epoch so EVERY access token
+// the principal currently holds is rejected (used for revoke-all and
+// account-disable, where there is no single session to target). Refresh tokens
+// are revoked separately by the caller, so the net effect is a full logout.
+// principalType ("employee" | "client") namespaces the epoch key.
+func hardRevokeUser(ctx context.Context, c *cache.RedisCache, accessExp time.Duration, principalType string, userID int64) {
+	if c == nil || userID == 0 || principalType == "" {
 		return
 	}
-	if err := c.SetUserRevokedAt(ctx, userID, time.Now().Unix(), accessExp); err != nil {
-		log.Printf("warn: failed to set revocation epoch for user %d: %v", userID, err)
+	if err := c.SetUserRevokedAt(ctx, principalType, userID, time.Now().Unix(), accessExp); err != nil {
+		log.Printf("warn: failed to set revocation epoch for %s %d: %v", principalType, userID, err)
 	}
 }
 
@@ -157,7 +158,7 @@ func checkRevokedByEpoch(c *cache.RedisCache, claims *Claims) (bool, error) {
 	if claims == nil || claims.IssuedAt == nil || c == nil {
 		return false, nil
 	}
-	revokedAt, err := c.GetUserRevokedAt(context.Background(), claims.PrincipalID)
+	revokedAt, err := c.GetUserRevokedAt(context.Background(), claims.PrincipalType, claims.PrincipalID)
 	if err != nil || revokedAt == 0 {
 		return false, err
 	}

@@ -564,7 +564,7 @@ func TestRevokeAllSessions_RevokesTokensAndSessions(t *testing.T) {
 		require.NoError(t, f.db.Create(rt).Error)
 	}
 
-	require.NoError(t, f.svc.RevokeAllSessions(context.Background(), acct.ID, acct.PrincipalID, "test_reason"))
+	require.NoError(t, f.svc.RevokeAllSessions(context.Background(), acct.PrincipalType, acct.ID, acct.PrincipalID, "test_reason"))
 
 	var revokedTokens int64
 	require.NoError(t, f.db.Model(&model.RefreshToken{}).Where("account_id = ? AND revoked = true", acct.ID).Count(&revokedTokens).Error)

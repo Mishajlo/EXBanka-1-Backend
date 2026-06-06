@@ -11,13 +11,18 @@ import "strconv"
 // out). Auth sets a TTL equal to the access-token lifetime so it self-cleans.
 func SessionBlacklistKey(sid string) string { return "blacklist:sid:" + sid }
 
-// UserRevokedAtKey holds the per-user revocation epoch (unix seconds). An
+// UserRevokedAtKey holds the per-principal revocation epoch (unix seconds). An
 // access token whose `iat` is older than this value must be FORCE-REFRESHED:
-// permissions/roles/account-active changed (or the user was revoked-all). The
-// gateway returns 401 token_expired so the client silently refreshes rather
+// permissions/roles/account-active changed (or the principal was revoked-all).
+// The gateway returns 401 token_expired so the client silently refreshes rather
 // than logging out.
-func UserRevokedAtKey(principalID int64) string {
-	return "user_revoked_at:" + strconv.FormatInt(principalID, 10)
+//
+// The key is namespaced by principalType ("employee" | "client") because
+// employee ids (user_db) and client ids (client_db) are independent sequences —
+// without the type prefix, employee#5 and client#5 would share one epoch and
+// revoking one would spuriously force-refresh the other.
+func UserRevokedAtKey(principalType string, principalID int64) string {
+	return "user_revoked_at:" + principalType + ":" + strconv.FormatInt(principalID, 10)
 }
 
 // IsStale reports whether a token issued at tokenIATUnix predates the user's

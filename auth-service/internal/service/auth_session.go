@@ -77,8 +77,8 @@ func (s *SessionService) Logout(ctx context.Context, refreshTokenStr string) err
 	return nil
 }
 
-// RevokeAllSessions revokes all sessions and refresh tokens for a user (by account).
-func (s *SessionService) RevokeAllSessions(ctx context.Context, accountID int64, userID int64, reason string) error {
+// RevokeAllSessions revokes all sessions and refresh tokens for a principal (by account).
+func (s *SessionService) RevokeAllSessions(ctx context.Context, principalType string, accountID int64, userID int64, reason string) error {
 	// Revoke all refresh tokens
 	if err := s.tokenRepo.RevokeAllForAccount(accountID); err != nil {
 		return err
@@ -87,9 +87,9 @@ func (s *SessionService) RevokeAllSessions(ctx context.Context, accountID int64,
 	if err := s.sessionRepo.RevokeAllForUser(userID); err != nil {
 		return err
 	}
-	// Hard-revoke every access token for the user via the per-user epoch
+	// Hard-revoke every access token for the principal via the per-principal epoch
 	// (there is no single session to target here).
-	hardRevokeUser(ctx, s.cache, s.jwtService.AccessExpiry(), userID)
+	hardRevokeUser(ctx, s.cache, s.jwtService.AccessExpiry(), principalType, userID)
 	// Publish event
 	_ = s.producer.Publish(ctx, kafkamsg.TopicAuthSessionRevoked, kafkamsg.AuthSessionRevokedMessage{
 		SessionID: 0, // 0 indicates all sessions

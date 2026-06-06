@@ -114,7 +114,7 @@ func TestVerify_Local_StaleByEpoch_IsTokenExpired(t *testing.T) {
 	v, rdb := newLocalVerifier(t, priv, "kid-1")
 	// Token issued now; epoch set 1h in the future → stale.
 	tok := signToken(t, priv, "kid-1", baseClaims("100", time.Now()))
-	require.NoError(t, rdb.Set(context.Background(), authredis.UserRevokedAtKey(7),
+	require.NoError(t, rdb.Set(context.Background(), authredis.UserRevokedAtKey("employee", 7),
 		time.Now().Add(time.Hour).Unix(), time.Minute).Err())
 
 	_, kind := v.Verify(context.Background(), tok)

@@ -23,7 +23,7 @@ import (
 // interface so AccountService is decoupled from the concrete SessionService
 // (injected by the composition root).
 type SessionRevoker interface {
-	RevokeAllSessions(ctx context.Context, accountID, userID int64, reason string) error
+	RevokeAllSessions(ctx context.Context, principalType string, accountID, userID int64, reason string) error
 }
 
 // AccountService owns account lifecycle: creation/activation, password reset,
@@ -213,7 +213,7 @@ func (s *AccountService) ResetPassword(ctx context.Context, tokenStr, newPasswor
 	// Resolve the user ID from the account
 	var acct model.Account
 	if acctErr := s.accountRepo.GetByID(prt.AccountID, &acct); acctErr == nil {
-		if err := s.sessions.RevokeAllSessions(ctx, prt.AccountID, acct.PrincipalID, "password_reset"); err != nil {
+		if err := s.sessions.RevokeAllSessions(ctx, acct.PrincipalType, prt.AccountID, acct.PrincipalID, "password_reset"); err != nil {
 			log.Printf("warn: failed to revoke all sessions after password reset: %v", err)
 		}
 		// General notification (no email)
@@ -305,7 +305,7 @@ func (s *AccountService) SetAccountStatus(ctx context.Context, principalType str
 		}
 		// Closes the 2.2 gap: a disabled account's still-valid access token kept
 		// working ≤15 min. Bump the epoch so it is rejected immediately.
-		hardRevokeUser(ctx, s.cache, s.jwtService.AccessExpiry(), principalID)
+		hardRevokeUser(ctx, s.cache, s.jwtService.AccessExpiry(), principalType, principalID)
 	}
 
 	if err := s.accountRepo.SetStatusByPrincipal(principalType, principalID, status); err != nil {

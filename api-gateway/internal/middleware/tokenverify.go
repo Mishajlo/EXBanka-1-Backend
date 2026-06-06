@@ -142,7 +142,7 @@ func (v *TokenVerifier) verifyLocal(ctx context.Context, token string) (*Princip
 	// Stale claims: per-user revocation epoch moved past the token's iat →
 	// force refresh (permissions/roles/account-active changed, or revoke-all).
 	if claims.IssuedAt != nil && v.redis != nil {
-		if revokedAt, rerr := v.redis.Get(ctx, authredis.UserRevokedAtKey(claims.PrincipalID)).Int64(); rerr == nil {
+		if revokedAt, rerr := v.redis.Get(ctx, authredis.UserRevokedAtKey(claims.PrincipalType, claims.PrincipalID)).Int64(); rerr == nil {
 			if authredis.IsStale(claims.IssuedAt.Unix(), revokedAt) {
 				return nil, VerifyTokenExpired, true
 			}
