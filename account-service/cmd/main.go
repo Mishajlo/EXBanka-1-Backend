@@ -35,6 +35,11 @@ func main() {
 
 	db, err := gorm.Open(postgres.Open(cfg.DSN()), &gorm.Config{
 		NowFunc: func() time.Time { return time.Now().UTC() },
+		// Translate driver-specific errors (e.g. Postgres unique-violation) into
+		// portable gorm sentinels (gorm.ErrDuplicatedKey) so the service layer can
+		// map a duplicate company registration/tax number to AlreadyExists (409)
+		// instead of leaking the raw constraint string (which contains the numbers).
+		TranslateError: true,
 	})
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
@@ -118,8 +123,8 @@ func main() {
 	ledgerService := service.NewLedgerService(ledgerRepo, db)
 	changelogSvc := service.NewChangelogService(changelogRepo)
 	reservationService := service.NewReservationService(db, accountRepo, reservationRepo, ledgerRepo).WithCache(redisCache)
-	incomingReservationService := service.NewIncomingReservationService(db, accountRepo, incomingReservationRepo)
-	outgoingReservationService := service.NewOutgoingReservationService(db, accountRepo, outgoingReservationRepo)
+	incomingReservationService := service.NewIncomingReservationService(db, accountRepo, incomingReservationRepo).WithCache(redisCache)
+	outgoingReservationService := service.NewOutgoingReservationService(db, accountRepo, outgoingReservationRepo).WithCache(redisCache)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

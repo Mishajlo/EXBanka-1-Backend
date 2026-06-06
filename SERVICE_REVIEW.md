@@ -567,7 +567,92 @@ graceful degradation; optimistic-lock (Version) handled via `BeforeUpdate` + Row
   / OWN-1 gap (client deactivation is auth's `SetAccountStatus`, already epoch-bumped).
 
 ## 6. account-service
-_pending_
+
+**Responsibilities:** Accounts (balance/limits/spending), the AUTHORITATIVE spending-limit
+enforcer, ledger, reservations (3 families: generic/incoming/outgoing), companies, currencies,
+bank-owned accounts, changelog, idempotency, reconciliation, crons. Own Postgres + Redis cache.
+Largest, money-critical service: 2 gRPC services, ~38 RPCs.
+
+### What's GOOD (verified, leave alone)
+- Transaction isolation is exemplary: `UpdateBalance`, all reservation reserve/settle/release
+  use `SELECT FOR UPDATE` + `RowsAffected==0` checks. Idempotency via ledger `idempotency_key`
+  + `idempotency_record` (ON CONFLICT). Crons honor `ctx.Done()` + `defer ticker.Stop()` + use
+  `SkipHooks` for bulk spending resets. DeleteBankAccount enforces the ≥1-RSD/≥1-foreign
+  invariant atomically under FOR UPDATE. The spending limit IS enforced authoritatively inside
+  `UpdateBalance` under the lock.
+- **Two audit "CRITICAL"s were FALSE POSITIVES:** (a) `UpdateBalance` using
+  `Session{SkipHooks}.Updates(map)` is *correct* — it uses `gorm.Expr("balance + ?")` atomic
+  increments inside FOR UPDATE with explicit `WHERE id`, which is the documented-acceptable
+  pattern, NOT the forbidden zero-version trap. (b) The balance cache does NOT enable
+  double-spend — every authoritative money path reads via FOR UPDATE from the DB, never the cache.
+
+### Findings (Claude's opinion)
+
+#### A — Error standardization (the clear bad things; same proven pattern as §2/§3/§5)
+- **A1 🔴 CreateCompany duplicate → 500 + PII.** `TranslateError` is OFF (`cmd/main.go`), and
+  `company_service.Create`→`repo.Create` returns the raw DB error. Company has uniqueIndex on
+  `RegistrationNumber` + `TaxNumber`, so a duplicate returns 500 AND leaks those numbers in the
+  PG constraint string. → enable `TranslateError`; map `gorm.ErrDuplicatedKey`→`ErrCompanyDuplicate`.
+- **A2 🔴 UpdateBalance returns raw error strings.** The repo returns `fmt.Errorf("limit_exceeded: …")`
+  and `"insufficient funds: …"` (raw, with account number) and bare `gorm.ErrRecordNotFound`
+  (`account_repository.go:230-242,267`). These reach the caller as **500 Unknown** instead of
+  429 (`ErrSpendingLimitExceeded`) / 409 (`ErrInsufficientBalance`) / 404 (`ErrAccountNotFound`).
+  → return repo-level coded sentinels (like the existing `ErrInsufficientBankLiquidity`).
+- **A3 🟡 `ErrCompanyDuplicate` reused for account-NAME conflicts** (`account_service.go:88,186,326`).
+  Correct 409 code but the wire message is the misleading "company already exists" for an
+  account-name clash. → add `ErrAccountNameDuplicate` ("account name already exists").
+- (bank_account_handler's `status.Errorf` calls are actually reasonable repo-sentinel mapping —
+  only nit is `%v err` in the Internal fallback; not worth a dedicated change.)
+
+#### B — Caching (decision): balance cache is fragile
+`GetAccount`/`GetAccountByNumber` cache the FULL account incl. balance/available/spending for
+**2 min** (`accountCacheTTL`). The account-service write paths invalidate, BUT the
+incoming/outgoing reservation services mutate balance and invalidate NOTHING → `GetAccount`
+returns a stale balance for up to 2 min after a cross-bank reserve/settle. Not a double-spend
+(authoritative paths bypass cache), but a real stale-money-read for a bank. **Opinion: remove
+the account cache** — it's a cheap indexed PK/number lookup; caching mutable money across this
+many mutation paths is permanently fragile.
+
+#### C — Cross-bank outgoing debits bypass the spending limit (decision)
+`ReserveOutgoing`/`SettleOutgoing` check AvailableBalance sufficiency and ACCRUE
+daily/monthly spending, but never CHECK the daily/monthly limit. Domestic debits (via
+`UpdateBalance`) ARE limit-gated. So a client's cross-bank (SI-TX) outflows are not subject to
+their daily/monthly limit. Touches the FROZEN interbank money path ([[feedback_interbank_protocol_frozen]])
+— changing it alters NO-vote semantics, so this is the user's call, not an autonomous fix.
+
+#### D — OWN-1 ownership (decision): not implemented here
+account-service does NO ownership/authorization — it trusts the gateway entirely; `changed_by`
+is used only for changelog attribution, never authz. Per the OWN-1 decision, ownership should
+move into the owning service. This is the largest such migration (~38 RPCs, needs caller
+identity over gRPC metadata). Opinion: **defer to a dedicated OWN-1 pass** rather than bundle
+into this review.
+
+#### E — Unused RPCs (cleanup): GetCompany, UpdateCompany, GetCurrency
+Zero callers anywhere (verified: the `GetCurrency` grep hits are all protobuf field getters,
+not RPC calls). `CreateCompany`/`ListCurrencies` ARE used. Removing requires editing
+`account.proto` + `make proto`. The 3 reservation families are all USED and NON-redundant.
+
+#### F — Kafka publish from handler (layering): CreateAccount/UpdateAccountName/Limits/Status
+publish events from `grpc_handler.go`, not the service layer (violates the CLAUDE.md "publish
+from service/" rule). Larger refactor; decision.
+
+### Decision / agreed action items (DECIDED 2026-06-06 — maximal scope, phased commits)
+- [x] **A1–A3** — DONE (2.15.4): TranslateError on; company dup→ErrCompanyDuplicate (409, no PII);
+  UpdateBalance maps repo ErrSpendingLimit/ErrInsufficientFunds/NotFound → 429/409/404 coded
+  sentinels (was 500 leaking account number); added ErrAccountNameDuplicate (was mislabeled
+  "company already exists"). +tests.
+- [x] **B** — DONE (2.15.4): extracted one shared `evictAccountCache` (single key-format source;
+  AccountService + ReservationService now route through it); injected the cache into incoming/
+  outgoing reservation services via `WithCache` and evict on every balance mutation
+  (CommitIncoming, ReserveOutgoing/SettleOutgoing/ReleaseOutgoing). +end-to-end miniredis tests.
+- [ ] **C** — **Enforce** the daily/monthly limit in `ReserveOutgoing` (mirror `UpdateBalance`).
+  NOTE: changes frozen-interbank reserve behavior (insufficient-limit → NO vote) — user-approved.
+- [ ] **D** — **OWN-1 now for account-service**: caller identity over gRPC metadata + ownership
+  checks across the RPCs; remove the gateway's account ownership checks. Final phase, own plan.
+- [ ] **E** — remove unused RPCs GetCompany/UpdateCompany/GetCurrency (`make proto`).
+- [ ] **F** — move Kafka publish for CreateAccount/UpdateAccountName/Limits/Status into service.
+
+Phase order (each its own commit + VERSION bump): A → B → C → E → F → D.
 
 ## 7. card-service
 _pending_
