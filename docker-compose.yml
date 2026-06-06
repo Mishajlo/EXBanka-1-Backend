@@ -688,6 +688,8 @@ services:
       STOCK_GRPC_ADDR: "stock-service:50060"
       VERIFICATION_GRPC_ADDR: "verification-service:50061"
       NOTIFICATION_GRPC_ADDR: "notification-service:50053"
+      # 2026-06-07 cutover: the whole /cross-bank-protocol surface routes here.
+      INTERBANK_GRPC_ADDR: "interbank-service:50062"
       KAFKA_BROKERS: kafka:9092
       METRICS_PORT: "9100"
       REDIS_ADDR: "redis:6379"
@@ -721,6 +723,8 @@ services:
       stock-service:
         condition: service_started
       verification-service:
+        condition: service_started
+      interbank-service:
         condition: service_started
       redis:
         condition: service_healthy
