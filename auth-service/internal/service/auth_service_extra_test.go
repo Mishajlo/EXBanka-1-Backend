@@ -35,7 +35,9 @@ func (e *errUserClient) GetEmployee(_ context.Context, _ *userpb.GetEmployeeRequ
 // the employee path of RefreshToken — must surface as "user not found".
 func TestAuthRefreshToken_GetEmployeeFails(t *testing.T) {
 	f := newAuthFlowFixture(t)
-	f.svc.userClient = &errUserClient{getErr: errors.New("user-service down")}
+	// RefreshToken lives on the embedded TokenService, which holds its own
+	// userClient copy — inject the failure there (not on the AuthService field).
+	f.svc.TokenService.userClient = &errUserClient{getErr: errors.New("user-service down")}
 
 	acct := f.seedActiveAccountWithPassword(t, "u@test.com", "Abcdef12", model.PrincipalTypeEmployee, 1)
 	rt := &model.RefreshToken{

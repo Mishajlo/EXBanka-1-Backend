@@ -6,11 +6,44 @@ import (
 	"log"
 	"time"
 
+	"github.com/exbanka/auth-service/internal/cache"
 	"github.com/exbanka/auth-service/internal/model"
+	"github.com/exbanka/auth-service/internal/repository"
 	kafkamsg "github.com/exbanka/contract/kafka"
 )
 
-func (s *AuthService) Logout(ctx context.Context, refreshTokenStr string) error {
+// SessionService owns active sessions and login history: listing, logout, and
+// targeted/bulk revocation. Independently constructable; it hard-revokes access
+// tokens via the package-level revocation helpers (cache + access-token TTL).
+type SessionService struct {
+	sessionRepo      *repository.SessionRepository
+	tokenRepo        *repository.TokenRepository
+	loginAttemptRepo *repository.LoginAttemptRepository
+	producer         eventProducer
+	cache            *cache.RedisCache
+	jwtService       *JWTService
+}
+
+// NewSessionService wires the session-management dependencies.
+func NewSessionService(
+	sessionRepo *repository.SessionRepository,
+	tokenRepo *repository.TokenRepository,
+	loginAttemptRepo *repository.LoginAttemptRepository,
+	producer eventProducer,
+	c *cache.RedisCache,
+	jwtService *JWTService,
+) *SessionService {
+	return &SessionService{
+		sessionRepo:      sessionRepo,
+		tokenRepo:        tokenRepo,
+		loginAttemptRepo: loginAttemptRepo,
+		producer:         producer,
+		cache:            c,
+		jwtService:       jwtService,
+	}
+}
+
+func (s *SessionService) Logout(ctx context.Context, refreshTokenStr string) error {
 	// Look up the refresh token before revoking to get session info
 	rt, err := s.tokenRepo.GetRefreshTokenIncludingRevoked(refreshTokenStr)
 	if err != nil {
@@ -29,7 +62,7 @@ func (s *AuthService) Logout(ctx context.Context, refreshTokenStr string) error 
 		}
 		// Hard-revoke the access token(s) for this session so logout is
 		// immediate at the gateway (not delayed until token expiry).
-		s.blacklistSession(ctx, *rt.SessionID)
+		blacklistSession(ctx, s.cache, s.jwtService.AccessExpiry(), *rt.SessionID)
 		// Look up session to get UserID for event
 		session, sErr := s.sessionRepo.GetByID(*rt.SessionID)
 		if sErr == nil {
@@ -45,7 +78,7 @@ func (s *AuthService) Logout(ctx context.Context, refreshTokenStr string) error 
 }
 
 // RevokeAllSessions revokes all sessions and refresh tokens for a user (by account).
-func (s *AuthService) RevokeAllSessions(ctx context.Context, accountID int64, userID int64, reason string) error {
+func (s *SessionService) RevokeAllSessions(ctx context.Context, accountID int64, userID int64, reason string) error {
 	// Revoke all refresh tokens
 	if err := s.tokenRepo.RevokeAllForAccount(accountID); err != nil {
 		return err
@@ -56,7 +89,7 @@ func (s *AuthService) RevokeAllSessions(ctx context.Context, accountID int64, us
 	}
 	// Hard-revoke every access token for the user via the per-user epoch
 	// (there is no single session to target here).
-	s.hardRevokeUser(ctx, userID)
+	hardRevokeUser(ctx, s.cache, s.jwtService.AccessExpiry(), userID)
 	// Publish event
 	_ = s.producer.Publish(ctx, kafkamsg.TopicAuthSessionRevoked, kafkamsg.AuthSessionRevokedMessage{
 		SessionID: 0, // 0 indicates all sessions
@@ -66,14 +99,12 @@ func (s *AuthService) RevokeAllSessions(ctx context.Context, accountID int64, us
 	return nil
 }
 
-// CreateAccountAndActivationToken creates an Account (if not already present) and sends an activation email.
-
-func (s *AuthService) ListSessions(ctx context.Context, userID int64) ([]model.ActiveSession, error) {
+func (s *SessionService) ListSessions(ctx context.Context, userID int64) ([]model.ActiveSession, error) {
 	return s.sessionRepo.ListByUser(userID)
 }
 
 // RevokeSession revokes a specific session and all its linked refresh tokens.
-func (s *AuthService) RevokeSession(ctx context.Context, sessionID int64, callerUserID int64) error {
+func (s *SessionService) RevokeSession(ctx context.Context, sessionID int64, callerUserID int64) error {
 	session, err := s.sessionRepo.GetByID(sessionID)
 	if err != nil {
 		return fmt.Errorf("RevokeSession: lookup session %d: %v: %w", sessionID, err, ErrSessionNotFound)
@@ -95,7 +126,7 @@ func (s *AuthService) RevokeSession(ctx context.Context, sessionID int64, caller
 		return fmt.Errorf("failed to revoke session: %w", err)
 	}
 	// Hard-revoke its access token(s) at the gateway immediately.
-	s.blacklistSession(ctx, sessionID)
+	blacklistSession(ctx, s.cache, s.jwtService.AccessExpiry(), sessionID)
 
 	_ = s.producer.Publish(ctx, kafkamsg.TopicAuthSessionRevoked, kafkamsg.AuthSessionRevokedMessage{
 		SessionID: sessionID,
@@ -106,7 +137,7 @@ func (s *AuthService) RevokeSession(ctx context.Context, sessionID int64, caller
 }
 
 // RevokeAllSessionsExceptCurrent revokes all sessions except the one tied to the given refresh token.
-func (s *AuthService) RevokeAllSessionsExceptCurrent(ctx context.Context, userID int64, currentRefreshToken string) error {
+func (s *SessionService) RevokeAllSessionsExceptCurrent(ctx context.Context, userID int64, currentRefreshToken string) error {
 	rt, err := s.tokenRepo.GetRefreshToken(currentRefreshToken)
 	if err != nil {
 		return fmt.Errorf("RevokeAllSessionsExceptCurrent: current token lookup: %v: %w", err, ErrSessionNotFound)
@@ -137,7 +168,7 @@ func (s *AuthService) RevokeAllSessionsExceptCurrent(ctx context.Context, userID
 			continue
 		}
 		_ = s.tokenRepo.RevokeAllTokensForSession(sess.ID)
-		s.blacklistSession(ctx, sess.ID) // hard-revoke each session's access tokens
+		blacklistSession(ctx, s.cache, s.jwtService.AccessExpiry(), sess.ID) // hard-revoke each session's access tokens
 		_ = s.producer.Publish(ctx, kafkamsg.TopicAuthSessionRevoked, kafkamsg.AuthSessionRevokedMessage{
 			SessionID: sess.ID,
 			UserID:    userID,
@@ -160,7 +191,7 @@ type LoginHistoryEntry struct {
 }
 
 // GetLoginHistory returns recent login attempts for a user's email.
-func (s *AuthService) GetLoginHistory(ctx context.Context, email string, limit int) ([]LoginHistoryEntry, error) {
+func (s *SessionService) GetLoginHistory(ctx context.Context, email string, limit int) ([]LoginHistoryEntry, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}

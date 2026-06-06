@@ -10,12 +10,51 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/exbanka/auth-service/internal/cache"
 	"github.com/exbanka/auth-service/internal/model"
+	"github.com/exbanka/auth-service/internal/repository"
 	"github.com/exbanka/contract/authredis"
 	userpb "github.com/exbanka/contract/userpb"
 )
 
-func (s *AuthService) ValidateToken(tokenString string) (*Claims, error) {
+// TokenService owns the access/refresh token lifecycle: minting, local-denylist
+// validation, and refresh (browser + mobile). Independently constructable and
+// testable; the revocation primitives it relies on are package functions so it
+// needs no reference to the session or account services.
+type TokenService struct {
+	tokenRepo        *repository.TokenRepository
+	sessionRepo      *repository.SessionRepository
+	accountRepo      *repository.AccountRepository
+	userClient       userpb.UserServiceClient
+	jwtService       *JWTService
+	cache            *cache.RedisCache
+	refreshExp       time.Duration
+	mobileRefreshExp time.Duration
+}
+
+// NewTokenService wires the token-lifecycle dependencies.
+func NewTokenService(
+	tokenRepo *repository.TokenRepository,
+	sessionRepo *repository.SessionRepository,
+	accountRepo *repository.AccountRepository,
+	userClient userpb.UserServiceClient,
+	jwtService *JWTService,
+	c *cache.RedisCache,
+	refreshExp, mobileRefreshExp time.Duration,
+) *TokenService {
+	return &TokenService{
+		tokenRepo:        tokenRepo,
+		sessionRepo:      sessionRepo,
+		accountRepo:      accountRepo,
+		userClient:       userClient,
+		jwtService:       jwtService,
+		cache:            c,
+		refreshExp:       refreshExp,
+		mobileRefreshExp: mobileRefreshExp,
+	}
+}
+
+func (s *TokenService) ValidateToken(tokenString string) (*Claims, error) {
 	cacheKey := "token:" + hashToken(tokenString)
 
 	// Try cache first
@@ -29,7 +68,7 @@ func (s *AuthService) ValidateToken(tokenString string) (*Claims, error) {
 					return nil, fmt.Errorf("access token revoked: %w", ErrTokenRevoked)
 				}
 			}
-			if revoked, _ := s.checkRevokedByEpoch(&cached); revoked {
+			if revoked, _ := checkRevokedByEpoch(s.cache, &cached); revoked {
 				return nil, fmt.Errorf("access token revoked: %w", ErrTokenRevoked)
 			}
 			return &cached, nil
@@ -49,7 +88,7 @@ func (s *AuthService) ValidateToken(tokenString string) (*Claims, error) {
 		}
 	}
 
-	if revoked, _ := s.checkRevokedByEpoch(claims); revoked {
+	if revoked, _ := checkRevokedByEpoch(s.cache, claims); revoked {
 		return nil, fmt.Errorf("access token revoked: %w", ErrTokenRevoked)
 	}
 
@@ -66,7 +105,7 @@ func (s *AuthService) ValidateToken(tokenString string) (*Claims, error) {
 
 // SigningKeys returns the public JWKS (current + rotation-overlap keys) so the
 // GetSigningKeys RPC can hand them to the gateway for local ES256 verification.
-func (s *AuthService) SigningKeys() ([]PublicKeyInfo, error) {
+func (s *TokenService) SigningKeys() ([]PublicKeyInfo, error) {
 	return s.jwtService.Keys().JWKS()
 }
 
@@ -79,12 +118,15 @@ func sessionBlacklistKey(sid string) string { return authredis.SessionBlacklistK
 // gateway sees the key on its next local verify and returns 401 unauthorized
 // (the client logs out). TTL = access-token lifetime: after that no token with
 // this sid could still be valid, so the key self-cleans. No-op without Redis.
-func (s *AuthService) blacklistSession(ctx context.Context, sessionID int64) {
-	if s.cache == nil || sessionID == 0 {
+//
+// A package function (not a method) so the session and account services can
+// share it without depending on each other or on TokenService.
+func blacklistSession(ctx context.Context, c *cache.RedisCache, accessExp time.Duration, sessionID int64) {
+	if c == nil || sessionID == 0 {
 		return
 	}
 	key := sessionBlacklistKey(strconv.FormatInt(sessionID, 10))
-	if err := s.cache.Set(ctx, key, "revoked", s.jwtService.AccessExpiry()); err != nil {
+	if err := c.Set(ctx, key, "revoked", accessExp); err != nil {
 		log.Printf("warn: failed to blacklist session %d: %v", sessionID, err)
 	}
 }
@@ -93,11 +135,11 @@ func (s *AuthService) blacklistSession(ctx context.Context, sessionID int64) {
 // user currently holds is rejected (used for revoke-all and account-disable,
 // where there is no single session to target). Refresh tokens are revoked
 // separately by the caller, so the net effect is a full logout.
-func (s *AuthService) hardRevokeUser(ctx context.Context, userID int64) {
-	if s.cache == nil || userID == 0 {
+func hardRevokeUser(ctx context.Context, c *cache.RedisCache, accessExp time.Duration, userID int64) {
+	if c == nil || userID == 0 {
 		return
 	}
-	if err := s.cache.SetUserRevokedAt(ctx, userID, time.Now().Unix(), s.jwtService.AccessExpiry()); err != nil {
+	if err := c.SetUserRevokedAt(ctx, userID, time.Now().Unix(), accessExp); err != nil {
 		log.Printf("warn: failed to set revocation epoch for user %d: %v", userID, err)
 	}
 }
@@ -111,18 +153,18 @@ func hashToken(token string) string {
 // than the per-user revocation epoch in Redis. Redis errors are swallowed
 // (fail-open), matching the existing posture of the JTI blacklist lookup.
 // Returns (false, nil) when no epoch is set or the claim has no IssuedAt.
-func (s *AuthService) checkRevokedByEpoch(claims *Claims) (bool, error) {
-	if claims == nil || claims.IssuedAt == nil || s.cache == nil {
+func checkRevokedByEpoch(c *cache.RedisCache, claims *Claims) (bool, error) {
+	if claims == nil || claims.IssuedAt == nil || c == nil {
 		return false, nil
 	}
-	revokedAt, err := s.cache.GetUserRevokedAt(context.Background(), claims.PrincipalID)
+	revokedAt, err := c.GetUserRevokedAt(context.Background(), claims.PrincipalID)
 	if err != nil || revokedAt == 0 {
 		return false, err
 	}
 	return claims.IssuedAt.Unix() < revokedAt, nil
 }
 
-func (s *AuthService) RefreshToken(ctx context.Context, refreshTokenStr, ipAddress, userAgent string) (string, string, error) {
+func (s *TokenService) RefreshToken(ctx context.Context, refreshTokenStr, ipAddress, userAgent string) (string, string, error) {
 	rt, err := s.tokenRepo.GetRefreshToken(refreshTokenStr)
 	if err != nil {
 		return "", "", fmt.Errorf("refresh token lookup: %w", ErrInvalidToken)
@@ -217,7 +259,7 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshTokenStr, ipAddre
 }
 
 // ValidateRefreshToken returns the refresh token record if valid.
-func (s *AuthService) ValidateRefreshToken(token string) (*model.RefreshToken, error) {
+func (s *TokenService) ValidateRefreshToken(token string) (*model.RefreshToken, error) {
 	rt, err := s.tokenRepo.GetRefreshToken(token)
 	if err != nil {
 		return nil, errors.New("invalid refresh token")
@@ -240,7 +282,7 @@ type MobileDeviceLookup interface {
 
 // RefreshTokenForMobile validates the refresh token, verifies the device is active and matches,
 // revokes the old token, and issues a new mobile token pair.
-func (s *AuthService) RefreshTokenForMobile(ctx context.Context, oldRefreshToken, deviceID string, mobileSvc MobileDeviceLookup) (string, string, error) {
+func (s *TokenService) RefreshTokenForMobile(ctx context.Context, oldRefreshToken, deviceID string, mobileSvc MobileDeviceLookup) (string, string, error) {
 	rt, err := s.tokenRepo.GetRefreshToken(oldRefreshToken)
 	if err != nil {
 		return "", "", fmt.Errorf("RefreshTokenForMobile: lookup token: %v: %w", err, ErrInvalidToken)

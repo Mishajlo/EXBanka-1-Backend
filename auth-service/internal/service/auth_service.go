@@ -25,21 +25,31 @@ type eventProducer interface {
 	Publish(ctx context.Context, topic string, msg any) error
 }
 
+// AuthService is the composition root. It embeds the three DI-separable
+// concern services (so the gRPC handler can depend on one type whose method set
+// is their union) and owns Login + 2FA — the cross-concern orchestration that
+// coordinates the account, session, and token repos directly.
+//
+// Each concern service (TokenService / SessionService / AccountService) is
+// independently constructable and unit-testable in isolation; this struct just
+// wires them together for the handler.
 type AuthService struct {
-	tokenRepo        *repository.TokenRepository
-	sessionRepo      *repository.SessionRepository
+	*TokenService
+	*SessionService
+	*AccountService
+
+	// Login + 2FA orchestration deps (held directly so the embedded services'
+	// like-named fields are never ambiguous for these methods).
 	loginAttemptRepo *repository.LoginAttemptRepository
-	totpRepo         *repository.TOTPRepository
-	totpSvc          *TOTPService
-	jwtService       *JWTService
 	accountRepo      *repository.AccountRepository
+	sessionRepo      *repository.SessionRepository
+	tokenRepo        *repository.TokenRepository
+	jwtService       *JWTService
 	userClient       userpb.UserServiceClient
 	producer         eventProducer
-	cache            *cache.RedisCache
 	refreshExp       time.Duration
-	mobileRefreshExp time.Duration
-	frontendBaseURL  string
-	pepper           string
+	totpRepo         *repository.TOTPRepository
+	totpSvc          *TOTPService
 }
 
 func NewAuthService(
@@ -58,22 +68,9 @@ func NewAuthService(
 	frontendBaseURL string,
 	pepper string,
 ) *AuthService {
-	return &AuthService{
-		tokenRepo:        tokenRepo,
-		sessionRepo:      sessionRepo,
-		loginAttemptRepo: loginAttemptRepo,
-		totpRepo:         totpRepo,
-		totpSvc:          totpSvc,
-		jwtService:       jwtService,
-		accountRepo:      accountRepo,
-		userClient:       userClient,
-		producer:         producer,
-		cache:            cache,
-		refreshExp:       refreshExp,
-		mobileRefreshExp: mobileRefreshExp,
-		frontendBaseURL:  frontendBaseURL,
-		pepper:           pepper,
-	}
+	return assembleAuthService(tokenRepo, sessionRepo, loginAttemptRepo, totpRepo, totpSvc,
+		jwtService, accountRepo, userClient, producer, cache,
+		refreshExp, mobileRefreshExp, frontendBaseURL, pepper)
 }
 
 // newAuthServiceForTest constructs an AuthService with a pluggable event
@@ -94,21 +91,48 @@ func newAuthServiceForTest(
 	frontendBaseURL string,
 	pepper string,
 ) *AuthService {
+	return assembleAuthService(tokenRepo, sessionRepo, loginAttemptRepo, totpRepo, totpSvc,
+		jwtService, accountRepo, userClient, producer, cache,
+		refreshExp, mobileRefreshExp, frontendBaseURL, pepper)
+}
+
+// assembleAuthService builds the three concern services (sharing the injected
+// dependencies) and composes them into an AuthService. The session service is
+// built before the account service because account password-reset depends on it
+// (SessionRevoker). Used by both the production and test constructors.
+func assembleAuthService(
+	tokenRepo *repository.TokenRepository,
+	sessionRepo *repository.SessionRepository,
+	loginAttemptRepo *repository.LoginAttemptRepository,
+	totpRepo *repository.TOTPRepository,
+	totpSvc *TOTPService,
+	jwtService *JWTService,
+	accountRepo *repository.AccountRepository,
+	userClient userpb.UserServiceClient,
+	producer eventProducer,
+	c *cache.RedisCache,
+	refreshExp time.Duration,
+	mobileRefreshExp time.Duration,
+	frontendBaseURL string,
+	pepper string,
+) *AuthService {
+	tokenSvc := NewTokenService(tokenRepo, sessionRepo, accountRepo, userClient, jwtService, c, refreshExp, mobileRefreshExp)
+	sessionSvc := NewSessionService(sessionRepo, tokenRepo, loginAttemptRepo, producer, c, jwtService)
+	accountSvc := NewAccountService(accountRepo, tokenRepo, userClient, producer, c, jwtService, sessionSvc, frontendBaseURL, pepper)
 	return &AuthService{
-		tokenRepo:        tokenRepo,
-		sessionRepo:      sessionRepo,
+		TokenService:     tokenSvc,
+		SessionService:   sessionSvc,
+		AccountService:   accountSvc,
 		loginAttemptRepo: loginAttemptRepo,
-		totpRepo:         totpRepo,
-		totpSvc:          totpSvc,
-		jwtService:       jwtService,
 		accountRepo:      accountRepo,
+		sessionRepo:      sessionRepo,
+		tokenRepo:        tokenRepo,
+		jwtService:       jwtService,
 		userClient:       userClient,
 		producer:         producer,
-		cache:            cache,
 		refreshExp:       refreshExp,
-		mobileRefreshExp: mobileRefreshExp,
-		frontendBaseURL:  frontendBaseURL,
-		pepper:           pepper,
+		totpRepo:         totpRepo,
+		totpSvc:          totpSvc,
 	}
 }
 

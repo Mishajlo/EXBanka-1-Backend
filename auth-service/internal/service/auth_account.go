@@ -10,13 +10,63 @@ import (
 	"strings"
 	"time"
 
+	"github.com/exbanka/auth-service/internal/cache"
 	"github.com/exbanka/auth-service/internal/model"
+	"github.com/exbanka/auth-service/internal/repository"
 	kafkamsg "github.com/exbanka/contract/kafka"
 	userpb "github.com/exbanka/contract/userpb"
 	"golang.org/x/crypto/bcrypt"
 )
 
-func (s *AuthService) CreateAccountAndActivationToken(ctx context.Context, principalID int64, email, firstName, principalType string) error {
+// SessionRevoker is the slice of SessionService that AccountService depends on:
+// a password reset revokes all of the account's sessions. Declared as an
+// interface so AccountService is decoupled from the concrete SessionService
+// (injected by the composition root).
+type SessionRevoker interface {
+	RevokeAllSessions(ctx context.Context, accountID, userID int64, reason string) error
+}
+
+// AccountService owns account lifecycle: creation/activation, password reset,
+// and account status. Independently constructable; it depends on a
+// SessionRevoker (to drop sessions on password reset) and the package-level
+// revocation helper (to drop access tokens on disable).
+type AccountService struct {
+	accountRepo     *repository.AccountRepository
+	tokenRepo       *repository.TokenRepository
+	userClient      userpb.UserServiceClient
+	producer        eventProducer
+	cache           *cache.RedisCache
+	jwtService      *JWTService
+	sessions        SessionRevoker
+	frontendBaseURL string
+	pepper          string
+}
+
+// NewAccountService wires the account-lifecycle dependencies.
+func NewAccountService(
+	accountRepo *repository.AccountRepository,
+	tokenRepo *repository.TokenRepository,
+	userClient userpb.UserServiceClient,
+	producer eventProducer,
+	c *cache.RedisCache,
+	jwtService *JWTService,
+	sessions SessionRevoker,
+	frontendBaseURL, pepper string,
+) *AccountService {
+	return &AccountService{
+		accountRepo:     accountRepo,
+		tokenRepo:       tokenRepo,
+		userClient:      userClient,
+		producer:        producer,
+		cache:           c,
+		jwtService:      jwtService,
+		sessions:        sessions,
+		frontendBaseURL: frontendBaseURL,
+		pepper:          pepper,
+	}
+}
+
+func (s *AccountService) CreateAccountAndActivationToken(ctx context.Context, principalID int64, email, firstName, principalType string) error {
 	// Idempotent: check if account already exists
 	account, err := s.accountRepo.GetByEmail(email)
 	if err != nil {
@@ -59,7 +109,7 @@ func (s *AuthService) CreateAccountAndActivationToken(ctx context.Context, princ
 
 // ResendActivationEmail re-sends the activation email for a pending account.
 // If the account is already active, it returns nil (no-op).
-func (s *AuthService) ResendActivationEmail(ctx context.Context, email string) error {
+func (s *AccountService) ResendActivationEmail(ctx context.Context, email string) error {
 	account, err := s.accountRepo.GetByEmail(email)
 	if err != nil {
 		return nil // don't reveal if email exists
@@ -102,7 +152,7 @@ func (s *AuthService) ResendActivationEmail(ctx context.Context, email string) e
 	})
 }
 
-func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) error {
+func (s *AccountService) RequestPasswordReset(ctx context.Context, email string) error {
 	AuthPasswordResetTotal.Inc()
 
 	account, err := s.accountRepo.GetByEmail(email)
@@ -131,7 +181,7 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) er
 	})
 }
 
-func (s *AuthService) ResetPassword(ctx context.Context, tokenStr, newPassword, confirmPassword string) error {
+func (s *AccountService) ResetPassword(ctx context.Context, tokenStr, newPassword, confirmPassword string) error {
 	if newPassword != confirmPassword {
 		return fmt.Errorf("ResetPassword: password and confirmation do not match: %w", ErrPasswordsDoNotMatch)
 	}
@@ -163,7 +213,7 @@ func (s *AuthService) ResetPassword(ctx context.Context, tokenStr, newPassword, 
 	// Resolve the user ID from the account
 	var acct model.Account
 	if acctErr := s.accountRepo.GetByID(prt.AccountID, &acct); acctErr == nil {
-		if err := s.RevokeAllSessions(ctx, prt.AccountID, acct.PrincipalID, "password_reset"); err != nil {
+		if err := s.sessions.RevokeAllSessions(ctx, prt.AccountID, acct.PrincipalID, "password_reset"); err != nil {
 			log.Printf("warn: failed to revoke all sessions after password reset: %v", err)
 		}
 		// General notification (no email)
@@ -183,7 +233,7 @@ func (s *AuthService) ResetPassword(ctx context.Context, tokenStr, newPassword, 
 	return nil
 }
 
-func (s *AuthService) ActivateAccount(ctx context.Context, tokenStr, password, confirmPassword string) error {
+func (s *AccountService) ActivateAccount(ctx context.Context, tokenStr, password, confirmPassword string) error {
 	if password != confirmPassword {
 		return fmt.Errorf("ActivateAccount: passwords do not match: %w", ErrPasswordsDoNotMatch)
 	}
@@ -238,7 +288,7 @@ func (s *AuthService) ActivateAccount(ctx context.Context, tokenStr, password, c
 }
 
 // SetAccountStatus enables or disables an account identified by principalType + principalID.
-func (s *AuthService) SetAccountStatus(ctx context.Context, principalType string, principalID int64, active bool) error {
+func (s *AccountService) SetAccountStatus(ctx context.Context, principalType string, principalID int64, active bool) error {
 	status := model.AccountStatusActive
 	if !active {
 		status = model.AccountStatusDisabled
@@ -255,7 +305,7 @@ func (s *AuthService) SetAccountStatus(ctx context.Context, principalType string
 		}
 		// Closes the 2.2 gap: a disabled account's still-valid access token kept
 		// working ≤15 min. Bump the epoch so it is rejected immediately.
-		s.hardRevokeUser(ctx, principalID)
+		hardRevokeUser(ctx, s.cache, s.jwtService.AccessExpiry(), principalID)
 	}
 
 	if err := s.accountRepo.SetStatusByPrincipal(principalType, principalID, status); err != nil {
@@ -273,7 +323,7 @@ func (s *AuthService) SetAccountStatus(ctx context.Context, principalType string
 }
 
 // GetAccountStatus returns the status string and active bool for a given principal.
-func (s *AuthService) GetAccountStatus(ctx context.Context, principalType string, principalID int64) (string, bool, error) {
+func (s *AccountService) GetAccountStatus(ctx context.Context, principalType string, principalID int64) (string, bool, error) {
 	acct, err := s.accountRepo.GetByPrincipal(principalType, principalID)
 	if err != nil {
 		return "", false, fmt.Errorf("get account status: %w", ErrAccountNotFound)
@@ -282,7 +332,7 @@ func (s *AuthService) GetAccountStatus(ctx context.Context, principalType string
 }
 
 // GetAccountStatusBatch returns a map of principalID → Account for batch status lookups.
-func (s *AuthService) GetAccountStatusBatch(ctx context.Context, principalType string, principalIDs []int64) (map[int64]model.Account, error) {
+func (s *AccountService) GetAccountStatusBatch(ctx context.Context, principalType string, principalIDs []int64) (map[int64]model.Account, error) {
 	ptrs, err := s.accountRepo.GetByPrincipals(principalType, principalIDs)
 	if err != nil {
 		return nil, err

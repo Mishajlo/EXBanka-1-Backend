@@ -1008,9 +1008,8 @@ func TestGetLoginHistory_DefaultLimit(t *testing.T) {
 // ----------------------------------------------------------------------------
 
 func TestBlacklistSession_NoCache_IsNoOp(t *testing.T) {
-	f := newAuthFlowFixture(t)
-	// Cache is nil; must not panic.
-	assert.NotPanics(t, func() { f.svc.blacklistSession(context.Background(), 123) })
+	// Nil cache; must not panic (blacklistSession is now a package function).
+	assert.NotPanics(t, func() { blacklistSession(context.Background(), nil, time.Minute, 123) })
 }
 
 // ----------------------------------------------------------------------------

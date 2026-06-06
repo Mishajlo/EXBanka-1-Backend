@@ -305,12 +305,13 @@ are the eviction/blacklist gaps in 2.2. TTLs (= token lifetime) are right.
 - [x] **2.4 error standardization — NOW, with Phase B** (sentinel→code mapping, no handler
   overwrites, strip email/PII, anti-enumeration).
 - [x] **2.5 cleanups — ALL:** DRY `detectDeviceType` (done); **split `auth_service.go`**
-  (done) — delivered as a **file split** by concern (`auth_service.go` core+Login+2FA,
-  `auth_token.go`, `auth_session.go`, `auth_account.go`), methods kept on `*AuthService`.
-  Chose file-organization over three injectable types because `Login` orchestrates all
-  three concerns and the revocation helpers are shared — separate types would force
-  cross-service calls + field duplication (worse code). 1091-line god-file → 4 focused
-  files (~326/337/183/343). Zero behavior/wiring/test change.
+  (done). First a file split, then (per your follow-up) promoted to **DI-separable types**:
+  `TokenService` / `SessionService` / `AccountService` are each independently constructable
+  (`NewTokenService`/`NewSessionService`/`NewAccountService`) and unit-testable in isolation.
+  The one cross-concern edge (`AccountService.ResetPassword` → revoke sessions) is a typed
+  `SessionRevoker` dependency (injected). Shared revocation primitives are package functions
+  (no inter-service coupling). `AuthService` is now a thin composition root that embeds the
+  three (so the handler's method-set is unchanged) and owns `Login`+2FA orchestration.
 
 **Implementation order (each a logical commit):** (1) remove CreateAccount, (2) DRY
 detectDeviceType, (3) split auth_service.go [no behavior change, tests green], (4) error
