@@ -658,8 +658,13 @@ from service/" rule). Larger refactor; decision.
   (GetAccount, UpdateAccountName/Limits/Status, ListAccountsByClient, GetLedgerEntries, CreateAccount).
   Getting the trusted-service-vs-user split wrong breaks transfers/OTC/loans or opens an auth hole in
   the money service. Full plan: docs/superpowers/plans/2026-06-06-own1-account-ownership-in-service.md
-  (D0 foundation → D1 enforce additively → D2 remove gateway checks). Deferred to a dedicated effort
-  (security-critical money path; another agent is concurrently editing shared contract/).
+  (D0 foundation → D1 enforce additively → D2 remove gateway checks). User chose to implement.
+  IN PROGRESS: **D0 DONE** (43a2197b, 2.15.7 — contract/identity + gateway stamps caller identity);
+  **D1 account-service DONE** (fc233996, 2.16.0 — enforces ownership on direct reads/list, additive,
+  tested). Remaining (turnkey steps in the plan): card/credit/transaction (same pattern),
+  stock + service→service identity forwarding for the indirect OTC/order account-binding, then D2
+  gateway-check removal per service. The expanded scope ("ownership in ALL services + remove gateway
+  checks") is a repo-wide platform refactor — proceeding service by service, additive-first.
 - [~] **E** — DROPPED. `GetCompany`/`UpdateCompany` are the read/update half of a **live**
   Company resource (the gateway has a `/companies` group, `CreateCompany` is used, accounts carry
   `company_id`) — "no caller today" ≠ "dead"; the FE creates companies + company accounts and will

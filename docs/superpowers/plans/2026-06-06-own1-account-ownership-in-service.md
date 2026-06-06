@@ -85,7 +85,55 @@ loans or opens a hole in the money path.**
 - integration: a client cannot read/modify another client's account end-to-end;
   transfers/OTC/loans (Tier-B) still succeed.
 
-## Why not now (2026-06-06)
+## PROGRESS (2026-06-06)
+
+- **D0 DONE** (commit 43a2197b, 2.15.7): `contract/identity` package
+  (Caller{PrincipalType,PrincipalID,OnBehalfClientID}, Inject/FromIncoming,
+  `OwnsResource`); gateway stamps identity on every authed route via
+  `setPrincipalContext` + on-behalf via `ResolveIdentity`. Additive, no behavior change.
+- **D1 account-service DONE** (commit fc233996, 2.16.0): enforces ownership on the
+  DIRECT user-facing reads/list — GetAccount, GetAccountByNumber, GetLedgerEntries
+  (→ 404), ListAccountsByClient (→ 403). Service/employee allowed; on-behalf bound.
+  Gateway checks kept (defense-in-depth; no gap). Full tests.
+
+### Turnkey remaining steps (same pattern per service)
+Pattern: in each service's gRPC handler, `caller := identity.FromIncoming(ctx)`;
+on user-facing read/list/mutation, `if !caller.OwnsResource(int64(ownerID)) {
+return <svc>.ErrNotFound }` (404, no leak) — or a Forbidden sentinel for
+list-by-client. Add a `Caller.OwnsResource`-based test set. Keep gateway checks
+until the matching service enforces, then remove (see inventory in the agent
+report / validation.go call-sites).
+
+- **card-service**: Card has OwnerID/OwnerType. Gate GetCard, ListCardsByClient,
+  card_request GetCardRequest + ListCardRequestsByClient (by ClientID), and the
+  pin/block mutations (SetCardPin/VerifyCardPin/TemporaryBlockCard/BlockCard —
+  fetch the card, gate on OwnerID). Gateway sites to later remove:
+  card_handler.go:239,897 (inline) + loadCardAndEnforceOwnership (438/481/525) +
+  GetCardRequest 750.
+- **credit-service**: Loan/LoanRequest have ClientID. Gate GetLoan, GetLoanRequest,
+  ListLoansByClient, ListLoanRequests(by client). Gateway: credit_handler.go
+  enforceClientSelf (284/369/448) + enforceOwnership (820/875).
+- **transaction-service**: Payment/Transfer have ClientID. Gate GetPayment,
+  GetTransfer, ListPaymentsByClient, ListTransfersByClient. Gateway:
+  transaction_handler.go enforceClientSelf (219/466/884/983) + enforceOwnership
+  (681/708/761/788).
+- **stock-service**: portfolio/watchlist ownership already gated at the gateway
+  via enforcePortfolioAccess; the order/OTC ACCOUNT-binding checks
+  (stock_order_handler.go 413/425, portfolio_handler 478/528, otc_* handlers) go
+  gateway→stock-service→account-service. account-service can only enforce these if
+  the caller identity is FORWARDED on the service→service hop — see below. Until
+  then, KEEP those gateway checks.
+- **D-forward (prerequisite for indirect cases)**: add a shared gRPC CLIENT
+  interceptor (contract/shared/grpcmw or contract/identity) that copies the
+  INCOMING caller identity onto OUTGOING calls, wired into stock-/transaction-/
+  credit-service's account-service clients. Only then can the OTC/order
+  account-binding gateway checks be removed.
+- **D2 (per service, after enforcement proven)**: delete the now-redundant gateway
+  ownership checks for that service's DIRECT resources; rewrite CLAUDE.md's
+  "Resource Ownership Verification Requirement". Never remove a gateway check
+  whose service-side equivalent isn't yet live.
+
+## Why not all-at-once (2026-06-06)
 This is a cross-service platform change (new metadata contract touched by ALL
 services + the gateway), it is security-critical in the money service, and the
 Tier-A/Tier-B split must be exactly right. Another agent is concurrently editing
