@@ -651,8 +651,19 @@ from service/" rule). Larger refactor; decision.
   Limit checked at reserve against committed spending (settle accrues it). Bank accounts exempt.
 - [ ] **D** — **OWN-1 now for account-service**: caller identity over gRPC metadata + ownership
   checks across the RPCs; remove the gateway's account ownership checks. Final phase, own plan.
-- [ ] **E** — remove unused RPCs GetCompany/UpdateCompany/GetCurrency (`make proto`).
-- [ ] **F** — move Kafka publish for CreateAccount/UpdateAccountName/Limits/Status into service.
+- [~] **E** — DROPPED. `GetCompany`/`UpdateCompany` are the read/update half of a **live**
+  Company resource (the gateway has a `/companies` group, `CreateCompany` is used, accounts carry
+  `company_id`) — "no caller today" ≠ "dead"; the FE creates companies + company accounts and will
+  need to view/edit them. `GetCurrency` is the only genuinely-redundant one, but removing any of
+  these cascades to ~33 stub methods across 5 services' test suites (every service mocks the full
+  account-client interface), so it's not worth it for one redundant RPC. Reverted; kept all 3.
+  LESSON: verify a feature is actually retired before deleting its "unused" RPCs.
+- [x] **F** — DONE (2.15.6): all Kafka publishing for CreateAccount/UpdateAccountName/Limits/Status
+  + CreateBankAccount moved into the service layer (new `account_events.go`: `eventPublisher`/
+  `clientLookup` interfaces, `WithEvents`/`WithClientLookup` builders, `emit*` helpers). Handlers
+  (account + bank) are now thin; their `producer`/`clientClient` fields removed; main.go wires the
+  producer + client into the service. The account-created email lookup uses a bounded (5s) context.
+  Handler-test publish assertions migrated to service-level tests (`account_events_test.go`).
 
 Phase order (each its own commit + VERSION bump): A → B → C → E → F → D.
 

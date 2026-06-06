@@ -31,6 +31,8 @@ type AccountService struct {
 	bankRepo      *repository.BankAccountRepository
 	db            *gorm.DB
 	cache         *cache.RedisCache
+	events        eventPublisher // optional; nil → no event publishing
+	clients       clientLookup   // optional; nil → skip account-created email
 }
 
 func NewAccountService(repo *repository.AccountRepository, db *gorm.DB, redisCache *cache.RedisCache, changelogRepo ...*repository.ChangelogRepository) *AccountService {
@@ -99,6 +101,7 @@ func (s *AccountService) CreateAccount(account *model.Account) error {
 		return err
 	}
 	AccountsCreatedTotal.Inc()
+	s.emitAccountCreated(account)
 	return nil
 }
 
@@ -198,6 +201,7 @@ func (s *AccountService) UpdateAccountName(id, clientID uint64, newName string, 
 	if s.changelogRepo != nil && len(entries) > 0 {
 		_ = s.changelogRepo.CreateBatch(entries)
 	}
+	s.emitAccountNameUpdated(account, newName)
 	return nil
 }
 
@@ -251,6 +255,16 @@ func (s *AccountService) UpdateAccountLimits(id uint64, dailyLimit, monthlyLimit
 	if s.changelogRepo != nil && len(entries) > 0 {
 		_ = s.changelogRepo.CreateBatch(entries)
 	}
+
+	// Reflect the new values on the in-memory account for the event (unchanged
+	// limits keep their loaded value), then publish.
+	if v, ok := updates["daily_limit"].(decimal.Decimal); ok {
+		account.DailyLimit = v
+	}
+	if v, ok := updates["monthly_limit"].(decimal.Decimal); ok {
+		account.MonthlyLimit = v
+	}
+	s.emitAccountLimitsUpdated(account, account.DailyLimit.StringFixed(2), account.MonthlyLimit.StringFixed(2))
 	return nil
 }
 
@@ -280,6 +294,7 @@ func (s *AccountService) UpdateAccountStatus(id uint64, newStatus string, change
 		entry := changelog.NewStatusChangeEntry("account", int64(id), changedBy, oldStatus, newStatus, "")
 		_ = s.changelogRepo.Create(entry)
 	}
+	s.emitAccountStatusChanged(account, newStatus)
 	return nil
 }
 
@@ -358,6 +373,9 @@ func (s *AccountService) CreateBankAccount(currencyCode, accountKind, accountNam
 		return nil, err
 	}
 	AccountsCreatedTotal.Inc()
+	// Bank accounts have no human owner, so emitAccountCreated publishes only the
+	// AccountCreated domain event (the notification/email are skipped internally).
+	s.emitAccountCreated(account)
 	return account, nil
 }
 
