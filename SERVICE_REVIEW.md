@@ -304,8 +304,13 @@ are the eviction/blacklist gaps in 2.2. TTLs (= token lifetime) are right.
 - [x] **2.3 remove `CreateAccount`** RPC + handler + service method (0 callers).
 - [x] **2.4 error standardization — NOW, with Phase B** (sentinel→code mapping, no handler
   overwrites, strip email/PII, anti-enumeration).
-- [x] **2.5 cleanups — ALL:** DRY `detectDeviceType`; **split `auth_service.go`** →
-  TokenService / SessionService / AccountService.
+- [x] **2.5 cleanups — ALL:** DRY `detectDeviceType` (done); **split `auth_service.go`**
+  (done) — delivered as a **file split** by concern (`auth_service.go` core+Login+2FA,
+  `auth_token.go`, `auth_session.go`, `auth_account.go`), methods kept on `*AuthService`.
+  Chose file-organization over three injectable types because `Login` orchestrates all
+  three concerns and the revocation helpers are shared — separate types would force
+  cross-service calls + field duplication (worse code). 1091-line god-file → 4 focused
+  files (~326/337/183/343). Zero behavior/wiring/test change.
 
 **Implementation order (each a logical commit):** (1) remove CreateAccount, (2) DRY
 detectDeviceType, (3) split auth_service.go [no behavior change, tests green], (4) error
