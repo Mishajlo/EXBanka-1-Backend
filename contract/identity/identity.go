@@ -55,6 +55,26 @@ func (c Caller) IsService() bool {
 	return c.PrincipalType == PrincipalService || c.PrincipalType == ""
 }
 
+// OwnsResource is the OWN-1 data-ownership primitive every owning service uses to
+// decide whether this caller may access a resource owned by ownerID:
+//   - client            → only their own resources (PrincipalID == ownerID)
+//   - employee on-behalf → only the bound client's resources (OnBehalfClientID == ownerID)
+//   - employee (admin)   → allowed (route-level RBAC is enforced by the gateway)
+//   - service            → allowed (trusted internal call)
+//
+// Callers map a false result to their own NotFound sentinel (existence must not
+// leak across tenants — 404, not 403).
+func (c Caller) OwnsResource(ownerID int64) bool {
+	switch {
+	case c.IsClient():
+		return c.PrincipalID == ownerID
+	case c.IsEmployee() && c.OnBehalfClientID != 0:
+		return c.OnBehalfClientID == ownerID
+	default:
+		return true
+	}
+}
+
 // Inject returns a context that carries the caller identity as OUTGOING gRPC
 // metadata. Safe to call alongside changelog.SetChangedBy — metadata merges.
 // A zero/service Caller injects nothing (keeps the wire clean).

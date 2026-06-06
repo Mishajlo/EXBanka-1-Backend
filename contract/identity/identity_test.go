@@ -33,6 +33,27 @@ func TestInjectFromIncoming_EmployeeOnBehalf(t *testing.T) {
 	}
 }
 
+func TestOwnsResource(t *testing.T) {
+	cases := []struct {
+		name    string
+		caller  Caller
+		ownerID int64
+		want    bool
+	}{
+		{"client owns own", Caller{PrincipalType: PrincipalClient, PrincipalID: 5}, 5, true},
+		{"client not others", Caller{PrincipalType: PrincipalClient, PrincipalID: 5}, 6, false},
+		{"employee admin any", Caller{PrincipalType: PrincipalEmployee, PrincipalID: 9}, 6, true},
+		{"employee on-behalf match", Caller{PrincipalType: PrincipalEmployee, PrincipalID: 9, OnBehalfClientID: 6}, 6, true},
+		{"employee on-behalf mismatch", Caller{PrincipalType: PrincipalEmployee, PrincipalID: 9, OnBehalfClientID: 6}, 7, false},
+		{"service any", Caller{}, 6, true},
+	}
+	for _, tc := range cases {
+		if got := tc.caller.OwnsResource(tc.ownerID); got != tc.want {
+			t.Errorf("%s: OwnsResource(%d)=%v want %v", tc.name, tc.ownerID, got, tc.want)
+		}
+	}
+}
+
 func TestAbsentIdentity_IsService(t *testing.T) {
 	// No metadata at all → trusted service call (backward-compat for money RPCs).
 	got := FromIncoming(context.Background())
