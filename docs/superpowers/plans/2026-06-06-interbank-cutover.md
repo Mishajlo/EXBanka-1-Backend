@@ -42,15 +42,34 @@ stock-service that now depend on it.
   → interbank-service. (No cycle: interbank does **not** hard-depend on stock —
   its stock client is lazy/best-effort.)
 
-### Step 3 — remove the SI-TX engine from transaction-service — ⏳ PENDING
-- Remove the 14 ported engine files; drop `peer_banks` /
-  `peer_idempotence_records` / `outbound_peer_txs` from AutoMigrate; stop
-  registering `PeerTxService` / `PeerBankAdminService` + the outbound-replay /
-  reconcile crons. transaction-service → pure local payments/transfers/fees.
-- Update `docker-compose.yml` (drop transaction-service's peer envs) + the spec.
+### Step 3 — remove the SI-TX engine from transaction-service — ✅ DONE (this commit)
+- Deleted 14 engine production files + 22 engine test files: the whole
+  `internal/sitx/`, `peer_tx_grpc_handler.go`, `peer_bank_admin_grpc_handler.go`,
+  the 3 peer repos, the 3 peer models, `outbound_replay_cron.go`,
+  `peer_tx_reconciler.go`, and `handler/export_test.go` (peer-only accessor).
+- `cmd/main.go`: removed the entire SI-TX wiring block (peer repos, executor,
+  HTTP client, peerLookup, peerTxHandler, both crons), the stock-service conn +
+  optionRecorder (engine-only), the `PeerBankAdminService`/`PeerTxService`
+  registration, the 3 peer models from AutoMigrate, and the now-unused
+  `sitx`/`stockpb`/`net/http`/`strconv` imports.
+- `config.go`: removed all dead SI-TX config (StockGRPCAddr, the Inter-bank 2PC
+  tuning block, InterbankReceiveSyncDeadline, OwnBankCode, per-peer
+  endpoint/HMAC fields) + the now-unused `getDuration`/`getInt`/`time`/`strconv`;
+  trimmed `config_test.go` accordingly. `go mod tidy` moved `uuid` + `crypto`
+  (engine-only deps) to indirect.
+- `docker-compose.yml`: dropped transaction-service's `STOCK_GRPC_ADDR`,
+  `OWN_BANK_CODE`, `SITX_RECEIVE_SYNC_DEADLINE`, and the peer-egress
+  `extra_hosts`. transaction-service → pure local payments/transfers/fees.
+- Spec updated: §25 gRPC services + DB tables now attributed to interbank-service.
 - **Deploy ordering (hard cutover, no rollback flag):** interbank-service must be
-  up with `peer_banks` migrated/registered before transaction-service drops the
-  engine — otherwise inbound peer auth + outbound signing have no registry.
+  up with `peer_banks` migrated/registered (interbank_db) before transaction-service
+  is redeployed without the engine — otherwise inbound peer auth + outbound
+  signing have no registry. Orphaned `peer_banks`/`peer_idempotence_records`/
+  `outbound_peer_txs` rows remain in transaction_db (no longer migrated/read) and
+  may be dropped manually post-migration.
+
+**Cutover COMPLETE.** All three steps landed on Development; interbank-service is
+the sole home of the cross-bank SI-TX engine + registry + egress.
 
 ---
 

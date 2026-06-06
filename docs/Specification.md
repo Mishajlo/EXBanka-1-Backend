@@ -2844,7 +2844,7 @@ Hosted on api-gateway, gated by `middleware.PeerAuth` (hybrid auth — see "Auth
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/v3/interbank` | Receives `Message<Type>` envelope. Decodes by `messageType` and dispatches to `transaction-service.PeerTxService` via gRPC. |
+| POST | `/api/v3/interbank` | Receives `Message<Type>` envelope. Decodes by `messageType` and dispatches to `interbank-service.PeerTxService` via gRPC (2026-06-07 cutover; was transaction-service). |
 
 ### Admin REST routes (api-gateway, employee JWT)
 
@@ -2866,15 +2866,24 @@ API tokens are bcrypt-hashed before persist. The plaintext `api_token` is also s
 
 `middleware.PeerAuth` accepts either:
 
-1. **`X-Api-Key: <token>`** — looked up via `transaction-service.PeerBankAdminService.ResolvePeerByAPIToken` (internal gRPC; constant-time compare against `peer_banks.api_token_plaintext` for active peers only).
+1. **`X-Api-Key: <token>`** — looked up via `interbank-service.PeerBankAdminService.ResolvePeerByAPIToken` (internal gRPC; constant-time compare against `peer_banks.api_token_plaintext` for active peers only). *(2026-06-07 cutover: the gateway dials interbank-service for this; was transaction-service.)*
 2. **`X-Bank-Code: <code>` + `X-Bank-Signature: <hex SHA-256>` + `X-Timestamp: <RFC3339>` + `X-Nonce: <single-use>`** — looked up via `ResolvePeerByBankCode`. Signature verified against `peer_banks.hmac_inbound_key`; timestamp window ±5 min; nonce dedup window 10 min in Redis (`cache.PeerNonceStore`).
 
 On success the middleware sets `peer_bank_code` and `peer_routing_number` on the gin context. On any failure: 401 with empty body (no info leak; constant-time compare).
 
 ### gRPC services
 
-- **`PeerTxService`** (transaction-service): 4 RPCs — `HandleNewTx`, `HandleCommitTx`, `HandleRollbackTx`, `InitiateOutboundTx`, plus `InitiateOutboundTxWithPostings` (Phase 4).
-- **`PeerBankAdminService`** (transaction-service): 5 admin RPCs (List/Get/Create/Update/Delete) + 2 internal-resolve RPCs (`ResolvePeerByAPIToken`, `ResolvePeerByBankCode`) returning `PeerBankFull` (with HMAC keys + plaintext token, never exposed via REST).
+> **2026-06-07 cutover:** the entire SI-TX engine + peer_banks registry below was
+> **moved out of transaction-service into `interbank-service`** (gRPC `:50062`,
+> its own `interbank_db`). The proto definitions, RPCs, wire protocol, and
+> execution logic are byte-for-byte unchanged — only the hosting service changed.
+> transaction-service no longer registers `PeerTxService`/`PeerBankAdminService`
+> and is now pure local payments/transfers/fees. interbank-service additionally
+> hosts `PeerEgressService` (the single outbound HTTP egress to peers),
+> `PeerUserService` (peer `/user` resolver), and a `PeerOTCService` forwarder→stock.
+
+- **`PeerTxService`** (interbank-service): 4 RPCs — `HandleNewTx`, `HandleCommitTx`, `HandleRollbackTx`, `InitiateOutboundTx`, plus `InitiateOutboundTxWithPostings` (Phase 4) and `GetTxStatus`.
+- **`PeerBankAdminService`** (interbank-service): 5 admin RPCs (List/Get/Create/Update/Delete) + 2 internal-resolve RPCs (`ResolvePeerByAPIToken`, `ResolvePeerByBankCode`) returning `PeerBankFull` (with HMAC keys + plaintext token, never exposed via REST).
 
 ### TX execution
 
@@ -2899,6 +2908,11 @@ On success the middleware sets `peer_bank_code` and `peer_routing_number` on the
 
 ### Database tables
 
+> **2026-06-07 cutover:** `peer_banks`, `peer_idempotence_records`, and
+> `outbound_peer_txs` now live in **`interbank_db`** (interbank-service's own
+> Postgres, host port `5443`), not `transaction_db`. `outgoing_reservations`
+> stays in `account_db` (account-service owns it). The schemas are unchanged.
+
 - **`peer_banks`** — runtime-editable registry. Columns: `id`, `bank_code`, `routing_number`, `base_url`, `api_token_bcrypt`, `api_token_plaintext`, `hmac_inbound_key`, `hmac_outbound_key`, `active`, timestamps.
 - **`peer_idempotence_records`** — receiver-side replay cache. Composite-unique on `(peer_bank_code, locally_generated_key)`. Stores `response_payload_json`, `debits_json` (DEBIT-leg list: per-posting `accountNumber`/`amount`/`idempotencyTag`, used to settle outgoing holds at COMMIT_TX and release them at ROLLBACK_TX), and `options_json` (option-leg list for COMMIT_TX materialisation).
 - **`outgoing_reservations`** (account-service DB) — debit-side reserve-then-settle table for cross-bank money DEBIT legs (mirror of `incoming_reservations`). Columns: `id`, `account_number`, `amount`, `currency`, `reservation_key` (unique; SI-TX per-posting tag `"<peer>:<idem>:<i>"` or simple-transfer `"peer-out:<idem>"`), `status` (`pending` → `settled` | `released`), `created_at` (indexed for the timeout sweep), `updated_at`, `version`. `ReserveOutgoing` dips AvailableBalance; `SettleOutgoing` debits Balance + ledger entry; `ReleaseOutgoing` restores AvailableBalance. `OutgoingReservationTimeoutCron` releases pending rows older than `OUTGOING_RESERVATION_TTL`.
@@ -2907,7 +2921,7 @@ On success the middleware sets `peer_bank_code` and `peer_routing_number` on the
 
 ### Retry / replay policy
 
-`OutboundReplayCron` (transaction-service): 30s tick. Scans `outbound_peer_txs` rows in `pending` whose `last_attempt_at` is older than 60s (or NULL — never attempted). 4-attempt cap; rows that exceed get marked `failed`. Receiver returns the same cached vote on every retry due to idempotence-key dedup.
+`OutboundReplayCron` (interbank-service; 2026-06-07 cutover — was transaction-service): 30s tick. Scans `outbound_peer_txs` rows in `pending` whose `last_attempt_at` is older than 60s (or NULL — never attempted). 4-attempt cap; rows that exceed get marked `failed`. Receiver returns the same cached vote on every retry due to idempotence-key dedup.
 
 **Release on terminal failure (cron + inline parity):** because the sender's funds are HELD (reserve-then-settle) at initiation, every terminal non-committed outcome must lift that hold (no money ever left). On a peer **NO vote** *and* on **max-attempts-exceeded**, the cron first reverses the local effects (via `PeerTxGRPCHandler.ReverseOutboundLocal`, wired as the cron's `LocalReversalFunc`) before marking the row `rolled_back` / `failed`. The reversal dispatches by `tx_kind`: `payment` (the simple-transfer kind `InitiateOutboundTx` actually sets) releases the single local outgoing hold with key `peer-out-release-<idem>`; OTC kinds (`transfer`/`otc-accept`/`otc-exercise` from `InitiateOutboundTxWithPostings`) delegate to `PostingExecutor.ReverseLocal`, which releases the local CREDIT reservation (`sitx-localrelease-<own>:<idem>`) and releases each local DEBIT hold (`sitx-localrelease-out-<own>:<idem>:<i>`). On peer **YES**, the commit path (inline, or the cron's `LocalCommitFunc` = `PeerTxGRPCHandler.CommitOutboundLocal`) settles the holds (`peer-out-settle-<idem>` / `sitx-localsettle-out-<own>:<idem>:<i>`). All keys match the inline dispatch path so the two never double-act. If a reversal/settle itself fails, the row is kept `pending` (via `MarkAttempt`) so a later tick retries it — money is never stranded in a terminal row.
 
@@ -3094,9 +3108,9 @@ LOCAL `buy_initiated` offers/bids are **fully supported and unaffected** — the
   - Discovery + negotiation lifecycle: `GetPublicStocks`, `GetPublicOptionOffers`, `CreateNegotiation`, `UpdateNegotiation`, `GetNegotiation`, `DeleteNegotiation`, `AcceptNegotiation`.
   - Seller-share reservation hooks (NEW_TX/rollback): `ReserveSellerSharesForNewTx`, `ReleaseSellerSharesForNewTx`.
   - Money-leg validation / contract lookup: `ValidatePeerOptionMoneyLeg`, `LookupPeerOptionContract` — the latter's response gained `seller_account_number` (field 9, 2.9.0): the seller's nominated 18-digit account number stored on the seller-side contract, used by `posting_executor.reserveExercisePseudoLeg` to credit the strike to the bound account (empty ⇒ first-active fallback).
-  - SI-TX option leg materialisation (called by transaction-service): `RecordOptionContract` — dispatches on transaction SHAPE (OPTION-as-asset → accept; OPTION-as-pseudo-account with STOCK legs → exercise), creates a remote `option_contracts` row (routing_number != own) + locks seller's holdings on accept, transitions to `exercised` + runs role-specific stock ops on exercise. Idempotent on `(crossbank_tx_id, posting_index)`.
-  - SI-TX validation hooks (called by transaction-service): `CheckSellerCanDeliver` — NEW_TX-time pre-check that the seller has enough unreserved shares, drives `INSUFFICIENT_ASSET` `NoVote` so money never moves on a contract the seller can't fulfil.
-  - Exercise dispatch (called by gateway): `InitiateOptionExercise` — composes the 4-posting exercise TX from a contract row and dispatches via `transaction-service.PeerTxService.InitiateOutboundTxWithPostings`.
+  - SI-TX option leg materialisation (called by interbank-service; 2026-06-07 cutover — was transaction-service): `RecordOptionContract` — dispatches on transaction SHAPE (OPTION-as-asset → accept; OPTION-as-pseudo-account with STOCK legs → exercise), creates a remote `option_contracts` row (routing_number != own) + locks seller's holdings on accept, transitions to `exercised` + runs role-specific stock ops on exercise. Idempotent on `(crossbank_tx_id, posting_index)`.
+  - SI-TX validation hooks (called by interbank-service; 2026-06-07 cutover — was transaction-service): `CheckSellerCanDeliver` — NEW_TX-time pre-check that the seller has enough unreserved shares, drives `INSUFFICIENT_ASSET` `NoVote` so money never moves on a contract the seller can't fulfil.
+  - Exercise dispatch (called by gateway): `InitiateOptionExercise` — composes the 4-posting exercise TX from a contract row and dispatches via `interbank-service.PeerTxService.InitiateOutboundTxWithPostings` (2026-06-07 cutover — was transaction-service).
 
 ### Unified OTC offer discovery
 
@@ -3110,7 +3124,7 @@ The unified OTC offer view (local + cross-bank) is served by `stock-service`'s `
 1. Look up the negotiation as a REMOTE row in the unified `otc_negotiations` table (via `OTCNegotiationRepository.GetRemoteNegByRoutingAndNative`).
 2. Resolve the seller's **nominated** account number (2.9.0): `SellerAccountResolver` (wired via `PeerOTCGRPCHandler.WithSellerAccountResolver`) reads the local parent listing (`RemoteParentRouting == ownRouting` → `RemoteParentNativeID` is the local `OTCOffer` id) and resolves its bound `InitiatorAccountID` to its 18-digit account number when the listing is `sell_initiated`, the account is active, and its currency matches the premium currency. Mirrors the local accept saga's `sellerAccountID = offer.InitiatorAccountID`. When no nomination is resolvable (free-form negotiation with no local parent, unbound account, wrong currency) it returns `""` → the seller-credit leg falls back to the participant id (the documented first-active resolution in `posting_executor.resolveAccountForPosting`).
 3. Compose 4 postings (OPTION-as-asset form) — buyer DEBIT premium / seller CREDIT premium / seller DEBIT `OptionDescription` / buyer CREDIT `OptionDescription`. **Both premium money legs carry a pinned `ACCOUNT{num}` when the party nominated one** — the buyer's `BuyerAccountNumber` (set at bid time) on the DEBIT, and the seller's resolved nominated account (step 2) on the CREDIT — spec §2.6 (`TxAccount` may target a specific account). The two OPTION legs ALWAYS carry the participant id (it becomes the contract's `buyer_id`/`seller_id`, used for exercise + `/me/otc/contracts` listing). The `OptionDescription` encodes the option asset; its `negotiationId` field provides the cross-bank reference. On the DEBIT (seller-side) `RecordOptionContract` at COMMIT, the seller's bank persists the resolved nominated account number on the remote contract (`option_contracts.remote_seller_account_number`) so the later exercise strike credit honors it too.
-4. Call `transaction-service.PeerTxService.InitiateOutboundTxWithPostings` with `tx_kind="otc-accept"`.
+4. Call `interbank-service.PeerTxService.InitiateOutboundTxWithPostings` with `tx_kind="otc-accept"` (2026-06-07 cutover — was transaction-service).
 5. The SI-TX flow:
    - `posting_executor.Reserve` (NEW_TX) on each bank validates option-asset postings via `CheckSellerCanDeliver` for DEBIT direction → vote NO with `INSUFFICIENT_ASSET` if seller short.
    - On YES, `cacheAndReturn` persists `peer_idempotence_records.options_json` listing the option items.
