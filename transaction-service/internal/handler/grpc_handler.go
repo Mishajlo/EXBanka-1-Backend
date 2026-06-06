@@ -205,6 +205,10 @@ func (h *TransactionGRPCHandler) GetPayment(ctx context.Context, req *pb.GetPaym
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "payment not found: %v", err)
 	}
+	// OWN-1: a client may only read its own payment (others → 404, no leak).
+	if !ownsTxn(ctx, payment.ClientID) {
+		return nil, service.ErrPaymentNotFound
+	}
 	return paymentToProto(payment), nil
 }
 
@@ -336,6 +340,10 @@ func (h *TransactionGRPCHandler) GetTransfer(ctx context.Context, req *pb.GetTra
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "transfer not found: %v", err)
 	}
+	// OWN-1: a client may only read its own transfer (others → 404, no leak).
+	if !ownsTxn(ctx, transfer.ClientID) {
+		return nil, service.ErrTransferNotFound
+	}
 	return transferToProto(transfer), nil
 }
 
@@ -349,6 +357,10 @@ func (h *TransactionGRPCHandler) GetTransferStatus(ctx context.Context, req *pb.
 	transfer, err := h.transferSvc.GetTransfer(req.GetId())
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "transfer not found: %v", err)
+	}
+	// OWN-1: a client may only read its own transfer's status (others → 404).
+	if !ownsTxn(ctx, transfer.ClientID) {
+		return nil, service.ErrTransferNotFound
 	}
 	clientStatus := mapTransferStatusToClient(transfer.Status)
 	var lastChanged int64
