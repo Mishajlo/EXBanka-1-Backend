@@ -665,6 +665,15 @@ from service/" rule). Larger refactor; decision.
   stock + service→service identity forwarding for the indirect OTC/order account-binding, then D2
   gateway-check removal per service. The expanded scope ("ownership in ALL services + remove gateway
   checks") is a repo-wide platform refactor — proceeding service by service, additive-first.
+  **SERVICE-SIDE ENFORCEMENT NOW DONE in all applicable services**: account (fc233996), card
+  (1fbd71b7), credit (8a77cada), transaction (fe29933f) — each enforces owner-matching on its
+  user-facing reads/lists via identity.OwnsResource (additive; gateway still checks; NO gap; full
+  tests). stock-service is EXEMPT (its OTC/order check validates a caller-SUPPLIED account at the
+  boundary — counterparty/bank accounts are record-sourced, so it must stay at the gateway; portfolio
+  access is permission-entangled). transaction list-by-client stays at the gateway (keyed by
+  gateway-resolved account numbers). ONLY remaining: **D2 gateway-check removal** — pure de-dup (the
+  services already enforce, so removing the redundant gateway ownership checks is not a security
+  change; leaving them is strictly safer). VERSION 2.16.3.
 - [~] **E** — DROPPED. `GetCompany`/`UpdateCompany` are the read/update half of a **live**
   Company resource (the gateway has a `/companies` group, `CreateCompany` is used, accounts carry
   `company_id`) — "no caller today" ≠ "dead"; the FE creates companies + company accounts and will

@@ -3,6 +3,17 @@
 Date: 2026-06-06
 Status: PLANNED (not started) — needs a focused, dedicated effort; see "Why not now".
 
+## Scope boundary (IMPORTANT)
+
+This refactor moves ONLY resource-OWNERSHIP ("does this user own *this*
+account/card/offer/loan", i.e. owner_id == principal_id) into the owning
+services. RBAC PERMISSION checks STAY at the gateway and are never touched:
+`RequirePermission`, `RequireClientToken`, `AuthMiddleware`/`AnyAuthMiddleware`,
+rate-limiting. The service-side `Caller.OwnsResource` deliberately returns true
+for employees precisely because the gateway already permission-gated them. D2
+removes ONLY the gateway ownership helpers (enforceOwnership / checkAccountOwnership
+/ enforceClientSelf / inline owner_id compares) — never any RequirePermission.
+
 ## Goal
 
 Per the SERVICE_REVIEW cross-cutting decision (reverses the CLAUDE.md "Resource
@@ -96,7 +107,33 @@ loans or opens a hole in the money path.**
   (→ 404), ListAccountsByClient (→ 403). Service/employee allowed; on-behalf bound.
   Gateway checks kept (defense-in-depth; no gap). Full tests.
 
-### Turnkey remaining steps (same pattern per service)
+### Service-side enforcement DONE (all applicable services)
+- account (fc233996), card (1fbd71b7), credit (8a77cada), transaction (fe29933f):
+  each enforces owner-matching on its user-facing reads/lists (+ card pin/block,
+  credit installments) via identity.FromIncoming + OwnsResource. Additive — the
+  gateway checks still run too (defense-in-depth, NO gap). Every service has
+  OWN-1 unit tests (client-foreign→404, own→OK, employee→OK, service→OK, list→403).
+- **stock-service: EXEMPT (keep gateway checks).** Its OTC/order check validates a
+  CALLER-SUPPLIED account before a multi-party trade; the counterparty/bank
+  accounts are read from the persisted record, NOT caller-supplied. Forwarding
+  identity so account-service enforced on every GetAccount would REJECT the
+  legitimate counterparty/bank reads and break OTC/trades. That validation
+  belongs at the gateway boundary (validating caller INPUT), and
+  enforcePortfolioAccess is permission-entangled (RBAC stays at the gateway).
+- **transaction list-by-client: keep gateway.** Keyed by gateway-RESOLVED account
+  numbers (the account→client mapping lives in account-service), not a client_id,
+  so transaction-service can't re-verify it without an account lookup.
+
+### D2 — gateway-check removal (the only remaining step; pure DE-DUP, not a
+security change — the services already enforce, so removing the now-redundant
+gateway ownership checks does NOT open a gap; leaving them is strictly safer).
+Remove ONLY ownership helpers (never RequirePermission): for account/card/credit
+the direct /me/:id inline owner checks + enforceClientSelf on list-by-client; for
+transaction the enforceOwnership on GetPayment/GetTransfer/status (NOT the
+list-by-account-numbers). Update the gateway tests that assert the gateway's own
+403/404 (now the service's job). KEEP all stock checks + transaction list-by-client.
+
+### (historical) Turnkey remaining steps (same pattern per service)
 Pattern: in each service's gRPC handler, `caller := identity.FromIncoming(ctx)`;
 on user-facing read/list/mutation, `if !caller.OwnsResource(int64(ownerID)) {
 return <svc>.ErrNotFound }` (404, no leak) — or a Forbidden sentinel for
