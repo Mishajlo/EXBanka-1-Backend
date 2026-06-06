@@ -406,7 +406,68 @@ the JWT (gateway-side), no change needed.
   employees holding that role.
 
 ## 4. notification-service
-_pending_
+
+**Responsibilities:** Email (SMTP) + push delivery, mobile inbox, general
+notifications, notification templates, admin/business audit-log storage. **Mostly
+Kafka-consumer-driven** (6 consumers) + a gRPC read/manage surface. Own Postgres;
+no Redis.
+
+### Findings (Claude's opinion)
+
+#### 🔴 4.1 — Kafka consumers lose messages on error + aren't idempotent (the big one)
+All 6 consumers use `reader.ReadMessage(ctx)`, which **auto-commits the offset**
+(segmentio/kafka-go with a GroupID), then log-and-`continue` on a processing error
+(`email_consumer.go:64,71`, same shape in the others). Consequences:
+- **Silent message loss (worse problem):** a transient DB or SMTP failure → error →
+  `continue` → the failed message's offset is already committed → the event is **lost
+  forever** (no retry, no DLQ). This drops **audit logs** (compliance), **notifications**,
+  and **emails** whenever Postgres/SMTP briefly hiccups. Effectively at-most-once-on-failure.
+- **Duplicates on crash:** a crash between processing and the next commit redelivers →
+  double-process. Only `watchlist_alert_consumer` is idempotent (`CreateWithIdempotency`
+  + `ON CONFLICT` on `idempotency_key`, `general_notification_repository.go:31`). The
+  other 5 (email, verification, admin_audit, business_audit, general_notification) do
+  plain `Create`/`Send` → duplicate emails, duplicate inbox rows, **duplicate audit rows**.
+- ✅ ctx cancellation + EnsureTopics are handled correctly in all consumers.
+- **Proper fix = both, together:** switch to manual commit (`FetchMessage` +
+  `CommitMessages` only after success; on error don't commit → redelivery) for at-least-
+  once, AND add idempotency (so redelivery is safe). Doing only one is incomplete (manual
+  commit alone → duplicates; idempotency alone → still lost-on-error). Idempotency needs a
+  dedup key: most messages lack one (`SendEmailMessage`, audit messages) → contract +
+  producer change; `GeneralNotificationMessage` has `RefType`/`RefID` (usable);
+  `watchlist` already carries `IdempotencyKey`. **Cross-cutting** (6 consumers + message
+  contracts + every producer that emits these) → sizable. Scope TBD with you.
+
+#### 🟡 4.2 — Unused gRPC RPCs: `SendEmail` + `GetDeliveryStatus` → remove
+`SendEmail` (gRPC) has **0 callers** — every email goes via the Kafka `notification.send-email`
+topic → `email_consumer`. The gRPC RPC is dead. `GetDeliveryStatus` is an unimplemented
+stub (returns `ErrDeliveryStatusUnimplemented`, `grpc_handler.go:104`) with 0 callers.
+Remove both (proto + handler). All other 12 RPCs are used by the gateway.
+
+#### ✅ 4.3 — gRPC error handling is standardized
+`service/errors.go` has typed `svcerr` sentinels with proper codes; the comment notes
+handlers passthrough. Good — same pattern as auth/user. (Spot-check handler passthrough
+during any impl.) The consumer error handling (4.1) is the gap, not the gRPC surface.
+
+#### ✅ 4.4 — Layering is clean; no caching needed
+consumers / sender (SMTP) / push (noop provider, pluggable) / repos / services / template
+registry are well-separated. No Redis — correct for this service. inbox_cleanup cron exists.
+
+#### Cross-cutting notes
+- **OWN-1 (ownership):** `ListNotifications`/`GetUnreadCount`/`MarkRead` are `/me`-scoped by
+  `user_id` from the JWT (gateway-derived) — no resource-ownership check to relocate.
+- **Phase D (claims-invalidation):** notification-service is not involved (no token data).
+
+### Decision / agreed action items (DECIDED 2026-06-06)
+- [x] **4.1 — FULL fix.** Manual-commit + retry/DLQ + idempotency across ALL 6 consumers,
+  including adding idempotency-key fields to the message contracts and stamping them at
+  every producer. Safe phase order (each green + committable):
+  (A) remove dead RPCs → (B) contract: add `IdempotencyKey` to the affected messages +
+  idempotent repo writes (`ON CONFLICT`) → (C) producers stamp the key (auto-gen UUID in
+  each service's producer Publish path — "set at every producer" without touching every
+  call site) → (D) consumers: `FetchMessage`+`CommitMessages` (commit only after success),
+  bounded retry, dead-letter on exhaustion, idempotent processing keyed on `IdempotencyKey`.
+- [x] **4.2 — remove `SendEmail` (gRPC) + `GetDeliveryStatus`** (0 callers; email is Kafka-only;
+  GetDeliveryStatus is an unimplemented stub). Done in phase A.
 
 ## 5. client-service
 _pending_

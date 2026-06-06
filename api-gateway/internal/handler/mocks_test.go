@@ -922,12 +922,6 @@ type stubNotificationClient struct {
 	listBusinessAuditFn func(*notificationpb.ListBusinessAuditLogsRequest) (*notificationpb.ListBusinessAuditLogsResponse, error)
 }
 
-func (s *stubNotificationClient) SendEmail(_ context.Context, _ *notificationpb.SendEmailRequest, _ ...grpc.CallOption) (*notificationpb.SendEmailResponse, error) {
-	return &notificationpb.SendEmailResponse{}, nil
-}
-func (s *stubNotificationClient) GetDeliveryStatus(_ context.Context, _ *notificationpb.GetDeliveryStatusRequest, _ ...grpc.CallOption) (*notificationpb.GetDeliveryStatusResponse, error) {
-	return &notificationpb.GetDeliveryStatusResponse{}, nil
-}
 func (s *stubNotificationClient) GetPendingMobileItems(_ context.Context, in *notificationpb.GetPendingMobileRequest, _ ...grpc.CallOption) (*notificationpb.PendingMobileResponse, error) {
 	if s.pendingFn != nil {
 		return s.pendingFn(in)
