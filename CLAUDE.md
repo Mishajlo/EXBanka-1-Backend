@@ -417,8 +417,9 @@ The Notification Service has a PostgreSQL database (`notification_db`, port 5441
 - gRPC addresses must use Docker service names, not `localhost` (e.g., `client-service:50054`, not `localhost:50054`).
 - If a service depends on another service at runtime (DB, Kafka, Redis, or another gRPC service), add a `depends_on:` entry for it.
 - When adding a new service, add its DB, its service definition, the volume, and wire it into the `api-gateway` environment and `depends_on`.
-- `docker-compose.yml` must be committed alongside service changes.
-- **`docker-compose-remote.yml` must be kept in sync with `docker-compose.yml`.** When adding/changing environment variables, ports, volumes, or services in `docker-compose.yml`, apply the same changes to `docker-compose-remote.yml` (which uses pre-built images from ghcr.io instead of building from source). The only difference between the two files is the `build:` vs `image:` directives — environment, ports, volumes, depends_on, and healthchecks must match.
+- `docker-compose.yml` must be committed alongside service changes. (There is a
+  single compose file — `docker-compose.yml`. The old `docker-compose-remote.yml`
+  was removed and is not coming back; do not recreate it or try to keep it in sync.)
 
 ## API Versioning Compatibility Requirement
 
