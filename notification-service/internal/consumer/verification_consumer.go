@@ -34,9 +34,10 @@ type VerificationConsumer struct {
 	inboxRepo inboxItemCreator
 	templates templateRenderer
 	dlq       DeadLetterWriter
+	dedup     Deduper
 }
 
-func NewVerificationConsumer(brokers string, emailSender *sender.EmailSender, producer *kafkaprod.Producer, inboxRepo *repository.MobileInboxRepository, templateSvc *svc.TemplateService, dlq DeadLetterWriter) *VerificationConsumer {
+func NewVerificationConsumer(brokers string, emailSender *sender.EmailSender, producer *kafkaprod.Producer, inboxRepo *repository.MobileInboxRepository, templateSvc *svc.TemplateService, dlq DeadLetterWriter, dedup Deduper) *VerificationConsumer {
 	reader := kafkago.NewReader(kafkago.ReaderConfig{
 		Brokers:  strings.Split(brokers, ","),
 		Topic:    kafkamsg.TopicVerificationChallengeCreated,
@@ -51,6 +52,7 @@ func NewVerificationConsumer(brokers string, emailSender *sender.EmailSender, pr
 		inboxRepo: inboxRepo,
 		templates: templateSvc,
 		dlq:       dlq,
+		dedup:     dedup,
 	}
 }
 
@@ -60,7 +62,7 @@ func newVerificationConsumerForTest(s emailDispatcher, p genericPublisher, repo 
 }
 
 func (c *VerificationConsumer) Start(ctx context.Context) {
-	go runConsumer(ctx, "verification", c.reader, c.dlq, c.handleMessage)
+	go runConsumer(ctx, "verification", c.reader, c.dlq, c.dedup, c.handleMessage)
 }
 
 func (c *VerificationConsumer) handleMessage(ctx context.Context, data []byte) error {

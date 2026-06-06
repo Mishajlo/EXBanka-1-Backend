@@ -24,9 +24,10 @@ type GeneralNotificationConsumer struct {
 	notifRepo generalNotificationCreator
 	templates templateRenderer
 	dlq       DeadLetterWriter
+	dedup     Deduper
 }
 
-func NewGeneralNotificationConsumer(brokers string, notifRepo *repository.GeneralNotificationRepository, templateSvc *service.TemplateService, dlq DeadLetterWriter) *GeneralNotificationConsumer {
+func NewGeneralNotificationConsumer(brokers string, notifRepo *repository.GeneralNotificationRepository, templateSvc *service.TemplateService, dlq DeadLetterWriter, dedup Deduper) *GeneralNotificationConsumer {
 	reader := kafkago.NewReader(kafkago.ReaderConfig{
 		Brokers:  strings.Split(brokers, ","),
 		Topic:    kafkamsg.TopicGeneralNotification,
@@ -34,7 +35,7 @@ func NewGeneralNotificationConsumer(brokers string, notifRepo *repository.Genera
 		MinBytes: 1,
 		MaxBytes: 10e6,
 	})
-	return &GeneralNotificationConsumer{reader: reader, notifRepo: notifRepo, templates: templateSvc, dlq: dlq}
+	return &GeneralNotificationConsumer{reader: reader, notifRepo: notifRepo, templates: templateSvc, dlq: dlq, dedup: dedup}
 }
 
 // newGeneralNotificationConsumerForTest constructs a consumer without a Kafka reader.
@@ -43,7 +44,7 @@ func newGeneralNotificationConsumerForTest(repo generalNotificationCreator, r te
 }
 
 func (c *GeneralNotificationConsumer) Start(ctx context.Context) {
-	go runConsumer(ctx, "general_notification", c.reader, c.dlq, c.handleMessage)
+	go runConsumer(ctx, "general_notification", c.reader, c.dlq, c.dedup, c.handleMessage)
 }
 
 func (c *GeneralNotificationConsumer) handleMessage(_ context.Context, data []byte) error {

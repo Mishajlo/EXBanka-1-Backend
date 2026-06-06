@@ -488,7 +488,14 @@ registry are well-separated. No Redis — correct for this service. inbox_cleanu
   **Email caveat:** its `EmailSentMessage` confirmation semantics need care — only publish the
   final outcome (after retries/DLQ), and return the send error to trigger retry. Tests: each
   `handleMessage` now returns error.
-- **C — idempotency keys (cross-service producer sweep):** add `IdempotencyKey string` to
+- **C — idempotency: DONE** (b7f63c6 + this commit). Realized via a Kafka **header**, not
+  per-message struct fields: the shared producer (used by all 12 services) stamps an
+  `idempotency-key` header on every message — one place, no per-service edits, no contract-struct
+  churn. Consumer side: a generic dedup in `runConsumer` (check `processed_messages` before, mark
+  after success) keyed on the header — covers ALL 6 consumers uniformly and subsumes the original
+  separate phase D. watchlist keeps its extra business-key dedup. Net: at-least-once (Phase B) +
+  redelivery dedup (Phase C) = effectively exactly-once for the common case. **§4.1 FULL fix DONE.**
+- ~~**C — idempotency keys (cross-service producer sweep):** add `IdempotencyKey string` to~~
   `SendEmailMessage`, `GeneralNotificationMessage`, the admin/business audit messages, and the
   verification-challenge message (`contract/kafka/messages.go`); stamp a UUID in each service's
   producer `Publish*` path (auto-gen if empty — "set at every producer" without touching every

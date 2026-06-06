@@ -19,11 +19,12 @@ type AdminAuditConsumer struct {
 	reader *kafkago.Reader
 	db     *gorm.DB
 	dlq    DeadLetterWriter
+	dedup  Deduper
 }
 
 // NewAdminAuditConsumer constructs an AdminAuditConsumer and configures the
 // Kafka reader. The caller must call Start(ctx) to begin consuming.
-func NewAdminAuditConsumer(brokers string, db *gorm.DB, dlq DeadLetterWriter) *AdminAuditConsumer {
+func NewAdminAuditConsumer(brokers string, db *gorm.DB, dlq DeadLetterWriter, dedup Deduper) *AdminAuditConsumer {
 	reader := kafkago.NewReader(kafkago.ReaderConfig{
 		Brokers:  strings.Split(brokers, ","),
 		Topic:    kafkamsg.TopicAdminCronAction,
@@ -31,12 +32,12 @@ func NewAdminAuditConsumer(brokers string, db *gorm.DB, dlq DeadLetterWriter) *A
 		MinBytes: 1,
 		MaxBytes: 10e6,
 	})
-	return &AdminAuditConsumer{reader: reader, db: db, dlq: dlq}
+	return &AdminAuditConsumer{reader: reader, db: db, dlq: dlq, dedup: dedup}
 }
 
 // Start launches the consumer loop in a goroutine (manual-commit + retry + DLQ).
 func (c *AdminAuditConsumer) Start(ctx context.Context) {
-	go runConsumer(ctx, "admin_audit", c.reader, c.dlq, c.handleMessage)
+	go runConsumer(ctx, "admin_audit", c.reader, c.dlq, c.dedup, c.handleMessage)
 }
 
 func (c *AdminAuditConsumer) handleMessage(_ context.Context, data []byte) error {

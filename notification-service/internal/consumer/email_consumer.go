@@ -35,9 +35,10 @@ type EmailConsumer struct {
 	producer  emailSentPublisher
 	templates templateRenderer
 	dlq       DeadLetterWriter
+	dedup     Deduper
 }
 
-func NewEmailConsumer(brokers string, emailSender *sender.EmailSender, producer *kafkaprod.Producer, templateSvc *svc.TemplateService, dlq DeadLetterWriter) *EmailConsumer {
+func NewEmailConsumer(brokers string, emailSender *sender.EmailSender, producer *kafkaprod.Producer, templateSvc *svc.TemplateService, dlq DeadLetterWriter, dedup Deduper) *EmailConsumer {
 	reader := kafkago.NewReader(kafkago.ReaderConfig{
 		Brokers:  strings.Split(brokers, ","),
 		Topic:    kafkamsg.TopicSendEmail,
@@ -51,6 +52,7 @@ func NewEmailConsumer(brokers string, emailSender *sender.EmailSender, producer 
 		producer:  producer,
 		templates: templateSvc,
 		dlq:       dlq,
+		dedup:     dedup,
 	}
 }
 
@@ -61,7 +63,7 @@ func newEmailConsumerForTest(d emailDispatcher, p emailSentPublisher, r template
 }
 
 func (c *EmailConsumer) Start(ctx context.Context) {
-	go runConsumer(ctx, "email", c.reader, c.dlq, c.handleMessage)
+	go runConsumer(ctx, "email", c.reader, c.dlq, c.dedup, c.handleMessage)
 }
 
 // handleMessage returns an error ONLY for transient failures (SMTP send) so the

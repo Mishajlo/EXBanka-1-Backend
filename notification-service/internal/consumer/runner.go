@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/exbanka/contract/shared"
 	kafkago "github.com/segmentio/kafka-go"
 )
 
@@ -19,6 +20,15 @@ type MessageHandler func(ctx context.Context, value []byte) error
 // preserved rather than dropped. *kafka.Producer satisfies it.
 type DeadLetterWriter interface {
 	WriteDeadLetter(ctx context.Context, source string, value []byte, cause string) error
+}
+
+// Deduper provides consumer-side idempotency keyed on the per-message
+// idempotency-key header. Seen reports whether a key was already processed;
+// Mark records it after a successful handle. *repository.ProcessedMessageRepository
+// satisfies it. A nil Deduper disables dedup (e.g. in unit tests).
+type Deduper interface {
+	Seen(ctx context.Context, key string) (bool, error)
+	Mark(ctx context.Context, key string) error
 }
 
 const (
@@ -42,7 +52,7 @@ const (
 //   - ctx cancelled      → return (graceful shutdown).
 //
 // It blocks; callers run it in a goroutine.
-func runConsumer(ctx context.Context, name string, reader *kafkago.Reader, dlq DeadLetterWriter, handle MessageHandler) {
+func runConsumer(ctx context.Context, name string, reader *kafkago.Reader, dlq DeadLetterWriter, dedup Deduper, handle MessageHandler) {
 	log.Printf("%s consumer started", name)
 	for {
 		msg, err := reader.FetchMessage(ctx)
@@ -55,9 +65,31 @@ func runConsumer(ctx context.Context, name string, reader *kafkago.Reader, dlq D
 			continue
 		}
 
+		key := shared.IdempotencyKeyFromHeaders(msg.Headers)
+
+		// Skip a message we've already processed (at-least-once redelivery). On a
+		// Seen() error we fail OPEN and process anyway — risking a rare duplicate
+		// is safer than skipping (and losing) a message on a transient DB blip.
+		if dedup != nil && key != "" {
+			if seen, sErr := dedup.Seen(ctx, key); sErr == nil && seen {
+				log.Printf("%s consumer: dedup hit, skipping already-processed key %s", name, key)
+				if cErr := reader.CommitMessages(ctx, msg); cErr != nil && ctx.Err() == nil {
+					log.Printf("%s consumer: commit error: %v", name, cErr)
+				}
+				continue
+			}
+		}
+
 		procErr := processWithRetry(ctx, name, handle, msg.Value)
 		if ctx.Err() != nil {
 			return
+		}
+		// Record success so a later redelivery is deduped. Best-effort: a mark
+		// failure only risks reprocessing on redelivery (a duplicate), never loss.
+		if procErr == nil && dedup != nil && key != "" {
+			if mErr := dedup.Mark(ctx, key); mErr != nil {
+				log.Printf("%s consumer: dedup mark failed for key %s (may reprocess on redelivery): %v", name, key, mErr)
+			}
 		}
 		if procErr != nil {
 			if dlq == nil {

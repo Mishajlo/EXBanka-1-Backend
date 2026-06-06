@@ -32,6 +32,7 @@ type WatchlistAlertConsumer struct {
 	notifRepo watchlistNotifCreator
 	templates templateRenderer
 	dlq       DeadLetterWriter
+	dedup     Deduper
 }
 
 // NewWatchlistAlertConsumer creates a consumer backed by a real Kafka reader.
@@ -40,6 +41,7 @@ func NewWatchlistAlertConsumer(
 	notifRepo *repository.GeneralNotificationRepository,
 	templateSvc *service.TemplateService,
 	dlq DeadLetterWriter,
+	dedup Deduper,
 ) *WatchlistAlertConsumer {
 	reader := kafkago.NewReader(kafkago.ReaderConfig{
 		Brokers:  strings.Split(brokers, ","),
@@ -53,6 +55,7 @@ func NewWatchlistAlertConsumer(
 		notifRepo: &watchlistNotifCreatorAdapter{repo: notifRepo},
 		templates: templateSvc,
 		dlq:       dlq,
+		dedup:     dedup,
 	}
 }
 
@@ -63,7 +66,7 @@ func newWatchlistAlertConsumerForTest(repo watchlistNotifCreator, r templateRend
 }
 
 func (c *WatchlistAlertConsumer) Start(ctx context.Context) {
-	go runConsumer(ctx, "watchlist_alert", c.reader, c.dlq, c.handleMessage)
+	go runConsumer(ctx, "watchlist_alert", c.reader, c.dlq, c.dedup, c.handleMessage)
 }
 
 func (c *WatchlistAlertConsumer) handleMessage(_ context.Context, data []byte) error {

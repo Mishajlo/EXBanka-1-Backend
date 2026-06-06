@@ -20,11 +20,12 @@ type BusinessAuditConsumer struct {
 	reader *kafkago.Reader
 	db     *gorm.DB
 	dlq    DeadLetterWriter
+	dedup  Deduper
 }
 
 // NewBusinessAuditConsumer constructs a BusinessAuditConsumer and configures the
 // Kafka reader. The caller must call Start(ctx) to begin consuming.
-func NewBusinessAuditConsumer(brokers string, db *gorm.DB, dlq DeadLetterWriter) *BusinessAuditConsumer {
+func NewBusinessAuditConsumer(brokers string, db *gorm.DB, dlq DeadLetterWriter, dedup Deduper) *BusinessAuditConsumer {
 	reader := kafkago.NewReader(kafkago.ReaderConfig{
 		Brokers:  strings.Split(brokers, ","),
 		Topic:    kafkamsg.TopicBusinessAuditAction,
@@ -32,12 +33,12 @@ func NewBusinessAuditConsumer(brokers string, db *gorm.DB, dlq DeadLetterWriter)
 		MinBytes: 1,
 		MaxBytes: 10e6,
 	})
-	return &BusinessAuditConsumer{reader: reader, db: db, dlq: dlq}
+	return &BusinessAuditConsumer{reader: reader, db: db, dlq: dlq, dedup: dedup}
 }
 
 // Start launches the consumer loop in a goroutine (manual-commit + retry + DLQ).
 func (c *BusinessAuditConsumer) Start(ctx context.Context) {
-	go runConsumer(ctx, "business_audit", c.reader, c.dlq, c.handleMessage)
+	go runConsumer(ctx, "business_audit", c.reader, c.dlq, c.dedup, c.handleMessage)
 }
 
 func (c *BusinessAuditConsumer) handleMessage(_ context.Context, data []byte) error {
