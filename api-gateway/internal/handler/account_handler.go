@@ -211,9 +211,8 @@ func (h *AccountHandler) ListAccountsByClientPath(c *gin.Context) {
 		apiError(c, 400, ErrValidation, "invalid client id")
 		return
 	}
-	if !enforceClientSelf(c, clientID) {
-		return
-	}
+	// OWN-1: account-service enforces that a client may only list its own
+	// accounts (foreign client_id → 403); employees pass. Permissions stay gateway-side.
 	page, _ := strconv.ParseInt(c.DefaultQuery("page", "1"), 10, 32)
 	pageSize, _ := strconv.ParseInt(c.DefaultQuery("page_size", "50"), 10, 32)
 	resp, err := h.accountClient.ListAccountsByClient(c.Request.Context(), &accountpb.ListAccountsByClientRequest{
@@ -274,9 +273,7 @@ func (h *AccountHandler) ListAccountsByClient(c *gin.Context) {
 		apiError(c, 400, ErrValidation, "invalid client_id")
 		return
 	}
-	if !enforceClientSelf(c, clientID) {
-		return
-	}
+	// OWN-1: account-service enforces client-self for list-by-client.
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 

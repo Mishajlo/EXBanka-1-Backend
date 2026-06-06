@@ -491,7 +491,7 @@ func TestCard_GetMyCard_Owner(t *testing.T) {
 func TestCard_GetMyCard_NotOwner(t *testing.T) {
 	cc := &stubCardClient{
 		getFn: func(_ *cardpb.GetCardRequest) (*cardpb.CardResponse, error) {
-			return &cardpb.CardResponse{Id: 7, OwnerId: 999}, nil
+			return nil, status.Error(codes.NotFound, "card not found") // OWN-1: service enforces
 		},
 	}
 	h := handler.NewCardHandler(cc, &stubVirtualCardClient{}, &stubCardRequestClient{}, &accountFullStub{})
@@ -499,7 +499,7 @@ func TestCard_GetMyCard_NotOwner(t *testing.T) {
 	req := httptest.NewRequest("GET", "/me/cards/7", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.Equal(t, http.StatusNotFound, rec.Code)
 }
 
 // ── ListCardsByClientPath / ListCardsByAccountPath (Phase B) ─────────────────
@@ -590,8 +590,8 @@ func TestCard_GetMyCardRequest_OwnerOK(t *testing.T) {
 
 func TestCard_GetMyCardRequest_NotOwner404(t *testing.T) {
 	crc := &stubCardRequestClient{
-		getFn: func(in *cardpb.GetCardRequestRequest) (*cardpb.CardRequestResponse, error) {
-			return &cardpb.CardRequestResponse{Id: in.Id, ClientId: 999}, nil // owned by someone else
+		getFn: func(_ *cardpb.GetCardRequestRequest) (*cardpb.CardRequestResponse, error) {
+			return nil, status.Error(codes.NotFound, "card request not found") // OWN-1: service enforces
 		},
 	}
 	h := handler.NewCardHandler(&stubCardClient{}, &stubVirtualCardClient{}, crc, &accountFullStub{})

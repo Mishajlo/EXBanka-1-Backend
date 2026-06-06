@@ -167,9 +167,6 @@ func (h *CardHandler) ListCardsByClient(c *gin.Context) {
 		apiError(c, 400, ErrValidation, "invalid client_id")
 		return
 	}
-	if !enforceClientSelf(c, clientID) {
-		return
-	}
 
 	resp, err := h.cardClient.ListCardsByClient(c.Request.Context(), &cardpb.ListCardsByClientRequest{
 		ClientId: clientID,
@@ -450,9 +447,6 @@ func (h *CardHandler) SetCardPin(c *gin.Context) {
 		apiError(c, 400, ErrValidation, err.Error())
 		return
 	}
-	if card := h.loadCardAndEnforceOwnership(c, id); card == nil {
-		return
-	}
 	resp, err := h.virtualCardClient.SetCardPin(c.Request.Context(), &cardpb.SetCardPinRequest{
 		Id:  id,
 		Pin: body.Pin,
@@ -491,9 +485,6 @@ func (h *CardHandler) VerifyCardPin(c *gin.Context) {
 	}
 	if err := validatePin(body.Pin); err != nil {
 		apiError(c, 400, ErrValidation, err.Error())
-		return
-	}
-	if card := h.loadCardAndEnforceOwnership(c, id); card == nil {
 		return
 	}
 	resp, err := h.virtualCardClient.VerifyCardPin(c.Request.Context(), &cardpb.VerifyCardPinRequest{
@@ -535,9 +526,6 @@ func (h *CardHandler) TemporaryBlockCard(c *gin.Context) {
 	}
 	if err := inRange("duration_hours", body.DurationHours, 1, 720); err != nil {
 		apiError(c, 400, ErrValidation, err.Error())
-		return
-	}
-	if card := h.loadCardAndEnforceOwnership(c, id); card == nil {
 		return
 	}
 	resp, err := h.virtualCardClient.TemporaryBlockCard(middleware.GRPCContextWithChangedBy(c), &cardpb.TemporaryBlockCardRequest{
@@ -758,9 +746,6 @@ func (h *CardHandler) GetMyCardRequest(c *gin.Context) {
 		handleGRPCError(c, err)
 		return
 	}
-	if ownErr := enforceOwnership(c, resp.GetClientId()); ownErr != nil {
-		return
-	}
 	c.JSON(http.StatusOK, cardRequestToJSON(resp))
 }
 
@@ -876,14 +861,10 @@ func (h *CardHandler) ListMyCards(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"cards": cards})
 }
 
-// GetMyCard serves GET /api/me/cards/:id — fetches card and verifies ownership.
+// GetMyCard serves GET /api/me/cards/:id. OWN-1: card-service enforces ownership
+// (it returns 404 for a foreign card because the gateway forwards the caller
+// identity). The gateway just surfaces it; permissions stay gateway-side.
 func (h *CardHandler) GetMyCard(c *gin.Context) {
-	userID, _ := c.Get("principal_id")
-	uid, ok := userID.(int64)
-	if !ok {
-		apiError(c, 401, ErrUnauthorized, "invalid token claims")
-		return
-	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		apiError(c, 400, ErrValidation, "invalid id")
@@ -892,10 +873,6 @@ func (h *CardHandler) GetMyCard(c *gin.Context) {
 	resp, err := h.cardClient.GetCard(c.Request.Context(), &cardpb.GetCardRequest{Id: id})
 	if err != nil {
 		handleGRPCError(c, err)
-		return
-	}
-	if resp.OwnerId != uint64(uid) {
-		apiError(c, 403, ErrForbidden, "access denied")
 		return
 	}
 	c.JSON(http.StatusOK, cardToJSON(resp))
@@ -916,9 +893,6 @@ func (h *CardHandler) ListCardsByClientPath(c *gin.Context) {
 	clientID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		apiError(c, 400, ErrValidation, "invalid client id")
-		return
-	}
-	if !enforceClientSelf(c, clientID) {
 		return
 	}
 	resp, err := h.cardClient.ListCardsByClient(c.Request.Context(), &cardpb.ListCardsByClientRequest{ClientId: clientID})
@@ -1007,17 +981,5 @@ func cardRequestToJSON(r *cardpb.CardRequestResponse) gin.H {
 	}
 }
 
-// loadCardAndEnforceOwnership fetches the card by ID and verifies the caller
-// owns it. Returns the loaded card on success. On any failure it writes the
-// error response and returns nil — callers must return on nil.
-func (h *CardHandler) loadCardAndEnforceOwnership(c *gin.Context, id uint64) *cardpb.CardResponse {
-	resp, err := h.cardClient.GetCard(c.Request.Context(), &cardpb.GetCardRequest{Id: id})
-	if err != nil {
-		handleGRPCError(c, err)
-		return nil
-	}
-	if ownErr := enforceOwnership(c, resp.OwnerId); ownErr != nil {
-		return nil
-	}
-	return resp
-}
+// (loadCardAndEnforceOwnership removed under OWN-1: card-service now enforces
+// ownership on the pin/block mutations and GetCard directly.)

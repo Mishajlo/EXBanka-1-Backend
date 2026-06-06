@@ -689,9 +689,7 @@ func (h *TransactionHandler) GetMyPayment(c *gin.Context) {
 		handleGRPCError(c, err)
 		return
 	}
-	if ownErr := enforceOwnership(c, resp.ClientId); ownErr != nil {
-		return
-	}
+	// OWN-1: transaction-service enforces ownership (404 for a foreign payment).
 	c.JSON(http.StatusOK, paymentToJSON(resp))
 }
 
@@ -716,9 +714,7 @@ func (h *TransactionHandler) GetMyPaymentStatus(c *gin.Context) {
 		handleGRPCError(c, err)
 		return
 	}
-	if ownErr := enforceOwnership(c, resp.ClientId); ownErr != nil {
-		return
-	}
+	// OWN-1: transaction-service enforces ownership (404 for a foreign payment).
 	c.JSON(http.StatusOK, gin.H{
 		"payment_id": resp.Id,
 		"status":     resp.GetStatus(),
@@ -769,9 +765,7 @@ func (h *TransactionHandler) GetMyTransfer(c *gin.Context) {
 		handleGRPCError(c, err)
 		return
 	}
-	if ownErr := enforceOwnership(c, resp.ClientId); ownErr != nil {
-		return
-	}
+	// OWN-1: transaction-service enforces ownership (404 for a foreign transfer).
 	c.JSON(http.StatusOK, transferToJSON(resp))
 }
 
@@ -791,17 +785,8 @@ func (h *TransactionHandler) GetMyTransferStatus(c *gin.Context) {
 		apiError(c, 400, ErrValidation, "invalid id")
 		return
 	}
-	// First load via GetTransfer for the ownership check; then return the
-	// status response. Two round-trips, but the ownership check is the
-	// authoritative gate and we don't expose status to non-owners.
-	owner, oerr := h.txClient.GetTransfer(c.Request.Context(), &transactionpb.GetTransferRequest{Id: id})
-	if oerr != nil {
-		handleGRPCError(c, oerr)
-		return
-	}
-	if ownErr := enforceOwnership(c, owner.ClientId); ownErr != nil {
-		return
-	}
+	// OWN-1: transaction-service enforces ownership on GetTransferStatus (404 for
+	// a foreign transfer); the gateway just surfaces it (no pre-load needed).
 	resp, err := h.txClient.GetTransferStatus(c.Request.Context(), &transactionpb.GetTransferRequest{Id: id})
 	if err != nil {
 		handleGRPCError(c, err)
