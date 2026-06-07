@@ -18,6 +18,7 @@ Requirements (Serbian, in `docs/bank-requirements/`):
 - **Celina 3** — Trgovina na berzi (exchanges, listings stock/forex/futures/options, orders, agent limits & approval, portfolio, dividends, capital-gains tax, recurring orders, watchlist).
 - **Celina 4** — Proširenje trgovine (OTC stocks & options, negotiation, option contracts, SAGA exercise, investment funds, option/premium tax, bank-profit portal).
 - **Celina 5** — Komunikacija između banaka (inter-bank 2PC payments, cross-bank OTC SAGA, SI-TX protocol). Protocol: https://arsen.srht.site/si-tx-proto/.
+- **TODO_final.pdf** — late refinement doc that *deepens* and *adds* requirements across all Celinas. Most items extend existing scopes (price alerts, watchlist, audit log, DCA, dividend payout, fund stats, OTC negotiation history) and are absorbed into the relevant Celina file. Two themes are genuinely cross-cutting and get their own file: (a) **notification coverage** — every significant event must emit email + in-app + (where applicable) mobile push; (b) **mobile-app features + Quick Approve**. These are first-class requirements.
 - **Banka 2025 - E2E testovi** — frontend Gherkin scenarios (seed cases to fold in).
 - **Banka 2025 - odbrana flow** — the defense "provere" (the exact happy-path flows graders run; these must each have an end-to-end test).
 
@@ -45,6 +46,7 @@ docs/test-plan/
 ├── celina-4-otc-and-funds.md
 ├── celina-5-cross-bank.md
 ├── cross-cutting-verification.md   # full TOTP/challenge mechanism: positive + negative
+├── todo-final-notifications-and-mobile.md  # TODO_final.pdf: cross-cutting notification coverage + mobile-app features + Quick Approve
 └── coverage-matrix.md              # every feature/sub-feature/option → TC IDs → existing Go test → status
 ```
 
@@ -134,6 +136,16 @@ This is the minimum scope checklist; the implementation will expand each into co
 
 ### cross-cutting-verification.md
 - Real verification-challenge mechanism end-to-end: request challenge → receive code (Kafka/mobile inbox) → submit → action proceeds. Negatives: wrong code, expired challenge (5-min `VERIFICATION_CHALLENGE_EXPIRY`), max attempts (3) → transaction cancelled. All verification methods (`code_pull`, `qr_scan`, `number_match`, `email`). `verification.skip` permission path (supervisor/admin) bypasses.
+
+### todo-final-notifications-and-mobile.md (TODO_final.pdf)
+- **Notification coverage matrix** — every significant event must deliver email + in-app inbox + (where applicable) mobile push; assert the Kafka event (`notification.send-email`, `notification.mobile-push`) and the in-app inbox item for each:
+  - Celina 1: account locked (after 5 failed logins).
+  - Celina 2: payment executed, transfer executed, limit changed, card blocked/unblocked, credit created, credit approved.
+  - Celina 3: order created→Pending, order approved, order rejected, order fully executed (isDone), order partially filled, order auto-cancelled (settlement expired); price-alert fired (threshold crossed / −5% intraday); dividend received; tax deducted; recurring-order skipped (insufficient funds).
+  - Celina 4: OTC counter-offer received, OTC offer accepted, OTC offer withdrawn, option contract expiring in N days (e.g. 3 days before settlement).
+  - For each: one positive (event fires → notification emitted) and the negative/edge (event does not fire when it shouldn't; in-app unread indicator).
+- **Mobile-app features** (the "if time permits" set — test whatever the backend exposes; mark NO-ENDPOINT otherwise): view all own cards + block (note: unblock only via banker/in-branch, not mobile); view all accounts + balances; per-card transaction history (paginated); menjačnica access with all bank currencies; kursna lista + last-30-days history; upcoming loan-installment view.
+- **Quick Approve** — approve a verification-required action directly from the push notification instead of typing a code; request expires if no response within 5 minutes; applies to ALL actions that require verification (cross-reference cross-cutting-verification.md). Positive (approve from push → action proceeds) + negatives (5-min expiry → request expires; approve after expiry → rejected).
 
 ## 7. Accuracy & non-duplication rules
 
