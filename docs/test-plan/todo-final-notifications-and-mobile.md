@@ -65,7 +65,7 @@ missing), **NO-ENDPOINT** (event emits nothing the PDF asks for, or the event it
 | **C2** Credit approved | `POST /api/v3/loan-requests/:id/approve` | **NO** (`EmailTypeLoanApproved` defined but unused) | YES `LOAN_REQUEST_APPROVED`(+`LOAN_DISBURSED`) | NO | TC-NOTIF-008 | partial |
 | **C3** Order created → Pending | `POST /api/v3/orders` (needs approval) | **NO** (gap) | YES `ORDER_PLACED` | NO | TC-NOTIF-009 | partial |
 | **C3** Order approved | `POST /api/v3/orders/:id/approve` | **NO** (gap) | YES `ORDER_APPROVED` | NO | TC-NOTIF-010 | partial |
-| **C3** Order rejected | `POST /api/v3/orders/:id/decline` | **NO** (gap) | YES `ORDER_DECLINED` | NO | TC-NOTIF-011 | partial |
+| **C3** Order rejected | `POST /api/v3/orders/:id/reject` | **NO** (gap) | YES `ORDER_DECLINED` | NO | TC-NOTIF-011 | partial |
 | **C3** Order fully executed (isDone) | fill engine reaches qty | **NO** (gap) | YES `ORDER_FILLED` | NO | TC-NOTIF-012 | partial |
 | **C3** Order partially filled | fill engine partial | **NO** (gap) | YES `ORDER_PARTIALLY_FILLED` | NO | TC-NOTIF-013 | partial |
 | **C3** Order auto-cancelled (settlement) | cancel path | **NO** (gap) | YES `ORDER_CANCELLED` | NO | TC-NOTIF-014 | partial |
@@ -239,7 +239,7 @@ missing), **NO-ENDPOINT** (event emits nothing the PDF asks for, or the event it
 #### TC-NOTIF-011 · Order rejected → in-app `ORDER_DECLINED` (email/push gap)
 - **Feature:** supervisor decline notify · **Spec:** TODO_final Celina 3 · **Existing test:** —
 - **Actor:** supervisor
-- **Request:** `POST /api/v3/orders/:id/decline` · Auth: `Bearer <supervisor>`
+- **Request:** `POST /api/v3/orders/:id/reject` · Auth: `Bearer <supervisor>`
 - **Expected:** `200`; `stock.order-declined` published; **in-app** `ORDER_DECLINED`. **Gap:** no email/push.
 - **Negative siblings:** double-decline → `409`; no notification.
 

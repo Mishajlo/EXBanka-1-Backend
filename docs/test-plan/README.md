@@ -25,6 +25,7 @@ are pinned to the wire spec exactly.
 | [`celina-4-otc-and-funds.md`](./celina-4-otc-and-funds.md) | OTC stocks, OTC options + SAGA exercise, option/premium tax, investment funds, bank-profit portal. |
 | [`celina-5-cross-bank.md`](./celina-5-cross-bank.md) | Two-stack setup, inter-bank 2PC payments, cross-bank OTC SAGA, SI-TX protocol conformance. |
 | [`cross-cutting-verification.md`](./cross-cutting-verification.md) | The full verification-challenge mechanism: positive + negative, every method. |
+| [`todo-final-notifications-and-mobile.md`](./todo-final-notifications-and-mobile.md) | `TODO_final.pdf`: cross-cutting notification coverage (email + in-app + push per event), mobile-app features, and Quick Approve. |
 | [`coverage-matrix.md`](./coverage-matrix.md) | Every feature/sub-feature/option → TC IDs → existing Go test → status. The single exhaustiveness checklist. |
 
 ---
@@ -33,7 +34,8 @@ are pinned to the wire spec exactly.
 
 Test cases are identified as **`TC-C<celina>-<AREA>-<nnn>`**:
 
-- `<celina>` — `1`–`5` (or `X` for the cross-cutting verification file).
+- `<celina>` — `1`–`5`. The cross-cutting files use a domain prefix instead of a celina
+  number: `TC-VERIF-<nnn>` (verification), `TC-NOTIF-<nnn>` and `TC-MOBILE-<nnn>` (TODO_final).
 - `<AREA>` — a short uppercase domain tag, e.g. `LOGIN`, `EMP`, `RBAC`, `PAY`, `TRF`,
   `CARD`, `LOAN`, `ORD`, `PORT`, `TAX`, `FUND`, `OTC`, `SITX`.
 - `<nnn>` — a zero-padded sequence number, unique within `<celina>-<AREA>`.
@@ -77,21 +79,42 @@ frozen routes are asserted as-spec'd, not "corrected."
 
 ## Coverage dashboard
 
-> **Placeholder — populated by Task 8 once the matrix is assembled.** The authoritative,
-> per-feature breakdown lives in [`coverage-matrix.md`](./coverage-matrix.md); the summary
-> counts below are filled in from that file.
+The authoritative, per-feature breakdown lives in
+[`coverage-matrix.md`](./coverage-matrix.md); the summary counts below are tallied from that
+file's "Coverage rows" blocks. **Features** = number of coverage rows (each is one
+feature / sub-feature / option).
 
-| Celina | Features | Covered | Partial | NO-ENDPOINT |
-|---|---|---|---|---|
-| C1 — User Management | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| C2 — Core Banking | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| C3 — Securities | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| C4 — OTC & Funds | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| C5 — Cross-Bank | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Cross-cutting — Verification | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Source file | Features | Covered | Partial | NO-ENDPOINT |
+|---|---:|---:|---:|---:|
+| C1 — User Management | 55 | 37 | 16 | 2 |
+| C2 — Core Banking | 83 | 47 | 31 | 5 |
+| C3 — Securities | 82 | 67 | 7 | 8 |
+| C4 — OTC & Funds | 69 | 62 | 4 | 3 |
+| C5 — Cross-Bank | 71 | 50 | 15 | 6 |
+| Cross-cutting — Verification | 32 | 22 | 7 | 3 |
+| TODO_final — Notifications & Mobile | 43 | 20 | 17 | 6 |
+| **Grand total** | **435** | **305** | **97** | **33** |
 
 See [`coverage-matrix.md`](./coverage-matrix.md) for the full row-by-row matrix and the
 gap list (every `partial` / `NO-ENDPOINT` row with a one-line note on what is missing).
+
+---
+
+## Verification status
+
+Static accuracy checks run when this plan was authored (2026-06-07):
+
+- **Link-check** — 397 unique `file.go::Func` references to existing Go tests; all resolve to
+  real functions (1 fixed: `loginClient` → `loginAsClient`).
+- **Path reconciliation** — 293 distinct documented request paths checked against the gateway
+  router (`api-gateway/internal/router/router_v3.go`); all resolve to registered routes
+  (1 fixed: order rejection is `POST /api/v3/orders/:id/reject`, not `/decline`).
+- **Placeholder scan** — clean (no `TBD`/`TODO`/`FIXME`/empty sections).
+
+**Not yet run: live spot-execution.** Executing the documented requests against a running
+stack (`make docker-up` + seeder) was deferred because no stack was up at authoring time.
+Before relying on the plan, bring the stack up and spot-execute at least one positive and one
+negative case per file; record results here.
 
 ---
 

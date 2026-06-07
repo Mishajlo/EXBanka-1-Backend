@@ -64,7 +64,7 @@ flag each conflict so graders/cohorts can reconcile.
 - **Negative siblings:** wrong password → TC-C1-LOGIN-010; unknown email → TC-C1-LOGIN-011.
 
 #### TC-C1-LOGIN-002 · Client login success + system_type routing (POSITIVE)
-- **Feature:** Login — autentifikacija klijenta + system_type routing · **Spec:** Celina 1 §Login; Spec §6 (system_type) · **Existing test:** test-app/workflows/wf_client_stock_banking_test.go (client login helper); helpers_test.go::loginClient
+- **Feature:** Login — autentifikacija klijenta + system_type routing · **Spec:** Celina 1 §Login; Spec §6 (system_type) · **Existing test:** test-app/workflows/wf_client_stock_banking_test.go (client login helper); helpers_test.go::loginAsClient
 - **Actor:** client
 - **Preconditions:** a client created (TC-C1-EMP/CLI fixtures) and its auth Account provisioned (via `client.client-created` Kafka → auth `client_consumer`) and activated.
 - **Request:** `POST /api/v3/auth/login`
@@ -549,7 +549,7 @@ Existing unit coverage: `auth-service/internal/service/auth_service_test.go` (no
 ```
 | feature | TC IDs | existing Go test | status |
 | Login: employee success | TC-C1-LOGIN-001 | auth_test.go::TestAuth_LoginWithValidCredentials | covered |
-| Login: client success + system_type routing | TC-C1-LOGIN-002, TC-C1-RBAC-030 | wf_client_stock_banking_test.go (loginClient helper) | covered |
+| Login: client success + system_type routing | TC-C1-LOGIN-002, TC-C1-RBAC-030 | wf_client_stock_banking_test.go (loginAsClient helper) | covered |
 | Login: wrong password | TC-C1-LOGIN-010 | auth_test.go::TestAuth_LoginWithInvalidPassword; auth_login_failure_modes_test.go::TestLogin_Wrong_Password_Returns_401_Unauthorized | covered |
 | Login: non-existent email (anti-enum) | TC-C1-LOGIN-011 | auth_test.go::TestAuth_LoginWithNonexistentEmail | covered |
 | Login: inactive/disabled account | TC-C1-LOGIN-012 | role_permission_revocation_test.go | covered |
