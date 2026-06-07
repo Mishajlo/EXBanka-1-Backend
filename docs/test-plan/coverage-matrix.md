@@ -17,14 +17,14 @@ Rows are reproduced verbatim from each source file's "Coverage rows" block. The
 
 | Source file | Covered | Partial | NO-ENDPOINT | Total |
 |---|---:|---:|---:|---:|
-| Celina 1 — User Management | 37 | 16 | 2 | 55 |
+| Celina 1 — User Management | 38 | 15 | 2 | 55 |
 | Celina 2 — Core Banking | 47 | 31 | 5 | 83 |
-| Celina 3 — Securities | 67 | 7 | 8 | 82 |
+| Celina 3 — Securities | 69 | 6 | 7 | 82 |
 | Celina 4 — OTC & Funds | 62 | 4 | 3 | 69 |
 | Celina 5 — Cross-Bank | 50 | 15 | 6 | 71 |
 | Cross-cutting — Verification | 22 | 7 | 3 | 32 |
 | TODO_final — Notifications & Mobile | 20 | 17 | 6 | 43 |
-| **Grand total** | **305** | **97** | **33** | **435** |
+| **Grand total** | **308** | **95** | **32** | **435** |
 
 ---
 
@@ -44,7 +44,7 @@ Rows are reproduced verbatim from each source file's "Coverage rows" block. The
 | Brute-force: locked login blocked (correct pass) | TC-C1-LOCK-042 | auth_login_failure_modes_test.go::TestLogin_Locked_Account_Returns_403_Forbidden | covered |
 | Brute-force: lock auto-expiry (30 min impl) | TC-C1-LOCK-043 | — | partial |
 | Brute-force: lock-notification email | TC-C1-LOCK-050 | — | NO-ENDPOINT |
-| Brute-force: reset unlocks + resets counter | TC-C1-LOCK-051 | auth_test.go::TestAuth_PasswordResetRequest | partial |
+| Brute-force: reset unlocks + resets counter | TC-C1-LOCK-051 | auth_service_flows_test.go::TestResetPassword_UnlocksLockedAccount | covered |
 | Password reset: request (existing email) | TC-C1-PWD-060 | auth_test.go::TestAuth_PasswordResetRequest | covered |
 | Password reset: request (unknown email anti-enum) | TC-C1-PWD-061 | auth_test.go::TestAuth_PasswordResetRequest | covered |
 | Password reset: reset with valid token | TC-C1-PWD-062 | — | partial |
@@ -195,7 +195,7 @@ Rows are reproduced verbatim from each source file's "Coverage rows" block. The
 | listings: options chain + detail | TC-C3-LST-040,041 | securities_test.go::TestSecurities_ListOptions_RequiresStockID/_WithStockID/_FilterByType/_GetOption/_GetOption_NotFound | covered |
 | market-data: candles | TC-C3-LST-050 | — | covered |
 | client visibility: stocks+futures allowed | TC-C3-VIS-001 | securities_test.go::TestSecurities_ClientCanViewStocksAndFutures | covered |
-| client visibility: forex/options hidden from clients | TC-C3-VIS-002,003 | — | NO-ENDPOINT |
+| client visibility: forex/options hidden from clients | TC-C3-VIS-002,003 | middleware/auth_test.go::TestDenyClientToken_* | covered |
 | order: market buy/sell pricing (ask/bid) + commission min(14%,$7) | TC-C3-ORD-001,002 | stock_order_test.go::TestOrder_CreateMarketBuyOrder; wf_stock_buy_sell_test.go::TestWF_StockBuySellCycle; wf_stock_sell_all_aggregated_test.go::TestWF_SellAllAcrossAggregatedHolding | covered |
 | order: limit buy/sell favorable-price + commission min(24%,$12) | TC-C3-ORD-003,004 | wf_order_types_test.go::TestWF_MultiAssetOrderTypes | covered |
 | order: stop → market on trigger | TC-C3-ORD-010 | wf_order_types_test.go::TestWF_MultiAssetOrderTypes | covered |
@@ -217,7 +217,7 @@ Rows are reproduced verbatim from each source file's "Coverage rows" block. The
 | margin: IMC = MM×1.1 display | TC-C3-MGN-004 | securities_test.go::TestSecurities_GetStock | covered |
 | agent approval: over-limit+needApproval → pending | TC-C3-APV-001 | wf_order_approval_test.go::TestWF_OrderApprovalWorkflow | covered |
 | agent approval: under-limit auto-approve (boundary) | TC-C3-APV-002 | wf_order_approval_test.go::TestWF_OrderApprovalWorkflow; wf_actuary_limit_owner_type_test.go::TestActuaryLimit_EmployeeMeOrder_OwnerType | covered |
-| agent approval: needApproval=false auto-approves over limit (impl conjunction) | TC-C3-APV-003 | wf_limit_enforcement_test.go::TestWF_LimitEnforcementAcrossDomains | partial |
+| agent approval: over-limit requires approval even when needApproval=false | TC-C3-APV-003 | order_service_test.go::TestCreateOrder_Employee_OverLimit_RequiresApproval_EvenWhenNeedApprovalFalse | covered |
 | agent approval: multi-currency limit via no-commission conversion | TC-C3-APV-004 | wf_stock_cross_currency_test.go::TestWF_StockBuy_CrossCurrency_ConvertedDebit | partial |
 | supervisor approve/decline | TC-C3-APV-005,006 | wf_order_approval_test.go::TestWF_OrderApprovalWorkflow; stock_order_test.go::TestOrder_ApproveOrder_RequiresSupervisor/_RejectOrder_RequiresSupervisor | covered |
 | approve/decline once-only + illegal transition | TC-C3-APV-007 | — | covered |
@@ -523,7 +523,7 @@ but only partly, or only unit/analogue-level test coverage, or a documented spec
 - **TC-C1-LOCK-040** (P) — 4th-attempt-allowed boundary only exercised indirectly via the lock test; no dedicated boundary assertion.
 - **TC-C1-LOCK-043** (P) — 30-min lock auto-expiry recovery has no test (asserts impl 30 min vs Celina-1's 10 min).
 - **TC-C1-LOCK-050** (NE) — account-locked email is required by Celina 1 but no `EmailTypeAccountLocked`/template exists; user never notified on lock.
-- **TC-C1-LOCK-051** (P) — `ResetPassword` does not call `UnlockAccount`, so a reset does not clear an active 30-min lock; diverges from "reset otključava nalog".
+- **TC-C1-LOCK-051** — ✅ FIXED 2026-06-07: `ResetPassword` now calls `UnlockAccount` (test `TestResetPassword_UnlocksLockedAccount`). Now **covered**.
 - **TC-C1-PWD-062** (P) — reset-with-valid-token positive path has no integration test (only invalid-token covered).
 - **TC-C1-PWD-063** (P) — expired/invalid reset-token only covered by an activation-token sibling; reset-link TTL is 1h (E2E says 15 min).
 - **TC-C1-PWD-064** (P) — reset confirm-mismatch path has no test.
@@ -571,11 +571,11 @@ but only partly, or only unit/analogue-level test coverage, or a documented spec
 
 - **TC-C3-EXC-030** (NE) — "Berza je zatvorena" exchange-closed rejection not server-enforced (order accepted, fill deferred).
 - **TC-C3-EXC-031** (P) — after-hours slow-fill + `after_hours` flag has no test.
-- **TC-C3-VIS-002/003** (NE) — client forex/options visibility restriction is UI-only; backend serves 200.
+- **TC-C3-VIS-002/003** — ✅ FIXED 2026-06-07: gateway `DenyClientToken()` 403s clients on `/securities/forex*` + `/securities/options*` (live-verified). Now **covered**.
 - **TC-C3-AON-001/002** (P) — All-or-None partial-block / full-fill only via the multi-asset order test.
 - **TC-C3-MGN-002** (NE) — margin permission prerequisite not gated server-side.
 - **TC-C3-MGN-003** (NE) — margin credit/cash ≥ IMC prerequisite not enforced (IMC display-only).
-- **TC-C3-APV-003** (P) — approval gate is an implemented conjunction (needApproval AND over-limit), diverging from the spec's disjunction.
+- **TC-C3-APV-003** — ✅ FIXED 2026-06-07: approval gate is now the spec's disjunction (`decideNeedsApproval`, 9-case test; live-verified). Now **covered**.
 - **TC-C3-APV-004** (P) — multi-currency limit via no-commission conversion only via the cross-currency order test.
 - **TC-C3-DIV-010** (P) — dividend account-routing fallback → RSD has no test.
 - **TC-C3-DIV-030** (NE) — quarterly auto-cron + qty×price×yield/4 formula: dividends are admin-declared + manual payout only.

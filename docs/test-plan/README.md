@@ -86,14 +86,14 @@ feature / sub-feature / option).
 
 | Source file | Features | Covered | Partial | NO-ENDPOINT |
 |---|---:|---:|---:|---:|
-| C1 — User Management | 55 | 37 | 16 | 2 |
+| C1 — User Management | 55 | 38 | 15 | 2 |
 | C2 — Core Banking | 83 | 47 | 31 | 5 |
-| C3 — Securities | 82 | 67 | 7 | 8 |
+| C3 — Securities | 82 | 69 | 6 | 7 |
 | C4 — OTC & Funds | 69 | 62 | 4 | 3 |
 | C5 — Cross-Bank | 71 | 50 | 15 | 6 |
 | Cross-cutting — Verification | 32 | 22 | 7 | 3 |
 | TODO_final — Notifications & Mobile | 43 | 20 | 17 | 6 |
-| **Grand total** | **435** | **305** | **97** | **33** |
+| **Grand total** | **435** | **308** | **95** | **32** |
 
 See [`coverage-matrix.md`](./coverage-matrix.md) for the full row-by-row matrix and the
 gap list (every `partial` / `NO-ENDPOINT` row with a one-line note on what is missing).
@@ -111,10 +111,16 @@ Static accuracy checks run when this plan was authored (2026-06-07):
   (1 fixed: order rejection is `POST /api/v3/orders/:id/reject`, not `/decline`).
 - **Placeholder scan** — clean (no `TBD`/`TODO`/`FIXME`/empty sections).
 
-**Not yet run: live spot-execution.** Executing the documented requests against a running
-stack (`make docker-up` + seeder) was deferred because no stack was up at authoring time.
-Before relying on the plan, bring the stack up and spot-execute at least one positive and one
-negative case per file; record results here.
+**Live spot-execution (partial, 2026-06-07).** A two-bank-capable stack (`bank1`, gateway :8080,
+seeded admin/agent/supervisor/clients) was brought up and used to live-verify the bug fixes
+landed this session:
+- **Bug C (client forex/options 403):** client→`403` on `/securities/forex` + `/securities/options`,
+  still `200` on stocks/futures; agent→`200`. ✅
+- **Bug B (over-limit approval gate):** agent with `need_approval=false` + a 1000 RSD limit places a
+  ~4500 RSD order → `status: pending` (was auto-approved). ✅
+
+Broader spot-execution of the remaining files (auth flows, payments/transfers, OTC, funds,
+cross-bank) is still recommended before relying on the full plan; record results here as they run.
 
 ---
 

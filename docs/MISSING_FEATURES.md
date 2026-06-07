@@ -59,10 +59,11 @@ The following events create an in-app item but send **no email** (the requiremen
 
 ## 2. Celina 1 — User Management
 
-### 2.1 Password reset does not unlock a locked account — **DIVERGES** · P1
+### 2.1 Password reset does not unlock a locked account — ✅ **FIXED (2026-06-07)** · was P1
 - **Wants:** "Reset lozinke otključava nalog i resetuje broj neuspešnih pokušaja" — resetting the password must clear the brute-force lock and zero the failed-attempt counter. (Celina 1; `TODO_final` Celina 1.)
-- **Current:** `ResetPassword` does not call `UnlockAccount`; a user who was locked stays locked for the full 30 min even after a successful reset.
-- **TC:** TC-C1-LOCK-051. **Build:** unlock + reset counter inside the reset-password flow.
+- **Was:** `ResetPassword` did not call `UnlockAccount`; a locked user stayed locked for the full 30 min even after a successful reset.
+- **Fix:** injected an `accountUnlocker` into `AccountService`; `ResetPassword` now calls `UnlockAccount(email)`. Test: `auth-service ... TestResetPassword_UnlocksLockedAccount`.
+- **TC:** TC-C1-LOCK-051.
 
 ### 2.2 Create employee as inactive — **MISSING** · P2
 - **Wants:** When an admin creates an employee, "po default-u … aktivan, ali moguće je napraviti i korisnika koji nije aktivan" — there must be a way to create an *inactive* employee. (Celina 1 "Kreiranje i aktivacija naloga".)
@@ -117,20 +118,22 @@ The following events create an in-app item but send **no email** (the requiremen
 - **Current:** The order is accepted and its fill is merely deferred; there is no server-side closed-market rejection.
 - **TC:** TC-C3-EXC-030. **Build:** reject (or hold with explicit status) when the listing's exchange is closed.
 
-### 4.2 Client forex/options visibility restriction — **MISSING** · P1
+### 4.2 Client forex/options visibility restriction — ✅ **FIXED (2026-06-07)** · was P1
 - **Wants:** Clients may view/trade **only stocks and futures** — never forex pairs or options. (Celina 3 portal access matrix; E2E.)
-- **Current:** The backend serves forex and option listings with a `200` to client tokens; the restriction is UI-only and trivially bypassed via the API.
-- **TC:** TC-C3-VIS-002/003. **Build:** enforce the asset-class restriction server-side for client principals (list + order).
+- **Was:** the backend served forex and option listings with a `200` to client tokens; the restriction was UI-only and trivially bypassed via the API.
+- **Fix:** new `DenyClientToken()` gateway middleware on `/securities/forex*` and `/securities/options*` → `403` for client principals (candles stay open for stocks/futures). Live-verified: client→403, agent→200. Test: `api-gateway ... TestDenyClientToken_*`.
+- **TC:** TC-C3-VIS-002/003.
 
 ### 4.3 Margin trading prerequisites not enforced — **MISSING** · P1
 - **Wants:** A **margin** order is allowed only if the trader is eligible: an employee needs explicit margin permission; a client needs approved credit; and available credit **or** cash must be **≥ the initial margin cost** (= maintenance margin × 1.1). Otherwise the order is rejected. (Celina 3 "Margin Order".)
 - **Current:** The `margin` flag is persisted but no eligibility/funding check is enforced server-side (initial margin cost is display-only).
 - **TC:** TC-C3-MGN-002/003. **Build:** gate margin orders on permission/credit and the IMC funding check.
 
-### 4.4 Order-approval condition is a conjunction, not a disjunction — **DIVERGES** · P1
+### 4.4 Order-approval condition is a conjunction, not a disjunction — ✅ **FIXED (2026-06-07)** · was P1
 - **Wants:** An agent's order needs supervisor approval if **any** of: the agent has `needApproval=true`, **OR** the agent's daily limit is exhausted, **OR** the order would exceed the remaining daily limit. (Celina 3 approval workflow.)
-- **Current:** The gate is implemented as a **conjunction** (`needApproval` AND over-limit), so an over-limit order from an agent without the flag auto-approves — money can move past the daily limit without review.
-- **TC:** TC-C3-APV-003. **Build:** change to the spec's disjunction.
+- **Was:** the gate was a **conjunction** (`needApproval` AND over-limit), so an over-limit order from an agent without the flag auto-approved — money could move past the daily limit without review.
+- **Fix:** extracted `decideNeedsApproval` as the spec'd disjunction (flag OR used+amount>limit) and wired it into the placement saga. Live-verified: need_approval=false + over-limit order → `pending`. Test: `stock-service ... TestDecideNeedsApproval` (9 cases).
+- **TC:** TC-C3-APV-003.
 
 ### 4.5 Quarterly automatic dividend payout — **MISSING** · P2
 - **Wants:** Dividends are paid **automatically, quarterly** (last business day of Mar/Jun/Sep/Dec) to every holder, `Dividend = Quantity × Price × (DividendYield / 4)`, in the listing currency, taxed at 15% (except bank-held). (Celina 3 / `TODO_final` "Isplata dividendi".)
@@ -261,9 +264,11 @@ The following events create an in-app item but send **no email** (the requiremen
 
 ## Summary by priority
 
+**✅ Fixed 2026-06-07:** 2.1 (reset unlock), 4.2 (client forex/options 403), 4.4 (approval disjunction). 10 P1 items remain.
+
 | Priority | Count | Items |
 |---|---|---|
-| **P1** (defense / money / security) | 13 | 1.1, 2.1, 3.1, 3.4, 4.1, 4.2, 4.3, 4.4, 5.1, 6.1, 7.1, 7.2, 7.3 |
+| **P1** (defense / money / security) | 10 | 1.1, 3.1, 3.4, 4.1, 4.3, 5.1, 6.1, 7.1, 7.2, 7.3 |
 | **P2** | 16 | 1.2, 1.5, 3.2, 3.3, 4.5, 4.7, 4.8, 4.9, 5.2, 5.3, 6.2, 7.4, 7.5, + notif emails (1.2/1.3/1.4/1.5/1.6) |
 | **P3** | rest | thresholds/TTL divergences, FX-SLA, audit object, Quick Approve, mobile niceties, frontend-only |
 
