@@ -189,6 +189,8 @@ func (h *CardGRPCHandler) BlockCard(ctx context.Context, req *pb.BlockCardReques
 			if emailErr != nil {
 				log.Printf("CardGRPCHandler: failed to send block card email for card %d: %v", card.ID, emailErr)
 			}
+		} else {
+			log.Printf("CardGRPCHandler: skipping card-status notification for card %d: client %d email unresolved", card.ID, card.OwnerID)
 		}
 	}
 
@@ -236,6 +238,8 @@ func (h *CardGRPCHandler) UnblockCard(ctx context.Context, req *pb.UnblockCardRe
 			if emailErr != nil {
 				log.Printf("CardGRPCHandler: failed to send unblock card email for card %d: %v", card.ID, emailErr)
 			}
+		} else {
+			log.Printf("CardGRPCHandler: skipping card-status notification for card %d: client %d email unresolved", card.ID, card.OwnerID)
 		}
 	}
 
@@ -283,6 +287,8 @@ func (h *CardGRPCHandler) DeactivateCard(ctx context.Context, req *pb.Deactivate
 			if emailErr != nil {
 				log.Printf("CardGRPCHandler: failed to send deactivate card email for card %d: %v", card.ID, emailErr)
 			}
+		} else {
+			log.Printf("CardGRPCHandler: skipping card-status notification for card %d: client %d email unresolved", card.ID, card.OwnerID)
 		}
 	}
 
