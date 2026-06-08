@@ -793,7 +793,7 @@ func TestApplyBlueprint_ClientWithoutGRPCClient(t *testing.T) {
 	assert.ErrorIs(t, err, ErrClientBlueprintNotApplicable)
 }
 
-func TestApplyBlueprint_ClientGRPCError(t *testing.T) {
+func TestApplyBlueprint_ClientType_RejectedWithError(t *testing.T) {
 	// Client-type blueprints are now rejected by user-service regardless;
 	// user-service no longer holds a gRPC client to client-service.
 	bpRepo := newMockBlueprintRepo()

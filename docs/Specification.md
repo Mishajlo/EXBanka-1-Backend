@@ -151,7 +151,7 @@ Client (HTTP/JSON) → API Gateway (Gin, :8080)
 | api-gateway | auth, user, client, account, card, transaction, credit, exchange, verification, notification, stock (StockExchange / Security / Order / Portfolio / OTC / Tax / SourceAdmin / **InvestmentFund** (Celina 4) / **OTCOptions** (Spec 2)), **interbank-service** (2026-06-07 cutover: the whole `/cross-bank-protocol` surface — `PeerTxService`, `PeerBankAdminService` registry, `PeerOTCService` forwarder, `PeerEgressService`, `PeerUserService`) |
 | stock-service | account-service (debit/credit/reservations/bank-account), exchange-service (FX), user-service (employee names + actuary limits), client-service (client name resolution), **interbank-service** (2026-06-07 cutover: `PeerTxService.InitiateOutboundTxWithPostings` for OTC settlement, `PeerBankAdminService.ListPeerBanks` for the discovery poll, and `PeerEgressService.ProxyToPeer` for all outbound OTC HTTP — peer resolution + signing live in interbank-service, not here) |
 | auth-service | user-service (employee lookup). NOTE: auth owns **all** credentials in its own `accounts` table (one row per principal, `principal_type` ∈ {employee, client}); it does **not** gRPC-call client-service for login. Client Accounts are provisioned by auth consuming the `client.client-created` Kafka event. |
-| user-service | auth-service (activation tokens) |
+| user-service | auth-service (activation tokens). NOTE: user-service does **not** dial client-service — `CLIENT_GRPC_ADDR` was removed from user-service (SP-4 2026-06-08). Client-type limit blueprint application is orchestrated by the api-gateway directly (gateway → client-service). |
 | client-service | auth-service (activation tokens) |
 | card-service | account-service (account validation), client-service (client validation) |
 | transaction-service | account-service (balance ops), exchange-service (currency conversion), verification-service (challenge status) |
@@ -180,7 +180,7 @@ The API Gateway creates gRPC clients in `api-gateway/internal/grpc/` and passes 
 | `userClient` | UserService | `USER_GRPC_ADDR` |
 | `empLimitClient` | EmployeeLimitService | `USER_GRPC_ADDR` (shared) |
 | `clientClient` | ClientService | `CLIENT_GRPC_ADDR` |
-| `clientLimitClient` | ClientLimitService | `CLIENT_GRPC_ADDR` (shared) |
+| `clientLimitClient` | ClientLimitService | `CLIENT_GRPC_ADDR` (shared) — also injected into `BlueprintHandler` to apply client-type blueprints directly (SP-4: gateway→client-service, bypassing user-service) |
 | `accountClient` | AccountService | `ACCOUNT_GRPC_ADDR` |
 | `bankAccountClient` | BankAccountService | `ACCOUNT_GRPC_ADDR` (shared) |
 | `cardClient` | CardService | `CARD_GRPC_ADDR` |
@@ -2500,6 +2500,11 @@ Keep these synchronized across API Gateway validation, protobuf definitions, and
 - **OTC buy on behalf of fund (E2 — 2026-05-28):** `POST /api/v3/me/otc/options/:id/negotiations/:nid/accept` and `POST /api/v3/otc/contracts/:id/exercise` now accept `on_behalf_of_fund_id`. When set, debit comes from fund's RSD account; resulting holding lands in `fund_holdings`. Manager-only (`acting_employee_id == fund.manager_employee_id`).
 - **Dividend pass-through (E4 — 2026-05-28):** Dividends from securities held directly by clients go to the client's RSD account (15% tax withheld, net = 85% of gross). Dividends from securities held by the bank go to the bank's RSD account (no tax). Dividends from securities held by an investment fund flow into the fund's RSD account (no tax at payout time); a `FundDividendPayment` snapshot records the per-investor share at the moment of payout so that each investor's `dividends_received_rsd` in the portfolio response can be computed correctly. Tax on fund-dividend pass-through is realized at the investor's redemption time, not at payout time.
 - **Portfolio dividend visibility (E3 — 2026-05-28):** `GET /api/v3/me/portfolio` (and all portfolio routes) return two new fields on each `PortfolioPosition`: `dividends_received_rsd` (the caller's pro-rata share of dividends paid, based on the per-investor snapshot for fund positions or direct `dividend_payouts.net_amount_rsd` for security positions) and `fund_status` (the fund's lifecycle status for `investment_fund` type positions).
+
+**Client Limits Ownership (SP-4, 2026-06-08):**
+- Client limits are written ONLY by client-service (`ClientLimitService.SetClientLimits`).
+- Client-type limit blueprints are orchestrated by the api-gateway: `BlueprintHandler.ApplyBlueprint` reads the blueprint values from user-service, then calls `ClientLimitService.SetClientLimits` on client-service directly. This path never goes through user-service's `BlueprintService.ApplyBlueprint`.
+- user-service's `BlueprintService` rejects client-type apply calls with `ErrClientBlueprintNotApplicable` (gRPC `FailedPrecondition`) to guard against incorrect direct calls. user-service holds no gRPC connection to client-service.
 
 **Accounts:**
 - `current` accounts → RSD only
