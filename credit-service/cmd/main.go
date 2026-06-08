@@ -21,6 +21,7 @@ import (
 	"github.com/exbanka/contract/shared/grpcmw"
 	userpb "github.com/exbanka/contract/userpb"
 	"github.com/exbanka/credit-service/internal/config"
+	"github.com/exbanka/credit-service/internal/consumer"
 	"github.com/exbanka/credit-service/internal/handler"
 	kafkaprod "github.com/exbanka/credit-service/internal/kafka"
 	"github.com/exbanka/credit-service/internal/model"
@@ -61,6 +62,7 @@ func main() {
 		"notification.general",
 		"credit.saga-dead-letter",
 		"admin.cron-action",
+		"user.employee-limits-updated",
 	)
 
 	// Connect to account-service
@@ -112,6 +114,7 @@ func main() {
 	installmentRepo := repository.NewInstallmentRepository(db)
 	tierRepo := repository.NewInterestRateTierRepository(db)
 	marginRepo := repository.NewBankMarginRepository(db)
+	limitReplicaRepo := repository.NewEmployeeLimitReplicaRepository(db)
 
 	rateConfigSvc := service.NewRateConfigService(tierRepo, marginRepo, db)
 	if err := rateConfigSvc.SeedDefaults(); err != nil {
@@ -121,7 +124,7 @@ func main() {
 	changelogRepo := repository.NewChangelogRepository(db)
 	sagaRepo := repository.NewSagaLogRepository(db)
 	disbursementSaga := service.NewLoanDisbursementSaga(bankAccountClient, accountClient, loanRepo, sagaRepo)
-	loanRequestSvc := service.NewLoanRequestService(loanRequestRepo, loanRepo, installmentRepo, limitClient, accountClient, rateConfigSvc, db, changelogRepo)
+	loanRequestSvc := service.NewLoanRequestService(loanRequestRepo, loanRepo, installmentRepo, limitClient, accountClient, rateConfigSvc, db, limitReplicaRepo, changelogRepo)
 	loanRequestSvc.SetBankAccountClient(bankAccountClient)
 	loanRequestSvc.SetDisbursementSaga(disbursementSaga)
 	loanSvc := service.NewLoanService(loanRepo)
@@ -131,6 +134,11 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	limitReplicaConsumer := consumer.NewEmployeeLimitReplicaConsumer(cfg.KafkaBrokers, limitReplicaRepo)
+	limitReplicaConsumer.Start(ctx)
+	defer limitReplicaConsumer.Close()
+
 	go cronSvc.Start(ctx)
 
 	// Start the loan disbursement saga compensation recovery worker.
