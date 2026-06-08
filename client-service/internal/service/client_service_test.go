@@ -576,7 +576,7 @@ func TestUpdateClient_NotFound(t *testing.T) {
 
 func TestGetClientLimits_Defaults(t *testing.T) {
 	limitRepo := newMockClientLimitRepo()
-	svc := NewClientLimitService(limitRepo, nil, nil)
+	svc := NewClientLimitService(limitRepo, nil, nil, nil)
 
 	limits, err := svc.GetClientLimits(42)
 	require.NoError(t, err)
@@ -592,7 +592,7 @@ func TestSetClientLimits_PersistedAndRetrievable(t *testing.T) {
 		maxClientDaily:   "500000",
 		maxClientMonthly: "5000000",
 	}
-	svc := NewClientLimitService(limitRepo, empSvc, nil)
+	svc := NewClientLimitService(limitRepo, empSvc, nil, nil)
 
 	limit := model.ClientLimit{
 		ClientID:      1,
@@ -621,7 +621,7 @@ func TestSetClientLimits_ExceedsEmployeeDailyLimit(t *testing.T) {
 		maxClientDaily:   "100000",
 		maxClientMonthly: "5000000",
 	}
-	svc := NewClientLimitService(limitRepo, empSvc, nil)
+	svc := NewClientLimitService(limitRepo, empSvc, nil, nil)
 
 	limit := model.ClientLimit{
 		ClientID:      1,
@@ -643,7 +643,7 @@ func TestSetClientLimits_ExceedsEmployeeMonthlyLimit(t *testing.T) {
 		maxClientDaily:   "500000",
 		maxClientMonthly: "1000000",
 	}
-	svc := NewClientLimitService(limitRepo, empSvc, nil)
+	svc := NewClientLimitService(limitRepo, empSvc, nil, nil)
 
 	limit := model.ClientLimit{
 		ClientID:      1,
@@ -662,7 +662,7 @@ func TestSetClientLimits_ExceedsEmployeeMonthlyLimit(t *testing.T) {
 func TestSetClientLimits_NoEmployeeSvc_SkipsCheck(t *testing.T) {
 	limitRepo := newMockClientLimitRepo()
 	// nil userLimitSvc — should skip employee limit verification
-	svc := NewClientLimitService(limitRepo, nil, nil)
+	svc := NewClientLimitService(limitRepo, nil, nil, nil)
 
 	limit := model.ClientLimit{
 		ClientID:      1,
@@ -682,7 +682,7 @@ func TestSetClientLimits_EmployeeSvcError(t *testing.T) {
 	empSvc := &mockEmployeeLimitSvc{
 		err: errors.New("gRPC connection refused"),
 	}
-	svc := NewClientLimitService(limitRepo, empSvc, nil)
+	svc := NewClientLimitService(limitRepo, empSvc, nil, nil)
 
 	limit := model.ClientLimit{
 		ClientID:      1,
@@ -708,7 +708,7 @@ func TestSetClientLimits_EmployeeSvcError(t *testing.T) {
 // version+1 on subsequent upserts) so the Version assertion is non-vacuous.
 func TestSetClientLimits_PublishedSnapshotCarriesValuesAndVersion(t *testing.T) {
 	limitRepo := newMockClientLimitRepo()
-	svc := NewClientLimitService(limitRepo, nil, nil) // nil producer, nil employee svc
+	svc := NewClientLimitService(limitRepo, nil, nil, nil) // nil producer, nil employee svc
 
 	limit := model.ClientLimit{
 		ClientID:      5,
