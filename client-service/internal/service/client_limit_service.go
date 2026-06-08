@@ -128,6 +128,10 @@ func (s *ClientLimitService) SetClientLimits(ctx context.Context, limit model.Cl
 			ClientID:      limit.ClientID,
 			SetByEmployee: limit.SetByEmployee,
 			Action:        "set",
+			DailyLimit:    result.DailyLimit.StringFixed(4),
+			MonthlyLimit:  result.MonthlyLimit.StringFixed(4),
+			TransferLimit: result.TransferLimit.StringFixed(4),
+			Version:       result.Version,
 		}); pubErr != nil {
 			log.Printf("warn: failed to publish client-limits-updated event: %v", pubErr)
 		}

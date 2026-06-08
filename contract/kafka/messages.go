@@ -270,10 +270,17 @@ type LimitTemplateMessage struct {
 }
 
 // ClientLimitsUpdatedMessage is published when a client's limits are updated.
+// DailyLimit, MonthlyLimit, TransferLimit and Version carry the full post-write
+// snapshot so SP-5 account-service replica consumers can apply the event
+// idempotently without a round-trip back to client-service.
 type ClientLimitsUpdatedMessage struct {
 	ClientID      int64  `json:"client_id"`
 	SetByEmployee int64  `json:"set_by_employee"`
 	Action        string `json:"action"` // "set"
+	DailyLimit    string `json:"daily_limit,omitempty"`
+	MonthlyLimit  string `json:"monthly_limit,omitempty"`
+	TransferLimit string `json:"transfer_limit,omitempty"`
+	Version       int64  `json:"version"`
 }
 
 type CardTemporaryBlockedMessage struct {

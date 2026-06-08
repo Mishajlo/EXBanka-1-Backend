@@ -252,6 +252,13 @@ func (m *mockClientLimitRepo) GetByClientID(clientID int64) (*model.ClientLimit,
 
 func (m *mockClientLimitRepo) Upsert(limit *model.ClientLimit) error {
 	stored := *limit
+	if _, exists := m.limits[limit.ClientID]; !exists {
+		// Simulate DB column default:1 on first insert.
+		stored.Version = 1
+	} else {
+		// Simulate ON CONFLICT DO UPDATE SET version = version + 1.
+		stored.Version = m.limits[limit.ClientID].Version + 1
+	}
 	m.limits[limit.ClientID] = &stored
 	return nil
 }
@@ -688,6 +695,46 @@ func TestSetClientLimits_EmployeeSvcError(t *testing.T) {
 	_, err := svc.SetClientLimits(context.Background(), limit, 0)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEmployeeLookupFailed)
+}
+
+// ---------------------------------------------------------------------------
+// Client-limit publish snapshot tests (SP-5)
+// ---------------------------------------------------------------------------
+
+// TestSetClientLimits_PublishedSnapshotCarriesValuesAndVersion asserts that
+// SetClientLimits returns a result with non-zero Version and populated limit
+// values — the exact data that flows into the PublishClientLimitsUpdated call.
+// Uses the mock repo (which now simulates version=1 on first insert and
+// version+1 on subsequent upserts) so the Version assertion is non-vacuous.
+func TestSetClientLimits_PublishedSnapshotCarriesValuesAndVersion(t *testing.T) {
+	limitRepo := newMockClientLimitRepo()
+	svc := NewClientLimitService(limitRepo, nil, nil) // nil producer, nil employee svc
+
+	limit := model.ClientLimit{
+		ClientID:      5,
+		DailyLimit:    decimal.NewFromInt(50000),
+		MonthlyLimit:  decimal.NewFromInt(500000),
+		TransferLimit: decimal.NewFromInt(20000),
+		SetByEmployee: 7,
+	}
+	result, err := svc.SetClientLimits(context.Background(), limit, 7)
+	require.NoError(t, err)
+
+	// The result is the value returned by GetByClientID after Upsert —
+	// exactly what is used to populate the published ClientLimitsUpdatedMessage.
+	assert.Equal(t, int64(1), result.Version,
+		"first upsert must yield Version=1 (non-vacuous: mock simulates DB default)")
+	assert.Equal(t, "50000.0000", result.DailyLimit.StringFixed(4))
+	assert.Equal(t, "500000.0000", result.MonthlyLimit.StringFixed(4))
+	assert.Equal(t, "20000.0000", result.TransferLimit.StringFixed(4))
+
+	// Second upsert must yield Version=2.
+	limit.DailyLimit = decimal.NewFromInt(60000)
+	result2, err := svc.SetClientLimits(context.Background(), limit, 7)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), result2.Version,
+		"second upsert must yield Version=2 (monotonic increment)")
+	assert.Equal(t, "60000.0000", result2.DailyLimit.StringFixed(4))
 }
 
 // ---------------------------------------------------------------------------

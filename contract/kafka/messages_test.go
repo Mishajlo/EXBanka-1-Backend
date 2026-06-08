@@ -54,6 +54,26 @@ func TestGeneralNotificationMessage_DataRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClientLimitsUpdatedMessage_CarriesValuesAndVersion(t *testing.T) {
+	in := ClientLimitsUpdatedMessage{
+		ClientID: 3, SetByEmployee: 7, Action: "set",
+		DailyLimit: "50000.0000", MonthlyLimit: "500000.0000",
+		TransferLimit: "20000.0000", Version: 2,
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out ClientLimitsUpdatedMessage
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.DailyLimit != "50000.0000" || out.MonthlyLimit != "500000.0000" ||
+		out.TransferLimit != "20000.0000" || out.Version != 2 {
+		t.Fatalf("lost fields: %+v", out)
+	}
+}
+
 func TestEmployeeLimitsUpdatedMessage_CarriesValuesAndVersion(t *testing.T) {
 	in := EmployeeLimitsUpdatedMessage{
 		EmployeeID: 9, Action: "set",
