@@ -2196,6 +2196,17 @@ TableName: business_audit_logs
 ```
 Written by the notification-service `admin_audit_consumer` consuming `admin.cron-action` Kafka events published by the api-gateway after each Trigger/Pause/Resume action.
 
+**ClientLimitPolicy** (SP-5 — 2026-06-08) — Per-client spending-cap read-model stored in `account_db`. Fed by `client.limits-updated` events; drives `UpdateAccountLimits` propagation to all non-bank accounts the client owns. Non-authoritative replica (source of truth is `client_db.client_limits`); kept monotonically up-to-date via Version comparison on every upsert.
+```
+ClientID(uint64,PK),              -- the client whose limits were set
+DailyLimit(decimal(18,4)),        -- mirrors client_limits.DailyLimit
+MonthlyLimit(decimal(18,4)),      -- mirrors client_limits.MonthlyLimit
+Version(int64,not null),          -- monotonic; upsert is a no-op when incoming Version <= stored Version
+UpdatedAt(time.Time,not null)
+TableName: client_limit_policies
+```
+Written by `account-service/internal/consumer.ClientLimitConsumer` (consumer group `account-service-client-limit`). After a successful upsert the consumer calls `AccountService.ApplyClientLimitPolicy`, which sets the `daily_limit` and `monthly_limit` columns on every `Account` row where `owner_id = ClientID AND is_bank_account = false`.
+
 ---
 
 ## 19. Complete Kafka Topic Reference
@@ -2220,7 +2231,7 @@ Written by the notification-service `admin_audit_consumer` consuming `admin.cron
 | `user.limit-template-created` | user-service | (consumers) | LimitTemplateMessage |
 | `user.limit-template-updated` | user-service | (consumers) | LimitTemplateMessage |
 | `user.limit-template-deleted` | user-service | (consumers) | LimitTemplateMessage |
-| `user.client-limits-updated` | user-service | (consumers) | ClientLimitsUpdatedMessage |
+| `client.limits-updated` | client-service | account-service (group `account-service-client-limit`) | ClientLimitsUpdatedMessage — enriched (SP-5): carries DailyLimit, MonthlyLimit, TransferLimit as decimal strings + monotonic Version; Version increments on every upsert so account-service can apply idempotently. Consumer upserts ClientLimitPolicy then calls ApplyClientLimitPolicy on all client-owned accounts. |
 | `user.role-permissions-changed` | user-service | auth-service | RolePermissionsChangedMessage |
 | `client.created` | client-service | notification-service, card-service | ClientCreatedMessage |
 | `client.updated` | client-service | card-service | ClientCreatedMessage (full snapshot) |
@@ -2505,6 +2516,13 @@ Keep these synchronized across API Gateway validation, protobuf definitions, and
 - Client limits are written ONLY by client-service (`ClientLimitService.SetClientLimits`).
 - Client-type limit blueprints are orchestrated by the api-gateway: `BlueprintHandler.ApplyBlueprint` reads the blueprint values from user-service, then calls `ClientLimitService.SetClientLimits` on client-service directly. This path never goes through user-service's `BlueprintService.ApplyBlueprint`.
 - user-service's `BlueprintService` rejects client-type apply calls with `ErrClientBlueprintNotApplicable` (gRPC `FailedPrecondition`) to guard against incorrect direct calls. user-service holds no gRPC connection to client-service.
+
+**Client Limit → Account Cap Propagation (SP-5, DONE 2026-06-08):**
+- Client limits (DailyLimit, MonthlyLimit) are now ENFORCED at the account level, not merely stored.
+- When `PUT /api/v3/clients/{id}/limits` is called, client-service persists the limit and publishes `client.limits-updated` to Kafka with the full post-write snapshot (DailyLimit, MonthlyLimit, TransferLimit as decimal strings) and a monotonically incrementing `Version` (`ClientLimit.Version` increments on every upsert).
+- account-service's `ClientLimitConsumer` (group `account-service-client-limit`) receives the event, upserts a `ClientLimitPolicy` replica row (skips stale events via Version comparison), and calls `AccountService.ApplyClientLimitPolicy` which writes the new DailyLimit/MonthlyLimit to every non-bank account owned by the client.
+- account-service is the authoritative enforcement point for spending limits (via `DebitWithLock`). The per-account `daily_limit`/`monthly_limit` columns set by this propagation are what the ledger repository enforces on every debit.
+- TransferLimit is carried in the Kafka message but is NOT stored in `ClientLimitPolicy` (transfer limits are enforced by client-service at request time, not by account-service). Only DailyLimit and MonthlyLimit propagate to account caps.
 
 **Accounts:**
 - `current` accounts → RSD only
