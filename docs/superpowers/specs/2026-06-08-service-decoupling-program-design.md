@@ -108,7 +108,7 @@ per transfer collapses into local replica reads (SP-3) — eliminating the chatt
 |---|---|---|
 | **SP-0** | **Middle-man audit** — sweep all gateway routes + cross-service calls for pass-through owners beyond the known blueprint case. Produce a findings list; fold fixes into the relevant SP. | P2 |
 | **SP-1** | **client-profile replica** (name, email, jmbg, status) consumed by credit, card, account, interbank, stock. Requires a `ClientUpsertMessage` (enrich `client.created`/`client.updated` to full state + version). | P1 |
-| **SP-2** | **employee+limits replica** (name, role, MaxLoanApproval, MaxClient*Limit, actuary) consumed by credit (approval gate), stock (actuary), and **client-service (the `MaxClientDailyLimit`/`MaxClientMonthlyLimit` cap when setting client limits — replaces the `client → user` read)**. Requires enriching `user.employee-updated` / `user.employee-limits-updated` / `user.actuary-limit-updated` to carry values + version. **Eventual + fallback** (money-adjacent staleness accepted; few-second window on a limit decrease, bounded by event lag, healed on miss). | P1 |
+| **SP-2** | **employee+limits replica** (name, role, permissions, MaxLoanApproval, MaxClient*Limit, actuary) consumed by credit (approval gate), stock (actuary), **client-service (the `MaxClientDailyLimit`/`MaxClientMonthlyLimit` cap when setting client limits — replaces the `client → user` read)**, and **auth-service (employee roles/permissions/name for JWT minting on every login/refresh — see SP-0 finding)**. Requires enriching `user.employee-updated` / `user.employee-limits-updated` / `user.actuary-limit-updated` to carry values + version. **Eventual + fallback** (money-adjacent staleness accepted; few-second window on a limit decrease, bounded by event lag, healed on miss). | P1 |
 | **SP-3** | **account-metadata replica** (number→id, owner_id, currency, kind, status) consumed by transaction, interbank, stock, credit (resolution reads only). **Balance/spending EXCLUDED** — stays authoritative in account-service; enforcement never reads the replica. | P1 + P3 |
 | **SP-4** | **client-limit ownership → client-service only.** Remove `applyClientBlueprint`'s `SetClientLimits` cross-call. Client-limit blueprints are applied by **client-service directly** (gateway → client-service), **never over user-service**, with **no events for the write**. user-service keeps employee/actuary blueprints. | P2 |
 | **SP-5** | **client-limit → account-limit propagation.** `client.limits-updated` (enriched w/ values + version) → **account-service consumes → applies the policy as per-account DailyLimit/MonthlyLimit caps for all that client's accounts.** Makes the dead client-limit feature enforced, event-driven. Also collapses the `client → user` cap read into SP-2's replica (client-service reads the employee cap locally when setting client limits). | P1 + P2 |
@@ -165,7 +165,41 @@ Each SP is its own spec → plan → implementation cycle. Per CLAUDE.md: bump `
 `Specification.md` (Kafka topics §19, message types, entities §18, gRPC §11), Swagger, and
 `docs/api/REST_API_v3.md` for any route change (SP-4 touches a route).
 
-## 10. Out of scope
+## 10. SP-0 audit findings (completed 2026-06-08)
+
+Swept every cross-service call and gateway route for misplaced ownership / pass-through middle-men.
+
+**Write middle-men (cross-domain writes — the true ownership smell):**
+
+- **Exactly one:** `user-service → client.SetClientLimits` via `BlueprintService.applyClientBlueprint`
+  (client-type blueprints). → **SP-4.** Decision for the SP-4 plan: client-type limit blueprints
+  should be **owned by client-service** (gateway → client-service directly to define *and* apply them),
+  removing user-service from client limits entirely; user-service keeps employee/actuary blueprints.
+  (Alternative — gateway reads the blueprint values from user-service then calls
+  `client.SetClientLimits` directly — still removes user-service as the *executor* but leaves client
+  templates in user-service; rejected as less aligned with "client-service is the sole manager.")
+- **Not middle-men (legitimate cross-service commands, leave as-is):**
+  `stock → account.CreateBankAccount` (fund provisioning — stock owns the fund, adds its own logic);
+  `credit/transaction/stock → account.UpdateBalance/Reserve/...` (money-movement saga commands —
+  account owns the ledger and exposes mutation RPCs).
+
+**New reference-read edges found (fold into SP-2, the employee replica):**
+
+- **`auth-service → user.GetEmployee`** — fetches employee roles/permissions/name to mint JWT claims,
+  on **every login and refresh**. auth already consumes `user.employee-created`, so the consumer
+  scaffolding exists. → **Add auth-service as a consumer of the SP-2 employee replica.** This is the
+  hottest of the employee reads and the highest-value addition surfaced by the audit.
+- **`verification-service → auth.CheckBiometricsEnabled`** — reads an auth-owned, rarely-changing
+  biometrics-enabled flag during challenge creation. → **Low priority:** a small `account_flags`
+  replica in verification fed by an enriched auth account event; defer unless cheap to include
+  alongside SP-2. Not a middle-man.
+
+**Confirmed exempt:** interbank-service's middle-man role for all SI-TX (protocol frozen).
+
+**Net:** the audit confirms the program scope — one ownership fix (SP-4) plus the read-model
+denormalization (SP-1/2/3), with SP-2 extended to cover auth-service's token-minting read.
+
+## 11. Out of scope
 
 - Command/money-movement edges (saga-based, stay synchronous).
 - interbank-service middle-man role (frozen SI-TX protocol).
