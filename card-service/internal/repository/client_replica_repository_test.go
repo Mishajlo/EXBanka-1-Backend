@@ -54,3 +54,58 @@ func TestClientReplicaRepo_GetMissing(t *testing.T) {
 		t.Fatalf("expected error for missing replica")
 	}
 }
+
+// TestClientReplicaRepo_EqualVersionIgnored verifies that an Upsert with the
+// same Version as the stored row is a no-op (equal version must not overwrite).
+func TestClientReplicaRepo_EqualVersionIgnored(t *testing.T) {
+	repo := NewClientReplicaRepository(newReplicaDB(t))
+	ctx := context.Background()
+
+	// Seed a row at version 2.
+	if err := repo.Upsert(ctx, model.ClientReplica{ID: 1, Email: "v2@b.com", FirstName: "A", LastName: "B", Version: 2}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Upsert with the same version — must be ignored even though email differs.
+	if err := repo.Upsert(ctx, model.ClientReplica{ID: 1, Email: "equal@b.com", Version: 2}); err != nil {
+		t.Fatalf("equal-version upsert: %v", err)
+	}
+
+	got, err := repo.GetByID(ctx, 1)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Email != "v2@b.com" {
+		t.Fatalf("equal-version upsert overwrote stored row: got email %q, want %q", got.Email, "v2@b.com")
+	}
+}
+
+// TestClientReplicaRepo_PersistsVersionOnUpdate verifies that after a
+// higher-version Upsert, the stored Version reflects the new value.
+// This guards against accidentally dropping "Version" from the Select allow-list,
+// which would leave the row at its old version and break future ordering.
+func TestClientReplicaRepo_PersistsVersionOnUpdate(t *testing.T) {
+	repo := NewClientReplicaRepository(newReplicaDB(t))
+	ctx := context.Background()
+
+	// Seed version 1.
+	if err := repo.Upsert(ctx, model.ClientReplica{ID: 1, Email: "v1@b.com", FirstName: "A", LastName: "B", Version: 1}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Upsert a full snapshot at version 5.
+	if err := repo.Upsert(ctx, model.ClientReplica{ID: 1, Email: "v5@b.com", FirstName: "A", LastName: "B", Version: 5}); err != nil {
+		t.Fatalf("upsert v5: %v", err)
+	}
+
+	got, err := repo.GetByID(ctx, 1)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Email != "v5@b.com" {
+		t.Fatalf("email not updated: got %q, want %q", got.Email, "v5@b.com")
+	}
+	if got.Version != int64(5) {
+		t.Fatalf("version not persisted: got %d, want 5 — did someone drop \"Version\" from the Select allow-list?", got.Version)
+	}
+}

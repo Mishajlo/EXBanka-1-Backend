@@ -24,6 +24,13 @@ func NewClientReplicaRepository(db *gorm.DB) *ClientReplicaRepository {
 // Upsert applies an event-sourced client state, but ONLY if its Version is
 // strictly greater than the stored row's Version (monotonic; tolerates
 // out-of-order / duplicate Kafka delivery). A first insert always wins.
+//
+// CONTRACT: the caller MUST pass a full client snapshot (all profile fields
+// populated). The version-guarded update uses Select to force-write the chosen
+// columns — including zero values — so a partial or empty field will silently
+// overwrite stored data with blanks. client-service satisfies this by
+// publishing the complete client record in every client.created / client.updated
+// event; any future producer MUST do the same.
 func (r *ClientReplicaRepository) Upsert(ctx context.Context, in model.ClientReplica) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing model.ClientReplica
