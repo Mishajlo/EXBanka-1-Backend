@@ -1168,6 +1168,14 @@ func main() {
 			if err := service.MigrateWatchlistsToNamedLists(db, watchlistRepo); err != nil {
 				log.Printf("WARN: watchlist named-list migration failed: %v", err)
 			}
+			// Fix NULL-owner duplicate watchlists: dedup existing dups and
+			// enforce uniqueness via a partial index. Idempotent — safe on
+			// every startup. Must run after MigrateWatchlistsToNamedLists so
+			// any items created by that migration are already in a consistent
+			// state before we attempt dedup.
+			if err := service.DedupeWatchlistsAndEnforceUniqueness(db); err != nil {
+				log.Printf("WARN: watchlist dedup/uniqueness migration failed: %v", err)
+			}
 			watchlistSvc := service.NewWatchlistService(watchlistRepo, listingRepo, stockRepo, optionRepo, futuresRepo, forexRepo)
 			pb.RegisterWatchlistServiceServer(s, handler.NewWatchlistHandler(watchlistSvc))
 			priceAlertRepo := repository.NewPriceAlertRepository(db)
