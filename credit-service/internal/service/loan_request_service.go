@@ -135,8 +135,12 @@ func (s *LoanRequestService) resolveMaxLoanApproval(ctx context.Context, employe
 }
 
 func parseDecimalOrZeroLR(s string) decimal.Decimal {
+	if s == "" {
+		return decimal.Zero
+	}
 	d, err := decimal.NewFromString(s)
 	if err != nil {
+		log.Printf("LoanRequestService: unparseable employee-limit decimal %q, treating as zero: %v", s, err)
 		return decimal.Zero
 	}
 	return d
