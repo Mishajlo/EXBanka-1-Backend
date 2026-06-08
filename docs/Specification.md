@@ -1844,6 +1844,14 @@ UniqueIndex: (reference, direction)
 
 ### Card Service (card_db)
 
+**ClientReplica** (SP-1 service-decoupling, 2026-06-08) — NON-AUTHORITATIVE local read-model of a client's profile, maintained by card-service to avoid synchronous `GetClient` RPCs on the card-status notification path. Fed by `client.created` and `client.updated` Kafka events (consumer group `card-service-client-replica`). On cache miss, card-service falls back to a synchronous `GetClient` gRPC call and backfills the replica.
+```
+ID(uint64, PK, no autoincrement — == client-service Client.ID),
+Email, FirstName, LastName, JMBG(size:13),
+Version(int64) — source Client.Version; ordering guard (stale events are ignored),
+UpdatedAt
+```
+
 **Card**
 ```
 ID(uint64), CardNumber(unique,masked), CardNumberFull, CVV,
@@ -2204,8 +2212,8 @@ Written by the notification-service `admin_audit_consumer` consuming `admin.cron
 | `user.limit-template-deleted` | user-service | (consumers) | LimitTemplateMessage |
 | `user.client-limits-updated` | user-service | (consumers) | ClientLimitsUpdatedMessage |
 | `user.role-permissions-changed` | user-service | auth-service | RolePermissionsChangedMessage |
-| `client.created` | client-service | notification-service | ClientCreatedMessage |
-| `client.updated` | client-service | (consumers) | (generic) |
+| `client.created` | client-service | notification-service, card-service | ClientCreatedMessage |
+| `client.updated` | client-service | card-service | ClientCreatedMessage (full snapshot) |
 | `account.created` | account-service | notification-service | AccountCreatedMessage |
 | `account.status-changed` | account-service | (consumers) | (generic) |
 | `account.name-updated` | account-service | (consumers) | AccountNameUpdatedMessage |
@@ -2290,6 +2298,9 @@ Published to `notification.general` by various services. notification-service co
 - **E — OTC contract expiring soon:** the OTC expiry cron gained an expiring-soon pass (`OptionContractRepository.ListExpiringOn`) that warns both client parties `OTC_CONTRACT_EXPIRING_SOON` when a contract settles exactly `OTC_EXPIRY_WARNING_DAYS` (default 3) out. New `OTC_CONTRACT_EXPIRING_SOON` push template. Intra-bank contracts only.
 - **D2 (card block) and D3 (loan created/approved)** were already covered by existing card-service / credit-service notifications — no change.
 - **H — order auto-cancel-on-settlement-expiry: DEFERRED.** Stock orders have no `settlement_date` and there is no order-expiry mechanism to notify on; building one is a feature beyond notification scope. OTC offer/contract expiry already notify (`OTC_OFFER_EXPIRED`/`OTC_CONTRACT_EXPIRED`).
+
+**SP-1 service-decoupling: enriched `ClientCreatedMessage` + card-service `ClientReplica` (2026-06-08):**
+`ClientCreatedMessage` (published on both `client.created` and `client.updated`) was enriched with two new fields: `jmbg` (string) and `version` (int64, source `Client.Version`), so it now carries the full client snapshot. card-service consumes both topics via consumer group `card-service-client-replica` and maintains the `ClientReplica` read-model (§18 Card Service). Upsert is version-guarded: a message with a lower version than the stored row is silently dropped to prevent stale overwrites. The card-status notification path resolves the owner email from the replica first; on a miss it falls back to a synchronous `GetClient` gRPC call and backfills the replica. This is the first slice of the service-decoupling program (SP-1, client-profile replica, card-service slice).
 
 ### Email Types (SendEmailMessage.EmailType)
 
