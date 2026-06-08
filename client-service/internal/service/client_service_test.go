@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/exbanka/client-service/internal/model"
+	kafkamsg "github.com/exbanka/contract/kafka"
 	userpb "github.com/exbanka/contract/userpb"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -13,6 +14,27 @@ import (
 	"google.golang.org/grpc"
 	"gorm.io/gorm"
 )
+
+// ---------------------------------------------------------------------------
+// Mock clientEventProducer
+// ---------------------------------------------------------------------------
+
+type mockClientProducer struct {
+	lastCreated *kafkamsg.ClientCreatedMessage
+	lastUpdated *kafkamsg.ClientCreatedMessage
+}
+
+func (m *mockClientProducer) PublishClientCreated(_ context.Context, msg kafkamsg.ClientCreatedMessage) error {
+	cp := msg
+	m.lastCreated = &cp
+	return nil
+}
+
+func (m *mockClientProducer) PublishClientUpdated(_ context.Context, msg kafkamsg.ClientCreatedMessage) error {
+	cp := msg
+	m.lastUpdated = &cp
+	return nil
+}
 
 // ---------------------------------------------------------------------------
 // Validation tests (unchanged from original)
@@ -664,4 +686,38 @@ func TestSetClientLimits_EmployeeSvcError(t *testing.T) {
 	_, err := svc.SetClientLimits(context.Background(), limit, 0)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEmployeeLookupFailed)
+}
+
+// ---------------------------------------------------------------------------
+// Kafka publish payload tests
+// ---------------------------------------------------------------------------
+
+func TestCreateClient_PublishesJMBGAndVersion(t *testing.T) {
+	repo := newMockClientRepo()
+	prod := &mockClientProducer{}
+	svc := NewClientService(repo, prod, nil)
+
+	c := validClient()
+	// validClient() sets JMBG = "0101990710024"; after repo.Create Version will be 0 (default)
+	require.NoError(t, svc.CreateClient(context.Background(), c))
+
+	require.NotNil(t, prod.lastCreated, "ClientCreatedMessage must be published")
+	assert.Equal(t, c.JMBG, prod.lastCreated.JMBG, "JMBG must be in published message")
+	assert.Equal(t, c.Version, prod.lastCreated.Version, "Version must be in published message")
+}
+
+func TestUpdateClient_PublishesJMBGAndVersion(t *testing.T) {
+	repo := newMockClientRepo()
+	prod := &mockClientProducer{}
+	svc := NewClientService(repo, prod, nil)
+
+	c := validClient()
+	require.NoError(t, svc.CreateClient(context.Background(), c))
+
+	updated, err := svc.UpdateClient(c.ID, map[string]interface{}{"first_name": "Jane"}, 0)
+	require.NoError(t, err)
+
+	require.NotNil(t, prod.lastUpdated, "ClientCreatedMessage (update) must be published")
+	assert.Equal(t, updated.JMBG, prod.lastUpdated.JMBG, "JMBG must be in updated message")
+	assert.Equal(t, updated.Version, prod.lastUpdated.Version, "Version must be in updated message")
 }
