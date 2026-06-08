@@ -2635,6 +2635,8 @@ The api-gateway maps gRPC status codes to HTTP via `api-gateway/internal/handler
 
 Email-not-found and bcrypt-mismatch deliberately collapse to the same `ErrInvalidCredentials` sentinel for security (prevents email enumeration). All other failure modes are distinct.
 
+**Standardization audit (2026-06-08):** a sweep confirmed all services return `svcerr`-coded errors across the gRPC boundary. stock-service was brought into full conformance — bare `errors.New` returns that were mapping to HTTP 500 now use the correct codes: listing-not-found → `NotFound` (404); OTC business-rule rejections (terminal-state, self-counter/accept, settlement-not-future, accounts-not-bound) → `FailedPrecondition` (409); and `otc_service` debit/credit failures now wrap the account-service error with `%w` so its code (e.g. insufficient-balance `FailedPrecondition`) is preserved instead of being flattened to 500. Gateway websocket and rate-limit responses were standardized onto `apiError`/`abortWithError`. (cross-bank-protocol error responses are intentionally exempt and unchanged.)
+
 ### 21.2 Cross-Service Saga Coordination
 
 Sagas that span multiple services (most stock-service crossbank/OTC/fund sagas, transaction-service inter-bank transfers) coordinate via three guarantees. Together they make distributed steps safe to retry on transient failure, debuggable via single-key joins across services, and durable across crashes between business commit and Kafka publish.
