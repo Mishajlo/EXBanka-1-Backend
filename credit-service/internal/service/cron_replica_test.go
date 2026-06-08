@@ -5,7 +5,11 @@ import (
 	"errors"
 	"testing"
 
+	"google.golang.org/grpc"
+
+	clientpb "github.com/exbanka/contract/clientpb"
 	"github.com/exbanka/credit-service/internal/model"
+	"github.com/exbanka/credit-service/internal/repository"
 )
 
 // fakeClientReplicaReader is a test double for clientReplicaReader.
@@ -30,33 +34,22 @@ func (f *fakeClientReplicaReader) Upsert(_ context.Context, in model.ClientRepli
 	return f.upsertErr
 }
 
-// fakeGetClientClient is a mock clientpb.ClientServiceClient that records calls
-// and returns a canned response. Only GetClient is used by CronService.
-type fakeGetClientClient struct {
-	email     string
-	firstName string
-	lastName  string
-	jmbg      string
-	err       error
-	calls     int
+// stubGetClientClient embeds clientpb.ClientServiceClient and overrides only
+// GetClient — the only method CronService.resolveClientEmail calls.
+type stubGetClientClient struct {
+	clientpb.ClientServiceClient // satisfy all other methods via embedding
+	response                     *clientpb.ClientResponse
+	err                          error
+	calls                        int
 }
 
-func (f *fakeGetClientClient) GetClient(_ context.Context, _ interface{}, _ ...interface{}) (interface{}, error) {
-	return nil, nil
+func (s *stubGetClientClient) GetClient(_ context.Context, _ *clientpb.GetClientRequest, _ ...grpc.CallOption) (*clientpb.ClientResponse, error) {
+	s.calls++
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.response, nil
 }
-
-// mockCronClientClient satisfies clientpb.ClientServiceClient (stub — only GetClient is called).
-type mockCronClientClient struct {
-	email string
-	err   error
-	calls int
-}
-
-// We implement the interface inline using the same approach as other test mocks
-// in this codebase. The interface lives in the generated clientpb package;
-// we satisfy it with a minimal embedding + GetClient override.
-// This avoids importing the full generated stub just for a unit test.
-// Instead, we use the clientReplicaReader-only path tested via resolveClientEmail directly.
 
 // TestResolveClientEmail_ReplicaHit verifies that when the replica contains
 // the client's profile, resolveClientEmail returns the email without calling gRPC.
@@ -93,5 +86,40 @@ func TestResolveClientEmail_ReplicaMiss_NilClientClient(t *testing.T) {
 	email := cron.resolveClientEmail(context.Background(), 99)
 	if email != "" {
 		t.Fatalf("expected empty string when gRPC client is nil, got %q", email)
+	}
+}
+
+// TestResolveClientEmail_ReplicaMiss_FallbackAndBackfill verifies the SP-1
+// hybrid lazy-fallback path: replica miss → single GetClient gRPC call →
+// backfill replica at Version 0 → return live email.
+func TestResolveClientEmail_ReplicaMiss_FallbackAndBackfill(t *testing.T) {
+	const clientID = uint64(7)
+	replica := &fakeClientReplicaReader{
+		getErr: repository.ErrClientReplicaNotFound,
+	}
+	stub := &stubGetClientClient{
+		response: &clientpb.ClientResponse{
+			Id:        clientID,
+			Email:     "live@x.com",
+			FirstName: "L",
+			LastName:  "C",
+			Jmbg:      "123",
+		},
+	}
+	cron := &CronService{clientReplicaRepo: replica, clientClient: stub}
+
+	email := cron.resolveClientEmail(context.Background(), clientID)
+
+	if email != "live@x.com" {
+		t.Fatalf("expected live@x.com, got %q", email)
+	}
+	if stub.calls != 1 {
+		t.Fatalf("expected exactly 1 gRPC GetClient call, got %d", stub.calls)
+	}
+	if replica.upsertCalls != 1 {
+		t.Fatalf("expected exactly 1 replica Upsert (backfill), got %d", replica.upsertCalls)
+	}
+	if replica.upsertLast.Email != "live@x.com" {
+		t.Fatalf("backfilled email mismatch: got %q", replica.upsertLast.Email)
 	}
 }
