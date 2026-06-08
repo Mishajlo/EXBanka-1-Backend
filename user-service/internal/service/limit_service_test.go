@@ -291,8 +291,12 @@ func (r *versionedLimitRepo) Delete(employeeID int64) error {
 }
 
 func (r *versionedLimitRepo) Upsert(limit *model.EmployeeLimit) error {
-	// Simulate DB assigning version=1 on first upsert.
-	if limit.Version == 0 {
+	// Simulate DB-side monotonic version: version=1 on first insert, version+1 on
+	// each subsequent conflict-update — matching the ON CONFLICT DO UPDATE behaviour
+	// in EmployeeLimitRepository.Upsert after the SP-2 fix.
+	if existing, ok := r.limits[limit.EmployeeID]; ok {
+		limit.Version = existing.Version + 1
+	} else {
 		limit.Version = 1
 	}
 	r.limits[limit.EmployeeID] = limit
@@ -333,6 +337,15 @@ func TestSetEmployeeLimits_PublishesFullSnapshot(t *testing.T) {
 	if msg.MaxLoanApprovalAmount != result.MaxLoanApprovalAmount.StringFixed(4) {
 		t.Errorf("MaxLoanApprovalAmount: want %q, got %q", result.MaxLoanApprovalAmount.StringFixed(4), msg.MaxLoanApprovalAmount)
 	}
+	if msg.MaxSingleTransaction != result.MaxSingleTransaction.StringFixed(4) {
+		t.Errorf("MaxSingleTransaction: want %q, got %q", result.MaxSingleTransaction.StringFixed(4), msg.MaxSingleTransaction)
+	}
+	if msg.MaxDailyTransaction != result.MaxDailyTransaction.StringFixed(4) {
+		t.Errorf("MaxDailyTransaction: want %q, got %q", result.MaxDailyTransaction.StringFixed(4), msg.MaxDailyTransaction)
+	}
+	if msg.MaxClientDailyLimit != result.MaxClientDailyLimit.StringFixed(4) {
+		t.Errorf("MaxClientDailyLimit: want %q, got %q", result.MaxClientDailyLimit.StringFixed(4), msg.MaxClientDailyLimit)
+	}
 	if msg.MaxClientMonthlyLimit != result.MaxClientMonthlyLimit.StringFixed(4) {
 		t.Errorf("MaxClientMonthlyLimit: want %q, got %q", result.MaxClientMonthlyLimit.StringFixed(4), msg.MaxClientMonthlyLimit)
 	}
@@ -370,6 +383,15 @@ func TestApplyTemplate_PublishesFullSnapshot(t *testing.T) {
 	}
 	if msg.MaxLoanApprovalAmount != result.MaxLoanApprovalAmount.StringFixed(4) {
 		t.Errorf("MaxLoanApprovalAmount: want %q, got %q", result.MaxLoanApprovalAmount.StringFixed(4), msg.MaxLoanApprovalAmount)
+	}
+	if msg.MaxSingleTransaction != result.MaxSingleTransaction.StringFixed(4) {
+		t.Errorf("MaxSingleTransaction: want %q, got %q", result.MaxSingleTransaction.StringFixed(4), msg.MaxSingleTransaction)
+	}
+	if msg.MaxDailyTransaction != result.MaxDailyTransaction.StringFixed(4) {
+		t.Errorf("MaxDailyTransaction: want %q, got %q", result.MaxDailyTransaction.StringFixed(4), msg.MaxDailyTransaction)
+	}
+	if msg.MaxClientDailyLimit != result.MaxClientDailyLimit.StringFixed(4) {
+		t.Errorf("MaxClientDailyLimit: want %q, got %q", result.MaxClientDailyLimit.StringFixed(4), msg.MaxClientDailyLimit)
 	}
 	if msg.MaxClientMonthlyLimit != result.MaxClientMonthlyLimit.StringFixed(4) {
 		t.Errorf("MaxClientMonthlyLimit: want %q, got %q", result.MaxClientMonthlyLimit.StringFixed(4), msg.MaxClientMonthlyLimit)

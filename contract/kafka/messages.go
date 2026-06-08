@@ -259,7 +259,7 @@ type EmployeeLimitsUpdatedMessage struct {
 	MaxDailyTransaction   string `json:"max_daily_transaction,omitempty"`
 	MaxClientDailyLimit   string `json:"max_client_daily_limit,omitempty"`
 	MaxClientMonthlyLimit string `json:"max_client_monthly_limit,omitempty"`
-	Version               int64  `json:"version,omitempty"`
+	Version               int64  `json:"version"`
 }
 
 // LimitTemplateMessage is published when a limit template is created, updated, or deleted.
