@@ -13,6 +13,7 @@ import (
 
 	"github.com/exbanka/account-service/internal/cache"
 	"github.com/exbanka/account-service/internal/config"
+	"github.com/exbanka/account-service/internal/consumer"
 	"github.com/exbanka/account-service/internal/handler"
 	kafkaprod "github.com/exbanka/account-service/internal/kafka"
 	"github.com/exbanka/account-service/internal/model"
@@ -80,6 +81,7 @@ func main() {
 		"notification.send-email",
 		"notification.general",
 		"admin.cron-action",
+		"client.limits-updated",
 	)
 
 	var redisCache *cache.RedisCache
@@ -115,6 +117,7 @@ func main() {
 	incomingReservationRepo := repository.NewIncomingReservationRepository(db)
 	outgoingReservationRepo := repository.NewOutgoingReservationRepository(db)
 	idempRepo := repository.NewIdempotencyRepository(db)
+	clientLimitPolicyRepo := repository.NewClientLimitPolicyRepository(db)
 
 	accountService := service.NewAccountService(accountRepo, db, redisCache, changelogRepo).
 		WithEvents(producer).WithClientLookup(clientClient)
@@ -129,6 +132,11 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// SP-5: consume client.limits-updated and propagate to per-account caps.
+	clientLimitConsumer := consumer.NewClientLimitConsumer(cfg.KafkaBrokers, clientLimitPolicyRepo, accountService)
+	clientLimitConsumer.Start(ctx)
+	defer clientLimitConsumer.Close()
 
 	spendingCron := service.NewSpendingCronService(accountRepo, cronRegistry)
 	spendingCron.Start(ctx)

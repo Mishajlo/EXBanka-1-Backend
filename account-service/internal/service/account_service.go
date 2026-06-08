@@ -454,6 +454,39 @@ func (s *AccountService) UpdateSpending(accountNumber string, amount decimal.Dec
 	return s.repo.UpdateSpending(accountNumber, amount)
 }
 
+// ApplyClientLimitPolicy propagates a client's limit policy (SP-5) to every
+// non-bank account the client owns, setting each account's DailyLimit/MonthlyLimit.
+// Zero/non-positive policy values are skipped (UpdateAccountLimits rejects them).
+// Idempotent: re-applying the same values is a no-op-ish safe write.
+func (s *AccountService) ApplyClientLimitPolicy(ctx context.Context, clientID uint64, daily, monthly decimal.Decimal, changedBy int64) error {
+	accounts, err := s.repo.ListNonBankByOwner(clientID)
+	if err != nil {
+		return fmt.Errorf("ApplyClientLimitPolicy(client=%d): list accounts: %w", clientID, err)
+	}
+	var dailyPtr, monthlyPtr *string
+	if daily.IsPositive() {
+		d := daily.StringFixed(4)
+		dailyPtr = &d
+	}
+	if monthly.IsPositive() {
+		m := monthly.StringFixed(4)
+		monthlyPtr = &m
+	}
+	if dailyPtr == nil && monthlyPtr == nil {
+		return nil // nothing positive to apply
+	}
+	var firstErr error
+	for _, acct := range accounts {
+		if err := s.UpdateAccountLimits(acct.ID, dailyPtr, monthlyPtr, changedBy); err != nil {
+			log.Printf("ApplyClientLimitPolicy(client=%d, account=%d): %v", clientID, acct.ID, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr // non-nil if any account failed → consumer retries (idempotent re-apply)
+}
+
 // invalidateAccountCache removes an account from Redis cache by ID and/or number.
 func (s *AccountService) invalidateAccountCache(id uint64, accountNumber string) {
 	evictAccountCache(s.cache, id, accountNumber)
