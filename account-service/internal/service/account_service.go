@@ -31,8 +31,9 @@ type AccountService struct {
 	bankRepo      *repository.BankAccountRepository
 	db            *gorm.DB
 	cache         *cache.RedisCache
-	events        eventPublisher // optional; nil → no event publishing
-	clients       clientLookup   // optional; nil → skip account-created email
+	events        eventPublisher      // optional; nil → no event publishing
+	clients       clientLookup        // optional; nil → skip account-created email (gRPC fallback)
+	clientReplica clientReplicaReader // optional; nil → skip replica lookup (SP-1)
 }
 
 func NewAccountService(repo *repository.AccountRepository, db *gorm.DB, redisCache *cache.RedisCache, changelogRepo ...*repository.ChangelogRepository) *AccountService {
