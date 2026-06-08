@@ -1984,6 +1984,16 @@ FixedRate(decimal10,4), VariableBase(decimal10,4), Active(bool), CreatedAt, Upda
 ID(uint64), LoanType(unique), Margin(decimal10,4), Active(bool), CreatedAt, UpdatedAt
 ```
 
+**EmployeeLimitReplica** (SP-2 service-decoupling, 2026-06-08) — NON-AUTHORITATIVE local read-model of an employee's approval limits, maintained by credit-service to avoid synchronous `GetEmployeeLimits` RPCs on the loan-approval gate. Fed by `user.employee-limits-updated` events (consumer group `credit-service-employee-limit-replica`). Upsert is version-guarded: a message whose `Version` is ≤ the stored row's `Version` is silently dropped to prevent stale overwrites. On a cache miss the approval gate falls back to a synchronous `GetEmployeeLimits` gRPC call and backfills the replica at `Version=0` (a later versioned event will overwrite it). Only `MaxLoanApprovalAmount` is actively enforced; the other four limit fields are stored for future gate expansion.
+```
+EmployeeID(uint64, PK — no autoincrement; == user-service EmployeeLimit.EmployeeID),
+MaxLoanApprovalAmount(numeric18,4), MaxSingleTransaction(numeric18,4),
+MaxDailyTransaction(numeric18,4), MaxClientDailyLimit(numeric18,4),
+MaxClientMonthlyLimit(numeric18,4),
+Version(int64) — source EmployeeLimit.Version; ordering guard (stale events are dropped),
+UpdatedAt
+```
+
 ### Exchange Service (exchange_db)
 
 **ExchangeRate**
@@ -2301,6 +2311,9 @@ Published to `notification.general` by various services. notification-service co
 
 **SP-1 service-decoupling: enriched `ClientCreatedMessage` + card-service `ClientReplica` (2026-06-08):**
 `ClientCreatedMessage` (published on both `client.created` and `client.updated`) was enriched with two new fields: `jmbg` (string) and `version` (int64, source `Client.Version`), so it now carries the full client snapshot. card-service consumes both topics via consumer group `card-service-client-replica` and maintains the `ClientReplica` read-model (§18 Card Service). Upsert is version-guarded: a message with a lower version than the stored row is silently dropped to prevent stale overwrites. The card-status notification path resolves the owner email from the replica first; on a miss it falls back to a synchronous `GetClient` gRPC call and backfills the replica. This is the first slice of the service-decoupling program (SP-1, client-profile replica, card-service slice).
+
+**SP-2 service-decoupling: `EmployeeLimitsUpdatedMessage` enrichment + credit-service `EmployeeLimitReplica` (2026-06-08):**
+`EmployeeLimitsUpdatedMessage` (published on `user.employee-limits-updated` by user-service whenever `SetEmployeeLimits` or `ApplyLimitTemplate` is called) was enriched to carry the FULL limit snapshot (`MaxLoanApprovalAmount`, `MaxSingleTransaction`, `MaxDailyTransaction`, `MaxClientDailyLimit`, `MaxClientMonthlyLimit` as `StringFixed(4)` decimal strings) plus a monotonic `Version` field (source `EmployeeLimit.Version`, incremented on every upsert). `EmployeeLimit.Version` now increments on every `SetEmployeeLimits` / `ApplyLimitTemplate` call in user-service. credit-service consumes the topic via consumer group `credit-service-employee-limit-replica` and maintains the `EmployeeLimitReplica` read-model (§18 Credit Service). The loan-approval gate in `LoanRequestService.ApproveLoanRequest` reads `MaxLoanApprovalAmount` from the replica first; on a miss it falls back to a synchronous `GetEmployeeLimits` gRPC call and backfills the replica at `Version=0` (a later versioned event will overwrite it). An approval whose amount exceeds the employee's limit returns `ErrAmountExceedsApprovalLimit` (gRPC `FailedPrecondition` → HTTP 409 `business_rule_violation`). This is the second slice of the service-decoupling program (SP-2, employee-limit replica, credit-service slice).
 
 ### Email Types (SendEmailMessage.EmailType)
 
