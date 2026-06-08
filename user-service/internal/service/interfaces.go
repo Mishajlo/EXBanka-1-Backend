@@ -120,3 +120,10 @@ type LimitBlueprintRepo interface {
 type ClientLimitClient interface {
 	SetClientLimits(ctx context.Context, clientID int64, dailyLimit, monthlyLimit, transferLimit string, setByEmployee int64) error
 }
+
+// LimitEventPublisher is the narrow Kafka surface LimitService needs.
+// An interface (not the concrete producer) so publish paths are unit-testable.
+type LimitEventPublisher interface {
+	PublishEmployeeLimitsUpdated(ctx context.Context, msg kafkamsg.EmployeeLimitsUpdatedMessage) error
+	PublishLimitTemplate(ctx context.Context, msg kafkamsg.LimitTemplateMessage) error
+}
