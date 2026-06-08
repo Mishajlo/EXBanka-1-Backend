@@ -109,6 +109,8 @@ type ClientCreatedMessage struct {
 	Email     string `json:"email"`
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
+	JMBG      string `json:"jmbg,omitempty"`
+	Version   int64  `json:"version,omitempty"`
 }
 
 type AccountCreatedMessage struct {

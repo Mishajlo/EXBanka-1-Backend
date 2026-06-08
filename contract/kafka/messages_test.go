@@ -5,6 +5,24 @@ import (
 	"testing"
 )
 
+func TestClientCreatedMessage_CarriesJMBGAndVersion(t *testing.T) {
+	in := ClientCreatedMessage{
+		ClientID: 7, Email: "a@b.com", FirstName: "Ana", LastName: "Anic",
+		JMBG: "1234567890123", Version: 5,
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out ClientCreatedMessage
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.JMBG != "1234567890123" || out.Version != 5 {
+		t.Fatalf("lost fields: %+v", out)
+	}
+}
+
 func TestGeneralNotificationMessage_DataRoundTrip(t *testing.T) {
 	msg := GeneralNotificationMessage{
 		UserID:  42,
