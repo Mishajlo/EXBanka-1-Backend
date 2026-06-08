@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/exbanka/client-service/internal/model"
+	"github.com/exbanka/client-service/internal/repository"
 	kafkamsg "github.com/exbanka/contract/kafka"
 	userpb "github.com/exbanka/contract/userpb"
+	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -727,4 +729,43 @@ func TestUpdateClient_PublishesJMBGAndVersion(t *testing.T) {
 	require.NotNil(t, prod.lastUpdated, "ClientCreatedMessage (update) must be published")
 	assert.Equal(t, updated.JMBG, prod.lastUpdated.JMBG, "JMBG must be in updated message")
 	assert.Equal(t, int64(9), prod.lastUpdated.Version, "Version must be in updated message")
+}
+
+// ---------------------------------------------------------------------------
+// Real-DB version sequence test (guards replica ordering invariant)
+// ---------------------------------------------------------------------------
+
+// TestClient_VersionSequence_CreateThenUpdate_RealDB pins the load-bearing
+// invariant that SP-1 replica consumers depend on: a freshly-created client
+// row must carry Version=1 (driven by the GORM column default), and the first
+// update must carry Version=2 (driven by the BeforeUpdate hook increment).
+//
+// This test intentionally wires a real gorm.DB (in-memory SQLite) + a real
+// ClientRepository so the model's `default:1` tag and BeforeUpdate hook
+// actually fire — mock-repo tests cannot catch regressions here because they
+// bypass both mechanisms.
+func TestClient_VersionSequence_CreateThenUpdate_RealDB(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Client{}))
+
+	repo := repository.NewClientRepository(db)
+	prod := &mockClientProducer{}
+	svc := NewClientService(repo, prod, nil)
+
+	c := validClient()
+	// Do NOT set c.Version — let the DB column default drive it to 1.
+	c.Version = 0
+	require.NoError(t, svc.CreateClient(context.Background(), c))
+
+	require.NotNil(t, prod.lastCreated, "ClientCreatedMessage must be published on create")
+	assert.Equal(t, int64(1), prod.lastCreated.Version,
+		"create must publish Version=1 (model column default:1 must fire on real DB)")
+
+	_, err = svc.UpdateClient(c.ID, map[string]interface{}{"first_name": "Jane"}, 0)
+	require.NoError(t, err)
+
+	require.NotNil(t, prod.lastUpdated, "ClientCreatedMessage must be published on update")
+	assert.Equal(t, int64(2), prod.lastUpdated.Version,
+		"first update must publish Version=2 (BeforeUpdate hook must increment version on real DB)")
 }
