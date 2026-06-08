@@ -53,3 +53,23 @@ func TestGeneralNotificationMessage_DataRoundTrip(t *testing.T) {
 		t.Errorf("legacy round-trip mismatch: %+v", lgot)
 	}
 }
+
+func TestEmployeeLimitsUpdatedMessage_CarriesValuesAndVersion(t *testing.T) {
+	in := EmployeeLimitsUpdatedMessage{
+		EmployeeID: 9, Action: "set",
+		MaxLoanApprovalAmount: "50000.0000", MaxSingleTransaction: "10000.0000",
+		MaxDailyTransaction: "20000.0000", MaxClientDailyLimit: "5000.0000",
+		MaxClientMonthlyLimit: "100000.0000", Version: 4,
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out EmployeeLimitsUpdatedMessage
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.MaxLoanApprovalAmount != "50000.0000" || out.Version != 4 || out.MaxClientMonthlyLimit != "100000.0000" {
+		t.Fatalf("lost fields: %+v", out)
+	}
+}

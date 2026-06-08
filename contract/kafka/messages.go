@@ -248,9 +248,18 @@ type RolePermissionsChangedMessage struct {
 }
 
 // EmployeeLimitsUpdatedMessage is published when an employee's limits are set or updated.
+// Enriched (SP-2) to carry the FULL limit snapshot + monotonic Version so consumers
+// can maintain a local EmployeeLimitReplica without a synchronous GetEmployeeLimits read.
+// Decimal values are formatted strings (StringFixed(4)) to avoid float drift.
 type EmployeeLimitsUpdatedMessage struct {
-	EmployeeID int64  `json:"employee_id"`
-	Action     string `json:"action"` // "set" or "template_applied"
+	EmployeeID            int64  `json:"employee_id"`
+	Action                string `json:"action"` // "set" or "template_applied"
+	MaxLoanApprovalAmount string `json:"max_loan_approval_amount,omitempty"`
+	MaxSingleTransaction  string `json:"max_single_transaction,omitempty"`
+	MaxDailyTransaction   string `json:"max_daily_transaction,omitempty"`
+	MaxClientDailyLimit   string `json:"max_client_daily_limit,omitempty"`
+	MaxClientMonthlyLimit string `json:"max_client_monthly_limit,omitempty"`
+	Version               int64  `json:"version,omitempty"`
 }
 
 // LimitTemplateMessage is published when a limit template is created, updated, or deleted.
