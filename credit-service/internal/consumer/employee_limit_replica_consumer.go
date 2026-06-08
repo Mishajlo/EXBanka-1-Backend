@@ -46,15 +46,17 @@ func NewEmployeeLimitReplicaConsumer(brokers string, repo replicaUpserter) *Empl
 	return &EmployeeLimitReplicaConsumer{reader: r, repo: repo, backoff: defaultBackoff}
 }
 
-// parseDecimalOrZero parses s as a decimal. On empty string or parse error it
-// returns decimal.Zero — an empty limit field is a legitimate "no limit" value,
-// not a reason to drop the event.
+// parseDecimalOrZero parses s as a decimal. An empty string is a legitimate
+// "no limit set" value and returns decimal.Zero silently. A non-empty but
+// unparseable string is a producer-side data corruption and logs a warning
+// before returning decimal.Zero.
 func parseDecimalOrZero(s string) decimal.Decimal {
 	if s == "" {
 		return decimal.Zero
 	}
 	d, err := decimal.NewFromString(s)
 	if err != nil {
+		log.Printf("employee-limit-replica consumer: unparseable decimal %q, treating as zero: %v", s, err)
 		return decimal.Zero
 	}
 	return d

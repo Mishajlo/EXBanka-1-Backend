@@ -32,8 +32,14 @@ func TestHandleLimitEvent_UpsertsReplica(t *testing.T) {
 	repo := &fakeLimitReplicaRepo{}
 	c := &EmployeeLimitReplicaConsumer{repo: repo}
 	payload, _ := json.Marshal(kafkamsg.EmployeeLimitsUpdatedMessage{
-		EmployeeID: 42, Action: "set",
-		MaxLoanApprovalAmount: "50000.0000", MaxClientDailyLimit: "5000.0000", Version: 3,
+		EmployeeID:            42,
+		Action:                "set",
+		MaxLoanApprovalAmount: "50000.0000",
+		MaxSingleTransaction:  "10000.0000",
+		MaxDailyTransaction:   "20000.0000",
+		MaxClientDailyLimit:   "5000.0000",
+		MaxClientMonthlyLimit: "100000.0000",
+		Version:               3,
 	})
 	if err := c.handle(context.Background(), payload); err != nil {
 		t.Fatalf("handle: %v", err)
@@ -42,10 +48,31 @@ func TestHandleLimitEvent_UpsertsReplica(t *testing.T) {
 		t.Fatalf("bad upsert: %+v calls=%d", repo.last, repo.calls)
 	}
 	if !repo.last.MaxLoanApprovalAmount.Equal(decimal.RequireFromString("50000.0000")) {
-		t.Fatalf("bad MaxLoanApproval: %s", repo.last.MaxLoanApprovalAmount)
+		t.Fatalf("bad MaxLoanApprovalAmount: %s", repo.last.MaxLoanApprovalAmount)
+	}
+	if !repo.last.MaxSingleTransaction.Equal(decimal.RequireFromString("10000.0000")) {
+		t.Fatalf("bad MaxSingleTransaction: %s", repo.last.MaxSingleTransaction)
+	}
+	if !repo.last.MaxDailyTransaction.Equal(decimal.RequireFromString("20000.0000")) {
+		t.Fatalf("bad MaxDailyTransaction: %s", repo.last.MaxDailyTransaction)
 	}
 	if !repo.last.MaxClientDailyLimit.Equal(decimal.RequireFromString("5000.0000")) {
-		t.Fatalf("bad MaxClientDaily: %s", repo.last.MaxClientDailyLimit)
+		t.Fatalf("bad MaxClientDailyLimit: %s", repo.last.MaxClientDailyLimit)
+	}
+	if !repo.last.MaxClientMonthlyLimit.Equal(decimal.RequireFromString("100000.0000")) {
+		t.Fatalf("bad MaxClientMonthlyLimit: %s", repo.last.MaxClientMonthlyLimit)
+	}
+}
+
+func TestParseDecimalOrZero_MalformedAndEmpty(t *testing.T) {
+	if !parseDecimalOrZero("abc").IsZero() {
+		t.Fatal("malformed non-empty string must return zero")
+	}
+	if !parseDecimalOrZero("").IsZero() {
+		t.Fatal("empty string must return zero")
+	}
+	if !parseDecimalOrZero("123.45").Equal(decimal.RequireFromString("123.45")) {
+		t.Fatal("valid decimal string must parse correctly")
 	}
 }
 
