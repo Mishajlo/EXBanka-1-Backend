@@ -38,7 +38,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
-	if err := db.AutoMigrate(&model.LoanRequest{}, &model.Loan{}, &model.Installment{}, &model.InterestRateTier{}, &model.BankMargin{}, &model.Changelog{}, &model.IdempotencyRecord{}, &model.SagaLog{}, &cronreg.CronPauseState{}, &model.EmployeeLimitReplica{}); err != nil {
+	if err := db.AutoMigrate(&model.LoanRequest{}, &model.Loan{}, &model.Installment{}, &model.InterestRateTier{}, &model.BankMargin{}, &model.Changelog{}, &model.IdempotencyRecord{}, &model.SagaLog{}, &cronreg.CronPauseState{}, &model.EmployeeLimitReplica{}, &model.ClientReplica{}); err != nil {
 		log.Fatalf("failed to migrate: %v", err)
 	}
 	cronRegistry := cronreg.NewRegistry("credit-service", cronreg.NewGormPauseStore(db))
@@ -63,6 +63,8 @@ func main() {
 		"credit.saga-dead-letter",
 		"admin.cron-action",
 		"user.employee-limits-updated",
+		"client.created",
+		"client.updated",
 	)
 
 	// Connect to account-service
@@ -115,6 +117,7 @@ func main() {
 	tierRepo := repository.NewInterestRateTierRepository(db)
 	marginRepo := repository.NewBankMarginRepository(db)
 	limitReplicaRepo := repository.NewEmployeeLimitReplicaRepository(db)
+	clientReplicaRepo := repository.NewClientReplicaRepository(db)
 
 	rateConfigSvc := service.NewRateConfigService(tierRepo, marginRepo, db)
 	if err := rateConfigSvc.SeedDefaults(); err != nil {
@@ -130,7 +133,7 @@ func main() {
 	loanSvc := service.NewLoanService(loanRepo)
 	installmentSvc := service.NewInstallmentService(installmentRepo)
 	changelogSvc := service.NewChangelogService(changelogRepo)
-	cronSvc := service.NewCronService(installmentSvc, loanSvc, accountClient, bankAccountClient, clientClient, producer, bankRSDAccount, db, cronRegistry)
+	cronSvc := service.NewCronService(installmentSvc, loanSvc, accountClient, bankAccountClient, clientClient, clientReplicaRepo, producer, bankRSDAccount, db, cronRegistry)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -138,6 +141,10 @@ func main() {
 	limitReplicaConsumer := consumer.NewEmployeeLimitReplicaConsumer(cfg.KafkaBrokers, limitReplicaRepo)
 	limitReplicaConsumer.Start(ctx)
 	defer limitReplicaConsumer.Close()
+
+	clientReplicaConsumer := consumer.NewClientReplicaConsumer(cfg.KafkaBrokers, clientReplicaRepo)
+	clientReplicaConsumer.Start(ctx)
+	defer clientReplicaConsumer.Close()
 
 	go cronSvc.Start(ctx)
 
