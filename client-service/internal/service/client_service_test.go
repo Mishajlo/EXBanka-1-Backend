@@ -698,12 +698,16 @@ func TestCreateClient_PublishesJMBGAndVersion(t *testing.T) {
 	svc := NewClientService(repo, prod, nil)
 
 	c := validClient()
-	// validClient() sets JMBG = "0101990710024"; after repo.Create Version will be 0 (default)
+	// The in-memory mock does not apply GORM's `default:1`, so we set Version
+	// explicitly to a non-zero value. This makes the assertion below
+	// non-vacuous: if Version were dropped from the publish payload the test
+	// would fail (0 != 7), proving the field is actually wired.
+	c.Version = 7
 	require.NoError(t, svc.CreateClient(context.Background(), c))
 
 	require.NotNil(t, prod.lastCreated, "ClientCreatedMessage must be published")
 	assert.Equal(t, c.JMBG, prod.lastCreated.JMBG, "JMBG must be in published message")
-	assert.Equal(t, c.Version, prod.lastCreated.Version, "Version must be in published message")
+	assert.Equal(t, int64(7), prod.lastCreated.Version, "Version must be in published message")
 }
 
 func TestUpdateClient_PublishesJMBGAndVersion(t *testing.T) {
@@ -712,6 +716,9 @@ func TestUpdateClient_PublishesJMBGAndVersion(t *testing.T) {
 	svc := NewClientService(repo, prod, nil)
 
 	c := validClient()
+	// Seed a non-zero Version so the assertion below is non-vacuous: if Version
+	// were dropped from the publish payload the test would fail (0 != 9).
+	c.Version = 9
 	require.NoError(t, svc.CreateClient(context.Background(), c))
 
 	updated, err := svc.UpdateClient(c.ID, map[string]interface{}{"first_name": "Jane"}, 0)
@@ -719,5 +726,5 @@ func TestUpdateClient_PublishesJMBGAndVersion(t *testing.T) {
 
 	require.NotNil(t, prod.lastUpdated, "ClientCreatedMessage (update) must be published")
 	assert.Equal(t, updated.JMBG, prod.lastUpdated.JMBG, "JMBG must be in updated message")
-	assert.Equal(t, updated.Version, prod.lastUpdated.Version, "Version must be in updated message")
+	assert.Equal(t, int64(9), prod.lastUpdated.Version, "Version must be in updated message")
 }
