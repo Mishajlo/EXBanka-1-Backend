@@ -1844,7 +1844,7 @@ UniqueIndex: (reference, direction)
 
 ### Card Service (card_db)
 
-**ClientReplica** (SP-1 service-decoupling, 2026-06-08) — NON-AUTHORITATIVE local read-model of a client's profile, maintained by card-service to avoid synchronous `GetClient` RPCs on the card-status notification path. Fed by `client.created` and `client.updated` Kafka events (consumer group `card-service-client-replica`). On cache miss, card-service falls back to a synchronous `GetClient` gRPC call and backfills the replica.
+**ClientReplica** (SP-1 service-decoupling, 2026-06-08) — NON-AUTHORITATIVE local read-model of a client's profile (id, email, first/last name, jmbg, version), fed by `client.created`/`client.updated` events with a version-guarded upsert and a synchronous `GetClient` fallback+backfill on miss. Now maintained in **card-service** (card-status notification email), **credit-service** (installment-failure email; group `credit-service-client-replica`), **account-service** (account-created email; group `account-service-client-replica`), and **stock-service** (local OTC-seller existence validation; group `stock-service-client-replica`) — each replacing a synchronous `GetClient` read. (interbank-service's `GetClient` is intentionally left as-is: it serves the frozen cross-bank-protocol `/user` endpoint.)
 ```
 ID(uint64, PK, no autoincrement — == client-service Client.ID),
 Email, FirstName, LastName, JMBG(size:13),
