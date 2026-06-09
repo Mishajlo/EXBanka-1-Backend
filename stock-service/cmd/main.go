@@ -19,6 +19,7 @@ import (
 	adminpb "github.com/exbanka/contract/adminpb"
 	clientpb "github.com/exbanka/contract/clientpb"
 	"github.com/exbanka/contract/cronreg"
+	"github.com/exbanka/contract/logger"
 	exchangepb "github.com/exbanka/contract/exchangepb"
 	"github.com/exbanka/contract/influx"
 	"github.com/exbanka/contract/metrics"
@@ -45,6 +46,7 @@ import (
 )
 
 func main() {
+	logger.Init("stock-service")
 	// Defence in depth: a binary built with saga fault injection (-tags
 	// sagafaults) must never run as a real service. The build tag already
 	// keeps the fault code out of production binaries; this refuses to even
