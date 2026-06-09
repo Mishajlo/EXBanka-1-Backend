@@ -42,45 +42,37 @@ data:
       grpc_listen_port: 0
 
     positions:
-      filename: /tmp/positions.yaml
+      filename: /run/promtail/positions.yaml
 
     clients:
       - url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
 
     scrape_configs:
       - job_name: kubernetes-pods
-        kubernetes_sd_configs:
-          - role: pod
+        static_configs:
+          - targets: ['localhost']
+            labels:
+              __path__: /var/log/pods/*/*/*
         pipeline_stages:
-          # Parse lines that are valid JSON (slog output). Non-JSON lines
-          # (pre-init fatals) pass through with only their raw log label.
+          # AKS uses containerd — parse the CRI wrapper first.
+          - cri: {}
+          # Extract namespace, pod, container from the file path.
+          - regex:
+              source: filename
+              expression: '/var/log/pods/(?P<namespace>[^_/]+)_(?P<pod>[^_/]+)_[^/]+/(?P<container>[^/]+)/.+'
+          - labels:
+              namespace:
+              pod:
+              container:
+          # Parse our slog JSON lines; non-JSON lines pass through unchanged.
           - json:
               expressions:
                 level: level
-                msg: msg
-          # Promote "level" to a Loki index label for fast filtering.
+                service: service
+          # Promote level and service to Loki index labels for fast filtering.
           - labels:
               level:
-        relabel_configs:
-          # Only scrape pods that have a running container.
-          - source_labels: [__meta_kubernetes_pod_container_name]
-            action: keep
-            regex: .+
-          # Derive the Loki "service" label from the app label on the pod.
-          - source_labels: [__meta_kubernetes_pod_label_app]
-            target_label: service
-          # Standard Kubernetes labels for log correlation.
-          - source_labels: [__meta_kubernetes_namespace]
-            target_label: namespace
-          - source_labels: [__meta_kubernetes_pod_name]
-            target_label: pod
-          - source_labels: [__meta_kubernetes_pod_container_name]
-            target_label: container
-          # Use the node filesystem path to the pod log file.
-          - source_labels: [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
-            target_label: __path__
-            separator: /
-            replacement: /var/log/pods/*$1/*.log
+              service:
 ---
 # Promtail DaemonSet — one pod per node, mounts host log paths read-only.
 apiVersion: apps/v1
@@ -125,6 +117,8 @@ spec:
             - name: varlibdockercontainers
               mountPath: /var/lib/docker/containers
               readOnly: true
+            - name: positions
+              mountPath: /run/promtail
           readinessProbe:
             httpGet:
               path: /ready
@@ -152,3 +146,5 @@ spec:
         - name: varlibdockercontainers
           hostPath:
             path: /var/lib/docker/containers
+        - name: positions
+          emptyDir: {}
