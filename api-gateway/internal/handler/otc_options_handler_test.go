@@ -85,6 +85,7 @@ type stubOTCOptionsClient struct {
 	listByListingFn          func(*stockpb.ListNegotiationsByListingRequest) (*stockpb.ListNegotiationsResponse, error)
 	getTimelineFn            func(*stockpb.GetOfferTimelineRequest) (*stockpb.GetOfferTimelineResponse, error)
 	openNegotiationFn        func(*stockpb.OpenNegotiationRequest) (*stockpb.OTCNegotiationResponse, error)
+	updateQuantityFn         func(*stockpb.UpdateOTCOfferQuantityRequest) (*stockpb.OTCOfferResponse, error)
 }
 
 func (s *stubOTCOptionsClient) CreateOffer(_ context.Context, in *stockpb.CreateOTCOfferRequest, _ ...grpc.CallOption) (*stockpb.OTCOfferResponse, error) {
@@ -120,6 +121,12 @@ func (s *stubOTCOptionsClient) AcceptOffer(_ context.Context, in *stockpb.Accept
 func (s *stubOTCOptionsClient) RejectOffer(_ context.Context, in *stockpb.RejectOTCOfferRequest, _ ...grpc.CallOption) (*stockpb.OTCOfferResponse, error) {
 	if s.rejectFn != nil {
 		return s.rejectFn(in)
+	}
+	return &stockpb.OTCOfferResponse{}, nil
+}
+func (s *stubOTCOptionsClient) UpdateOTCOfferQuantity(_ context.Context, in *stockpb.UpdateOTCOfferQuantityRequest, _ ...grpc.CallOption) (*stockpb.OTCOfferResponse, error) {
+	if s.updateQuantityFn != nil {
+		return s.updateQuantityFn(in)
 	}
 	return &stockpb.OTCOfferResponse{}, nil
 }
@@ -231,6 +238,7 @@ func otcOptionsRouter(h *handler.OTCOptionsHandler) *gin.Engine {
 	r.GET("/otc/contracts/:id", withCli, h.GetContract)
 	r.POST("/otc/contracts/:id/exercise", withCli, h.ExerciseContract)
 	r.GET("/me/otc/options/posted", withCli, h.ListMyPostedOffers)
+	r.PUT("/me/otc/options/:id", withCli, h.UpdateMyOption)
 	r.DELETE("/me/otc/options/:id", withCli, h.CancelMyListing)
 	r.POST("/otc/options/:id/bid", withCli, h.OpenNegotiationChain)
 	r.POST("/me/otc/options/:id/negotiations/:nid/counter", withCli, h.CounterMyNegotiation)
@@ -881,6 +889,67 @@ func TestOTCOpt_CancelMyListing_BadID(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("DELETE", "/me/otc/options/abc", nil))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// ---- UpdateMyOption (PUT /me/otc/options/:id) gateway handler tests ----
+
+// Happy path: PUT sets the total quantity; the new quantity + acting identity
+// are forwarded to the gRPC UpdateOTCOfferQuantity and 200 is returned.
+func TestOTCOpt_UpdateMyOption_SetsQuantity(t *testing.T) {
+	var captured *stockpb.UpdateOTCOfferQuantityRequest
+	cl := &stubOTCOptionsClient{
+		updateQuantityFn: func(in *stockpb.UpdateOTCOfferQuantityRequest) (*stockpb.OTCOfferResponse, error) {
+			captured = in
+			return &stockpb.OTCOfferResponse{Id: in.GetOfferId(), Quantity: in.GetQuantity()}, nil
+		},
+	}
+	r := otcOptionsRouter(otcHandler(cl))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("PUT", "/me/otc/options/6", strings.NewReader(`{"quantity":"200"}`)))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, captured)
+	require.Equal(t, uint64(6), captured.GetOfferId())
+	require.Equal(t, "200", captured.GetQuantity())
+	require.Equal(t, "client", captured.GetActingOwnerType())
+	require.Equal(t, uint64(42), captured.GetActingOwnerId())
+	require.Contains(t, rec.Body.String(), `"offer"`)
+}
+
+// Non-positive quantity is rejected with 400 BEFORE the gRPC call.
+func TestOTCOpt_UpdateMyOption_RejectsNonPositive(t *testing.T) {
+	called := false
+	cl := &stubOTCOptionsClient{
+		updateQuantityFn: func(*stockpb.UpdateOTCOfferQuantityRequest) (*stockpb.OTCOfferResponse, error) {
+			called = true
+			return &stockpb.OTCOfferResponse{}, nil
+		},
+	}
+	r := otcOptionsRouter(otcHandler(cl))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("PUT", "/me/otc/options/6", strings.NewReader(`{"quantity":"0"}`)))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.False(t, called, "stock-service must NOT be called for a non-positive quantity")
+}
+
+// Bad id format yields 400.
+func TestOTCOpt_UpdateMyOption_BadID(t *testing.T) {
+	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("PUT", "/me/otc/options/abc", strings.NewReader(`{"quantity":"5"}`)))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// A PermissionDenied from the service (caller is not the owner) maps to 403.
+func TestOTCOpt_UpdateMyOption_ServiceForbidden(t *testing.T) {
+	cl := &stubOTCOptionsClient{
+		updateQuantityFn: func(*stockpb.UpdateOTCOfferQuantityRequest) (*stockpb.OTCOfferResponse, error) {
+			return nil, status.Error(codes.PermissionDenied, "only the offer's owner can edit it")
+		},
+	}
+	r := otcOptionsRouter(otcHandler(cl))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("PUT", "/me/otc/options/6", strings.NewReader(`{"quantity":"5"}`)))
+	require.Equal(t, http.StatusForbidden, rec.Code)
 }
 
 // ---- ListMyNegotiationRevisions gateway handler tests ----

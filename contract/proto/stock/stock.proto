@@ -1253,6 +1253,12 @@ service OTCOptionsService {
   rpc AcceptOffer(AcceptOTCOfferRequest)   returns (AcceptOfferResponse);
   rpc RejectOffer(RejectOTCOfferRequest)   returns (OTCOfferResponse);
 
+  // Edit the TOTAL quantity of an open option offer (termless inventory).
+  // Owner-only, local + open. Sets the quantity up or down, bounded below by
+  // the shares already committed to formed/forming contracts on the offer and
+  // above by the owner's holding for the ticker.
+  rpc UpdateOTCOfferQuantity(UpdateOTCOfferQuantityRequest) returns (OTCOfferResponse);
+
   rpc ListMyContracts(ListMyContractsRequest)   returns (ListContractsResponse);
   rpc GetContract(GetContractRequest)           returns (OptionContractResponse);
   rpc ExerciseContract(ExerciseContractRequest) returns (ExerciseResponse);
@@ -1758,6 +1764,16 @@ message OTCOfferResponse {
   // create/detail/counter/cancel responses. Distinct from the cross-bank wire
   // id "employee-<N>", which is composed only on the SI-TX publish path. (SP-1)
   string seller_id = 24;
+}
+
+// UpdateOTCOfferQuantityRequest sets the TOTAL quantity of an open option
+// offer the caller owns. acting_owner_type is "client" | "bank"; acting_owner_id
+// is 0 when acting as the bank. The service enforces owner-only + local + open.
+message UpdateOTCOfferQuantityRequest {
+  uint64 offer_id          = 1;
+  string quantity          = 2; // decimal as string; must be > 0
+  string acting_owner_type = 3; // "client" | "bank"
+  uint64 acting_owner_id   = 4; // 0 when acting as the bank
 }
 
 message OTCOfferRevisionItem {

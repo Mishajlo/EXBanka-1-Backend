@@ -108,6 +108,58 @@ func (h *OTCOptionsHandler) CreateOffer(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"offer": resp})
 }
 
+type updateOTCOptionRequest struct {
+	Quantity string `json:"quantity"`
+}
+
+// UpdateMyOption godoc
+// @Summary      Edit the total quantity of one of the caller's OTC option offers
+// @Description  Sets the TOTAL quantity of an open option offer the caller owns (up or down). Option offers are termless inventory; since only one open offer per (owner, ticker, direction) is allowed, the owner edits the total instead of posting a second offer. The new quantity must be > 0, not below the shares already committed to formed/forming contracts on the offer, and not above the owner's holding for the ticker. Owner-only; the offer must be local and open.
+// @Tags         OTCOptions
+// @Security     BearerAuth
+// @Accept       json
+// @Produce      json
+// @Param        id path int true "offer id"
+// @Param        body body updateOTCOptionRequest true "new total quantity"
+// @Success      200 {object} map[string]interface{}
+// @Failure      400 {object} map[string]interface{}
+// @Failure      403 {object} map[string]interface{}
+// @Failure      404 {object} map[string]interface{}
+// @Failure      409 {object} map[string]interface{}
+// @Router       /api/v3/me/otc/options/{id} [put]
+func (h *OTCOptionsHandler) UpdateMyOption(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		apiError(c, http.StatusBadRequest, ErrValidation, "invalid id")
+		return
+	}
+	var req updateOTCOptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		apiError(c, http.StatusBadRequest, ErrValidation, "invalid body")
+		return
+	}
+	if err := positiveDecimalString("quantity", req.Quantity); err != nil {
+		apiError(c, http.StatusBadRequest, ErrValidation, err.Error())
+		return
+	}
+	identity := c.MustGet("identity").(*middleware.ResolvedIdentity)
+	// Ownership is enforced authoritatively in stock-service under the offer's
+	// row lock (owner-only edit → PermissionDenied → 403); we forward the acting
+	// owner identity. No cheap gateway pre-check exists without re-fetching the
+	// offer, so we rely on the service gate (same as the per-chain ops).
+	resp, err := h.client.UpdateOTCOfferQuantity(c.Request.Context(), &stockpb.UpdateOTCOfferQuantityRequest{
+		OfferId:         id,
+		Quantity:        req.Quantity,
+		ActingOwnerType: identity.OwnerType,
+		ActingOwnerId:   derefU64(identity.OwnerID),
+	})
+	if err != nil {
+		handleGRPCError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"offer": resp})
+}
+
 // ListNegotiationHistory godoc
 // @Summary      List the caller's terminal OTC negotiations (history)
 // @Description  Returns OTC offers in terminal statuses (accepted, rejected, expired, failed). Filter by status, date range, and counterparty.

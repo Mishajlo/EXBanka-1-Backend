@@ -2640,6 +2640,7 @@ const (
 	OTCOptionsService_CounterOffer_FullMethodName              = "/stock.OTCOptionsService/CounterOffer"
 	OTCOptionsService_AcceptOffer_FullMethodName               = "/stock.OTCOptionsService/AcceptOffer"
 	OTCOptionsService_RejectOffer_FullMethodName               = "/stock.OTCOptionsService/RejectOffer"
+	OTCOptionsService_UpdateOTCOfferQuantity_FullMethodName    = "/stock.OTCOptionsService/UpdateOTCOfferQuantity"
 	OTCOptionsService_ListMyContracts_FullMethodName           = "/stock.OTCOptionsService/ListMyContracts"
 	OTCOptionsService_GetContract_FullMethodName               = "/stock.OTCOptionsService/GetContract"
 	OTCOptionsService_ExerciseContract_FullMethodName          = "/stock.OTCOptionsService/ExerciseContract"
@@ -2669,6 +2670,11 @@ type OTCOptionsServiceClient interface {
 	CounterOffer(ctx context.Context, in *CounterOTCOfferRequest, opts ...grpc.CallOption) (*OTCOfferResponse, error)
 	AcceptOffer(ctx context.Context, in *AcceptOTCOfferRequest, opts ...grpc.CallOption) (*AcceptOfferResponse, error)
 	RejectOffer(ctx context.Context, in *RejectOTCOfferRequest, opts ...grpc.CallOption) (*OTCOfferResponse, error)
+	// Edit the TOTAL quantity of an open option offer (termless inventory).
+	// Owner-only, local + open. Sets the quantity up or down, bounded below by
+	// the shares already committed to formed/forming contracts on the offer and
+	// above by the owner's holding for the ticker.
+	UpdateOTCOfferQuantity(ctx context.Context, in *UpdateOTCOfferQuantityRequest, opts ...grpc.CallOption) (*OTCOfferResponse, error)
 	ListMyContracts(ctx context.Context, in *ListMyContractsRequest, opts ...grpc.CallOption) (*ListContractsResponse, error)
 	GetContract(ctx context.Context, in *GetContractRequest, opts ...grpc.CallOption) (*OptionContractResponse, error)
 	ExerciseContract(ctx context.Context, in *ExerciseContractRequest, opts ...grpc.CallOption) (*ExerciseResponse, error)
@@ -2761,6 +2767,16 @@ func (c *oTCOptionsServiceClient) RejectOffer(ctx context.Context, in *RejectOTC
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(OTCOfferResponse)
 	err := c.cc.Invoke(ctx, OTCOptionsService_RejectOffer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *oTCOptionsServiceClient) UpdateOTCOfferQuantity(ctx context.Context, in *UpdateOTCOfferQuantityRequest, opts ...grpc.CallOption) (*OTCOfferResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OTCOfferResponse)
+	err := c.cc.Invoke(ctx, OTCOptionsService_UpdateOTCOfferQuantity_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -2947,6 +2963,11 @@ type OTCOptionsServiceServer interface {
 	CounterOffer(context.Context, *CounterOTCOfferRequest) (*OTCOfferResponse, error)
 	AcceptOffer(context.Context, *AcceptOTCOfferRequest) (*AcceptOfferResponse, error)
 	RejectOffer(context.Context, *RejectOTCOfferRequest) (*OTCOfferResponse, error)
+	// Edit the TOTAL quantity of an open option offer (termless inventory).
+	// Owner-only, local + open. Sets the quantity up or down, bounded below by
+	// the shares already committed to formed/forming contracts on the offer and
+	// above by the owner's holding for the ticker.
+	UpdateOTCOfferQuantity(context.Context, *UpdateOTCOfferQuantityRequest) (*OTCOfferResponse, error)
 	ListMyContracts(context.Context, *ListMyContractsRequest) (*ListContractsResponse, error)
 	GetContract(context.Context, *GetContractRequest) (*OptionContractResponse, error)
 	ExerciseContract(context.Context, *ExerciseContractRequest) (*ExerciseResponse, error)
@@ -3002,6 +3023,9 @@ func (UnimplementedOTCOptionsServiceServer) AcceptOffer(context.Context, *Accept
 }
 func (UnimplementedOTCOptionsServiceServer) RejectOffer(context.Context, *RejectOTCOfferRequest) (*OTCOfferResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RejectOffer not implemented")
+}
+func (UnimplementedOTCOptionsServiceServer) UpdateOTCOfferQuantity(context.Context, *UpdateOTCOfferQuantityRequest) (*OTCOfferResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateOTCOfferQuantity not implemented")
 }
 func (UnimplementedOTCOptionsServiceServer) ListMyContracts(context.Context, *ListMyContractsRequest) (*ListContractsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListMyContracts not implemented")
@@ -3179,6 +3203,24 @@ func _OTCOptionsService_RejectOffer_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(OTCOptionsServiceServer).RejectOffer(ctx, req.(*RejectOTCOfferRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OTCOptionsService_UpdateOTCOfferQuantity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateOTCOfferQuantityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OTCOptionsServiceServer).UpdateOTCOfferQuantity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OTCOptionsService_UpdateOTCOfferQuantity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OTCOptionsServiceServer).UpdateOTCOfferQuantity(ctx, req.(*UpdateOTCOfferQuantityRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3519,6 +3561,10 @@ var OTCOptionsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RejectOffer",
 			Handler:    _OTCOptionsService_RejectOffer_Handler,
+		},
+		{
+			MethodName: "UpdateOTCOfferQuantity",
+			Handler:    _OTCOptionsService_UpdateOTCOfferQuantity_Handler,
 		},
 		{
 			MethodName: "ListMyContracts",

@@ -11842,6 +11842,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Posts an open OTC option offer. Terms (strike_price, premium, settlement_date) are NOT set at creation — they are agreed during negotiation. Only one open offer per (owner, ticker, direction) is allowed; a duplicate returns 409.",
                 "consumes": [
                     "application/json"
                 ],
@@ -11854,7 +11855,7 @@ const docTemplate = `{
                 "summary": "Create an OTC option offer",
                 "parameters": [
                     {
-                        "description": "offer details (ticker-keyed; account_id is the initiator's account)",
+                        "description": "offer details (ticker-keyed, open terms; account_id is the initiator's account)",
                         "name": "body",
                         "in": "body",
                         "required": true,
@@ -11880,6 +11881,13 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -12030,6 +12038,79 @@ const docTemplate = `{
             }
         },
         "/api/v3/me/otc/options/{id}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Sets the TOTAL quantity of an open option offer the caller owns (up or down). Option offers are termless inventory; since only one open offer per (owner, ticker, direction) is allowed, the owner edits the total instead of posting a second offer. The new quantity must be \u003e 0, not below the shares already committed to formed/forming contracts on the offer, and not above the owner's holding for the ticker. Owner-only; the offer must be local and open.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "OTCOptions"
+                ],
+                "summary": "Edit the total quantity of one of the caller's OTC option offers",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "offer id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "new total quantity",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.updateOTCOptionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            },
             "delete": {
                 "security": [
                     {
@@ -15706,16 +15787,7 @@ const docTemplate = `{
                 "on_behalf_of_client_id": {
                     "type": "integer"
                 },
-                "premium": {
-                    "type": "string"
-                },
                 "quantity": {
-                    "type": "string"
-                },
-                "settlement_date": {
-                    "type": "string"
-                },
-                "strike_price": {
                     "type": "string"
                 },
                 "ticker": {
@@ -16670,6 +16742,14 @@ const docTemplate = `{
                 },
                 "variable_base": {
                     "type": "number"
+                }
+            }
+        },
+        "handler.updateOTCOptionRequest": {
+            "type": "object",
+            "properties": {
+                "quantity": {
+                    "type": "string"
                 }
             }
         },

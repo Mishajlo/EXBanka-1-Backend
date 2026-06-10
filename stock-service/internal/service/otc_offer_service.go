@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -534,6 +535,88 @@ func (s *OTCOfferService) Reject(ctx context.Context, in RejectInput) (*model.OT
 		"ticker": o.Ticker,
 	})
 	return o, nil
+}
+
+// UpdateQuantity sets the offer's TOTAL quantity (edit up or down). An option
+// offer is termless inventory (owner, ticker, quantity); since a user may hold
+// only ONE open offer per (owner, ticker, direction) they edit the total rather
+// than posting a second offer. Rejects a non-positive quantity, a quantity below
+// the shares already committed to formed/forming contracts on this offer
+// (OutstandingCommittedQuantityTx), or — for a sell offer — a quantity above the
+// owner's holding for the ticker (net of the owner's OTHER active commitments).
+// Owner-only; the offer must be LOCAL and open. Runs under SELECT FOR UPDATE and
+// is optimistic-lock safe (SaveTx returns ErrOptimisticLock on a version race).
+func (s *OTCOfferService) UpdateQuantity(ctx context.Context, offerID uint64, ownerType model.OwnerType, ownerID *uint64, qty decimal.Decimal) (*model.OTCOffer, error) {
+	if !qty.IsPositive() {
+		return nil, fmt.Errorf("quantity must be > 0: %w", ErrOTCOfferFieldInvalid)
+	}
+	var out *model.OTCOffer
+	err := s.offers.DB().Transaction(func(tx *gorm.DB) error {
+		// LockByIDTx does SELECT FOR UPDATE and treats a remote row as not-found,
+		// so only LOCAL offers reach the edit path.
+		o, err := s.offers.LockByIDTx(tx, offerID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrOTCOfferNotFound
+			}
+			return err
+		}
+		if !o.IsOpenListing() {
+			return fmt.Errorf("offer is not open for edit: %w", ErrOTCOfferFieldInvalid)
+		}
+		if o.InitiatorOwnerType != ownerType || !ownerIDEqual(o.InitiatorOwnerID, ownerID) {
+			return ErrOTCNotOwner
+		}
+		committed, err := s.offers.OutstandingCommittedQuantityTx(tx, o.ID)
+		if err != nil {
+			return err
+		}
+		if qty.LessThan(committed) {
+			return fmt.Errorf("quantity %s is below the %s shares already committed on this offer: %w", qty, committed, ErrOTCOfferFieldInvalid)
+		}
+		if o.Direction == model.OTCDirectionSellInitiated {
+			if err := s.assertSellerHasSharesTx(tx, o.InitiatorOwnerType, o.InitiatorOwnerID, o.StockID, o.ID, qty); err != nil {
+				return err
+			}
+		}
+		o.Quantity = qty
+		if err := s.offers.SaveTx(tx, o); err != nil {
+			return err
+		}
+		out = o
+		return nil
+	})
+	return out, err
+}
+
+// assertSellerHasSharesTx is the tx-aware variant of assertSellerHasShares used
+// by UpdateQuantity: it reads the seller's holding and their OTHER active
+// commitments inside tx (under the offer's FOR UPDATE lock) and rejects when the
+// requested total exceeds the available shares. excludeOfferID is the offer being
+// resized, kept out of the committed sum so it never counts against itself.
+// Reuses the same sentinels as assertSellerHasShares (ErrOTCSellerNoHolding /
+// ErrOTCInsufficientShares) — no new error class is invented.
+func (s *OTCOfferService) assertSellerHasSharesTx(tx *gorm.DB, ownerType model.OwnerType, ownerID *uint64, stockID, excludeOfferID uint64, requested decimal.Decimal) error {
+	var holding model.Holding
+	q := tx.Where("security_type = ? AND security_id = ?", "stock", stockID)
+	if ownerID == nil {
+		q = q.Where("owner_type = ? AND owner_id IS NULL", ownerType)
+	} else {
+		q = q.Where("owner_type = ? AND owner_id = ?", ownerType, *ownerID)
+	}
+	if err := q.First(&holding).Error; err != nil {
+		return fmt.Errorf("seller has no holding for stock %d: %w", stockID, ErrOTCSellerNoHolding)
+	}
+	heldQty := decimal.NewFromInt(holding.Quantity)
+	committed, err := s.offers.SumActiveQuantityForSellerExcludingOfferTx(tx, ownerType, ownerID, stockID, excludeOfferID)
+	if err != nil {
+		return err
+	}
+	available := heldQty.Sub(committed)
+	if requested.GreaterThan(available) {
+		return fmt.Errorf("insufficient available shares for this seller (held %s, committed %s, requested %s): %w", heldQty, committed, requested, ErrOTCInsufficientShares)
+	}
+	return nil
 }
 
 // ListMyOffers returns offers where the user is initiator/counterparty/either.

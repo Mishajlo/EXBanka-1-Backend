@@ -52,6 +52,7 @@ func newOTCCRUDFixture(t *testing.T) *otcCRUDFixture {
 		&model.Holding{},
 		&model.OTCOffer{},
 		&model.OTCOfferRevision{},
+		&model.OTCNegotiation{},
 		&model.OptionContract{},
 		&model.OTCOfferReadReceipt{},
 	); err != nil {
@@ -361,6 +362,100 @@ func TestCreate_RejectsDuplicateOpenOfferSameTickerDirection(t *testing.T) {
 	require.NoError(t, err)
 	_, err = fx.svc.Create(context.Background(), in) // duplicate (owner,ticker,direction)
 	require.ErrorIs(t, err, ErrOTCOfferDuplicateOpen)
+}
+
+// ---------------- UpdateQuantity ----------------
+
+// Per Task B3: editing the total quantity of an open sell offer SETS the total
+// (up or down), rejects above the owner's holding, rejects non-positive, and is
+// owner-only.
+func TestUpdateQuantity_SetsTotal_RejectsBelowCommitted_AndAboveHolding(t *testing.T) {
+	fx := newOTCCRUDFixture(t)
+	ctx := context.Background()
+	fx.seedHolding(t, 7, 1, 100) // seller 7 holds 100 OPK (stock 1)
+
+	off, err := fx.svc.Create(ctx, CreateOfferInput{
+		ActorUserID: 7, ActorSystemType: "client",
+		Direction: model.OTCDirectionSellInitiated, StockID: 1, Ticker: "OPK",
+		Quantity: decimal.NewFromInt(10), InitiatorAccountID: 1,
+	})
+	require.NoError(t, err)
+
+	owner7Type, owner7ID := model.OwnerFromLegacy(7, "client")
+
+	got, err := fx.svc.UpdateQuantity(ctx, off.ID, owner7Type, owner7ID, decimal.NewFromInt(80))
+	require.NoError(t, err)
+	require.True(t, got.Quantity.Equal(decimal.NewFromInt(80)))
+
+	// > holding 100
+	_, err = fx.svc.UpdateQuantity(ctx, off.ID, owner7Type, owner7ID, decimal.NewFromInt(200))
+	require.ErrorIs(t, err, ErrOTCInsufficientShares)
+
+	// non-positive
+	_, err = fx.svc.UpdateQuantity(ctx, off.ID, owner7Type, owner7ID, decimal.Zero)
+	require.ErrorIs(t, err, ErrOTCOfferFieldInvalid)
+
+	// a DIFFERENT owner cannot edit
+	owner8Type, owner8ID := model.OwnerFromLegacy(8, "client")
+	_, err = fx.svc.UpdateQuantity(ctx, off.ID, owner8Type, owner8ID, decimal.NewFromInt(5))
+	require.ErrorIs(t, err, ErrOTCNotOwner)
+}
+
+// The committed lower bound: a reduction below the shares already committed to an
+// accepted (contract-forming) negotiation chain on this offer is rejected, while
+// a value at/above that floor (and within the holding) is accepted. The accepted
+// chain is inserted directly to exercise OutstandingCommittedQuantityTx in
+// isolation (the normal accept flow would consume the parent, blocking the edit).
+func TestUpdateQuantity_RejectsBelowCommittedChain(t *testing.T) {
+	fx := newOTCCRUDFixture(t)
+	ctx := context.Background()
+	fx.seedHolding(t, 7, 1, 100)
+
+	off, err := fx.svc.Create(ctx, CreateOfferInput{
+		ActorUserID: 7, ActorSystemType: "client",
+		Direction: model.OTCDirectionSellInitiated, StockID: 1, Ticker: "OPK",
+		Quantity: decimal.NewFromInt(60), InitiatorAccountID: 1,
+	})
+	require.NoError(t, err)
+
+	bidder := uint64(8)
+	now := time.Now().UTC()
+	require.NoError(t, fx.offers.DB().Create(&model.OTCNegotiation{
+		ParentOfferID:   off.ID,
+		BidderOwnerType: model.OwnerClient, BidderOwnerID: &bidder,
+		Quantity: decimal.NewFromInt(50), StrikePrice: decimal.NewFromInt(10),
+		Premium: decimal.NewFromInt(1), SettlementDate: now.AddDate(0, 0, 30),
+		Status:                    model.OTCNegotiationStatusAccepted,
+		LastActionByPrincipalType: "client", LastActionByPrincipalID: 8,
+		LastActionByOwnerType: "client", LastActionAt: now,
+	}).Error)
+
+	owner7Type, owner7ID := model.OwnerFromLegacy(7, "client")
+	_, err = fx.svc.UpdateQuantity(ctx, off.ID, owner7Type, owner7ID, decimal.NewFromInt(40)) // below committed 50
+	require.ErrorIs(t, err, ErrOTCOfferFieldInvalid)
+
+	got, err := fx.svc.UpdateQuantity(ctx, off.ID, owner7Type, owner7ID, decimal.NewFromInt(70)) // >= 50, <= holding 100
+	require.NoError(t, err)
+	require.True(t, got.Quantity.Equal(decimal.NewFromInt(70)))
+}
+
+// A terminal/non-open offer cannot be edited.
+func TestUpdateQuantity_RejectsNonOpenOffer(t *testing.T) {
+	fx := newOTCCRUDFixture(t)
+	ctx := context.Background()
+	fx.seedHolding(t, 7, 1, 100)
+	off, err := fx.svc.Create(ctx, CreateOfferInput{
+		ActorUserID: 7, ActorSystemType: "client",
+		Direction: model.OTCDirectionSellInitiated, StockID: 1, Ticker: "OPK",
+		Quantity: decimal.NewFromInt(10), InitiatorAccountID: 1,
+	})
+	require.NoError(t, err)
+	off.Status = model.OTCOfferStatusAccepted
+	require.NoError(t, fx.offers.Save(off))
+
+	owner7Type, owner7ID := model.OwnerFromLegacy(7, "client")
+	_, err = fx.svc.UpdateQuantity(ctx, off.ID, owner7Type, owner7ID, decimal.NewFromInt(5))
+	require.ErrorIs(t, err, ErrOTCOfferFieldInvalid)
 }
 
 // ---------------- Counter ----------------

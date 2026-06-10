@@ -276,6 +276,7 @@ func SetupV3(r *gin.Engine, h *Handlers) {
 		me.POST("/otc/options/:id/negotiations/:nid/accept", bankIfEmp, h.OTCOptions.AcceptMyNegotiation)
 		me.POST("/otc/options/:id/negotiations/:nid/reject", bankIfEmp, h.OTCOptions.RejectMyNegotiation)
 		me.DELETE("/otc/options/:id/negotiations/:nid", bankIfEmp, h.OTCOptions.CancelMyNegotiation)
+		me.PUT("/otc/options/:id", bankIfEmp, h.OTCOptions.UpdateMyOption)
 		me.DELETE("/otc/options/:id", bankIfEmp, h.OTCOptions.CancelMyListing)
 
 		// --- Phase 3: OTC stocks marketplace (sell + buy direction) ---

@@ -749,6 +749,33 @@ func (h *OTCOptionsHandler) RejectOffer(ctx context.Context, in *stockpb.RejectO
 	return h.withOfferMarketRef(o, toOTCOfferProto(o, false)), nil
 }
 
+// UpdateOTCOfferQuantity sets the TOTAL quantity of an open option offer the
+// caller owns (edit up or down). The acting owner is resolved from
+// acting_owner_type / acting_owner_id; the service enforces owner-only + local +
+// open and the committed/holding bounds, returning typed sentinels that
+// passthrough to gRPC codes (ErrOTCNotOwner → PermissionDenied,
+// ErrOTCOfferFieldInvalid → InvalidArgument, not-found → NotFound, opt-lock →
+// Aborted).
+func (h *OTCOptionsHandler) UpdateOTCOfferQuantity(ctx context.Context, in *stockpb.UpdateOTCOfferQuantityRequest) (*stockpb.OTCOfferResponse, error) {
+	qty, err := decimal.NewFromString(in.GetQuantity())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "quantity is not a valid decimal")
+	}
+	ot, err := ownerTypeFromProto(in.GetActingOwnerType())
+	if err != nil {
+		return nil, err
+	}
+	oid, err := resolveOwnerID(ot, in.GetActingOwnerId())
+	if err != nil {
+		return nil, err
+	}
+	o, err := h.svc.UpdateQuantity(ctx, in.GetOfferId(), ot, oid, qty)
+	if err != nil {
+		return nil, mapOTCErr(err)
+	}
+	return h.withOfferMarketRef(o, toOTCOfferProto(o, false)), nil
+}
+
 // ListMyContracts returns a unified local+remote contract list (SP-1 Task 8).
 // LOCAL contracts are stamped kind="local", own routing/bank-code provenance,
 // and me_owner = (caller is the BUYER/HOLDER) — a formed option is the buyer's

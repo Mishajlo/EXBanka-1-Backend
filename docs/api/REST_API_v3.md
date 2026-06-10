@@ -8466,6 +8466,52 @@ Cancel (withdraw) the caller's own chain. **Bidder-only** — the listing's post
 
 ---
 
+#### PUT /api/v3/me/otc/options/:id
+
+Edit the **total quantity** of the caller's own open option offer. An option offer is termless inventory `(owner, ticker, quantity)`; since only one open offer per `(owner, ticker, direction)` is allowed, the owner edits the total rather than posting a second offer. The supplied quantity **SETS** the new total (up or down).
+
+**Auth:** `AnyAuthMiddleware` (client token, or employee acting as the bank / on behalf of a client).
+
+**Path parameters:**
+- `id` — the offer's surrogate id.
+
+**Request body:**
+
+```json
+{ "quantity": "80" }
+```
+
+- `quantity` (string decimal, required) — the new TOTAL quantity. Must be `> 0`.
+
+**Validation / business rules (enforced authoritatively in stock-service under the offer's row lock):**
+- `quantity > 0` (gateway pre-checks and returns 400; service re-validates).
+- Not **below** the shares already committed to formed/forming contracts on this offer (Σ quantity of `accepted` negotiation chains whose `parent_offer_id = id`). For an open offer this floor is normally 0 (an accept consumes the listing).
+- Not **above** the owner's holding for the ticker, net of the owner's other active commitments (the offer being resized does not count against itself).
+- **Owner-only:** only the offer's initiator may edit.
+- The offer must be **local** and **open** (`open`/`PENDING`/`COUNTERED`).
+- Optimistic-lock safe (`SELECT FOR UPDATE` + version check).
+
+**Example request:**
+
+```
+PUT /api/v3/me/otc/options/6
+Content-Type: application/json
+
+{ "quantity": "80" }
+```
+
+**Response 200:** `{ "offer": OTCOfferResponse }` with the updated `quantity`.
+
+**Response 400:** `quantity` missing, unparseable, non-positive, below the committed floor, or above the owner's holding.
+
+**Response 403:** Caller is authenticated but is not the offer's owner.
+
+**Response 404:** Offer does not exist (or is a remote mirror row, which is not editable here).
+
+**Response 409:** Offer is not open for edit (already accepted/consumed/cancelled/expired), or an optimistic-lock conflict.
+
+---
+
 #### DELETE /api/v3/me/otc/options/:id
 
 Cancel (withdraw) the caller's own OPEN parent listing. **Initiator-only** — only the poster can cancel; bidders use the per-chain DELETE above. The listing's status flips to `cancelled` and every still-open child negotiation chain cascade-cancels in the same DB transaction. Each cascaded chain's bidder receives an `OTC_OFFER_CASCADE_CANCELLED` notification with `reason="listing_cancelled"`.

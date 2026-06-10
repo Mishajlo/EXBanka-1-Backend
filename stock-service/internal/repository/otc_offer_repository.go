@@ -471,6 +471,40 @@ func derefOr0(p *uint64) uint64 {
 	return *p
 }
 
+// OutstandingCommittedQuantityTx returns the total share quantity already
+// committed to contract-forming negotiation chains on the given parent offer —
+// i.e. Σ OTCNegotiation.Quantity over chains whose parent_offer_id == offerID
+// and whose status is the contract-forming terminal status "accepted".
+//
+// PREDICATE RATIONALE ("committed" = the lower bound a quantity edit must not
+// drop below): the marketplace is all-or-nothing per offer. A bidder opens a
+// negotiation chain (status open/countered — a mere proposal the owner never
+// agreed to, so NOT committed); the first chain to ACCEPT mints a contract and
+// flips the parent listing to "consumed" (status the editor rejects via
+// IsOpenListing). rejected/cancelled/expired chains carry no obligation.
+// Therefore the ONLY chain status that represents a real, formed/forming
+// obligation on this offer is "accepted", and we sum exactly those. Open and
+// terminal-non-accepted chains are deliberately excluded.
+//
+// Consequence: for any editable (open) offer this sum is 0 (an accept would have
+// consumed the offer, blocking the edit). It is the authoritative defense-in-
+// depth lower bound regardless — it can never let an owner under-cut shares
+// locked into a formed contract on this offer, and never spuriously blocks an
+// edit on a genuinely open offer.
+func (r *OTCOfferRepository) OutstandingCommittedQuantityTx(tx *gorm.DB, offerID uint64) (decimal.Decimal, error) {
+	var rows []struct{ Sum decimal.Decimal }
+	err := tx.Raw(`
+		SELECT COALESCE(SUM(quantity), 0) AS sum
+		  FROM otc_negotiations
+		 WHERE parent_offer_id = ? AND status = ?`,
+		offerID, model.OTCNegotiationStatusAccepted,
+	).Scan(&rows).Error
+	if err != nil || len(rows) == 0 {
+		return decimal.Zero, err
+	}
+	return rows[0].Sum, nil
+}
+
 // SumActiveQuantityForSeller returns Σ over (a) active option contracts
 // where the seller matches, plus (b) PENDING/COUNTERED sell-initiated
 // offers where the initiator is the seller, plus (c) PENDING/COUNTERED
@@ -478,9 +512,46 @@ func derefOr0(p *uint64) uint64 {
 // seller-invariant check (§4.6 of spec). owner_id may be nil for bank
 // owners; predicates emit IS NULL in that case.
 func (r *OTCOfferRepository) SumActiveQuantityForSeller(sellerOwnerType model.OwnerType, sellerOwnerID *uint64, stockID uint64) (decimal.Decimal, error) {
+	return r.sumActiveQuantityForSeller(r.db, sellerOwnerType, sellerOwnerID, stockID, 0)
+}
+
+// SumActiveQuantityForSellerExcludingOfferTx is SumActiveQuantityForSeller run
+// inside tx with one OTCOffer id excluded from the offer (b)/(c) subqueries.
+// Used by the edit-quantity path so the offer being resized does NOT count its
+// OWN current quantity against the seller's holding (otherwise the available
+// bound would be the holding minus the offer's current size rather than the
+// full holding, wrongly rejecting an edit up to the holding). Active contracts
+// (a) are never minted from an editable/open offer so they are not excluded.
+func (r *OTCOfferRepository) SumActiveQuantityForSellerExcludingOfferTx(tx *gorm.DB, sellerOwnerType model.OwnerType, sellerOwnerID *uint64, stockID, excludeOfferID uint64) (decimal.Decimal, error) {
+	return r.sumActiveQuantityForSeller(tx, sellerOwnerType, sellerOwnerID, stockID, excludeOfferID)
+}
+
+func (r *OTCOfferRepository) sumActiveQuantityForSeller(db *gorm.DB, sellerOwnerType model.OwnerType, sellerOwnerID *uint64, stockID, excludeOfferID uint64) (decimal.Decimal, error) {
 	var rows []struct{ Sum decimal.Decimal }
+	// excludeOfferID (0 = exclude nothing) keeps the offer being resized from
+	// counting its own current quantity in the (b)/(c) offer subqueries.
+	exclude := ""
+	if excludeOfferID != 0 {
+		exclude = " AND id <> ?"
+	}
+	var err error
 	if sellerOwnerID == nil {
-		err := r.db.Raw(`
+		args := []any{
+			sellerOwnerType, stockID, model.OptionContractStatusActive,
+			model.OTCDirectionSellInitiated, model.OTCOfferStatusPending, model.OTCOfferStatusCountered,
+			sellerOwnerType, stockID,
+		}
+		if excludeOfferID != 0 {
+			args = append(args, excludeOfferID)
+		}
+		args = append(args,
+			model.OTCDirectionBuyInitiated, model.OTCOfferStatusPending, model.OTCOfferStatusCountered,
+			sellerOwnerType, stockID,
+		)
+		if excludeOfferID != 0 {
+			args = append(args, excludeOfferID)
+		}
+		err = db.Raw(`
 			SELECT COALESCE(SUM(q), 0) AS sum FROM (
 				SELECT quantity AS q FROM option_contracts
 				 WHERE seller_owner_type = ? AND seller_owner_id IS NULL
@@ -489,46 +560,46 @@ func (r *OTCOfferRepository) SumActiveQuantityForSeller(sellerOwnerType model.Ow
 				SELECT quantity AS q FROM otc_offers
 				 WHERE direction = ? AND status IN (?, ?)
 				   AND initiator_owner_type = ? AND initiator_owner_id IS NULL
-				   AND stock_id = ?
+				   AND stock_id = ?`+exclude+`
 				UNION ALL
 				SELECT quantity AS q FROM otc_offers
 				 WHERE direction = ? AND status IN (?, ?)
 				   AND counterparty_owner_type = ? AND counterparty_owner_id IS NULL
-				   AND stock_id = ?
-			) AS t`,
-			sellerOwnerType, stockID, model.OptionContractStatusActive,
+				   AND stock_id = ?`+exclude+`
+			) AS t`, args...).Scan(&rows).Error
+	} else {
+		args := []any{
+			sellerOwnerType, *sellerOwnerID, stockID, model.OptionContractStatusActive,
 			model.OTCDirectionSellInitiated, model.OTCOfferStatusPending, model.OTCOfferStatusCountered,
-			sellerOwnerType, stockID,
-			model.OTCDirectionBuyInitiated, model.OTCOfferStatusPending, model.OTCOfferStatusCountered,
-			sellerOwnerType, stockID,
-		).Scan(&rows).Error
-		if err != nil || len(rows) == 0 {
-			return decimal.Zero, err
+			sellerOwnerType, *sellerOwnerID, stockID,
 		}
-		return rows[0].Sum, nil
+		if excludeOfferID != 0 {
+			args = append(args, excludeOfferID)
+		}
+		args = append(args,
+			model.OTCDirectionBuyInitiated, model.OTCOfferStatusPending, model.OTCOfferStatusCountered,
+			sellerOwnerType, *sellerOwnerID, stockID,
+		)
+		if excludeOfferID != 0 {
+			args = append(args, excludeOfferID)
+		}
+		err = db.Raw(`
+			SELECT COALESCE(SUM(q), 0) AS sum FROM (
+				SELECT quantity AS q FROM option_contracts
+				 WHERE seller_owner_type = ? AND seller_owner_id = ?
+				   AND stock_id = ? AND status = ?
+				UNION ALL
+				SELECT quantity AS q FROM otc_offers
+				 WHERE direction = ? AND status IN (?, ?)
+				   AND initiator_owner_type = ? AND initiator_owner_id = ?
+				   AND stock_id = ?`+exclude+`
+				UNION ALL
+				SELECT quantity AS q FROM otc_offers
+				 WHERE direction = ? AND status IN (?, ?)
+				   AND counterparty_owner_type = ? AND counterparty_owner_id = ?
+				   AND stock_id = ?`+exclude+`
+			) AS t`, args...).Scan(&rows).Error
 	}
-	err := r.db.Raw(`
-		SELECT COALESCE(SUM(q), 0) AS sum FROM (
-			SELECT quantity AS q FROM option_contracts
-			 WHERE seller_owner_type = ? AND seller_owner_id = ?
-			   AND stock_id = ? AND status = ?
-			UNION ALL
-			SELECT quantity AS q FROM otc_offers
-			 WHERE direction = ? AND status IN (?, ?)
-			   AND initiator_owner_type = ? AND initiator_owner_id = ?
-			   AND stock_id = ?
-			UNION ALL
-			SELECT quantity AS q FROM otc_offers
-			 WHERE direction = ? AND status IN (?, ?)
-			   AND counterparty_owner_type = ? AND counterparty_owner_id = ?
-			   AND stock_id = ?
-		) AS t`,
-		sellerOwnerType, *sellerOwnerID, stockID, model.OptionContractStatusActive,
-		model.OTCDirectionSellInitiated, model.OTCOfferStatusPending, model.OTCOfferStatusCountered,
-		sellerOwnerType, *sellerOwnerID, stockID,
-		model.OTCDirectionBuyInitiated, model.OTCOfferStatusPending, model.OTCOfferStatusCountered,
-		sellerOwnerType, *sellerOwnerID, stockID,
-	).Scan(&rows).Error
 	if err != nil || len(rows) == 0 {
 		return decimal.Zero, err
 	}
