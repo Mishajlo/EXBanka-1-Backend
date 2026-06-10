@@ -584,3 +584,50 @@ func TestValidatePeerOptionMoneyLeg_AcceptPremium(t *testing.T) {
 		t.Errorf("cross-currency positive premium should pass (residual); got ok=%v err=%v", r.GetOk(), err)
 	}
 }
+
+// TestPeerOTC_AcceptNegotiation_OptionAuthorityIsSeller asserts the OPTION legs of
+// the accept TX carry negotiationId.routingNumber == the SELLER's routing (the bank
+// that hosts the option pseudo-account, SI-TX §7) — NOT our own routing. When the
+// seller is a PEER (Direction 2: our bank is the buyer), hardcoding ownRouting made
+// the peer vote NO: UNACCEPTABLE_ASSET (it can't resolve an option keyed to us).
+func TestPeerOTC_AcceptNegotiation_OptionAuthorityIsSeller(t *testing.T) {
+	h, db, peerTx, _ := newPeerOtcHandler(t)
+	ctx := context.Background()
+	offer := contractsitx.OtcOffer{
+		Ticker: "AAPL", Amount: 10,
+		PricePerStock: decimal.RequireFromString("40"), Currency: "EUR",
+		Premium: decimal.RequireFromString("2"), PremiumCurrency: "EUR",
+		SettlementDate:     "2027-06-01",
+		BuyerAccountNumber: "111000000000000999",
+		LastModifiedBy:     contractsitx.ForeignBankId{RoutingNumber: 111, ID: "client-9"},
+	}
+	offerJSON, _ := json.Marshal(offer)
+	seedRepo := repository.NewOTCNegotiationRepository(db)
+	// Direction 2: buyer = us (111), seller = PEER 222 (hosts the option). Args:
+	// (peerRouting, foreignID, offer, offerJSON, buyerRouting, buyerID, sellerRouting, sellerID).
+	if err := seedRepo.UpsertRemoteNeg(buildRemoteNegForTest(
+		222, "neg-dir2", offer, string(offerJSON),
+		111, "client-9", 222, "client-7",
+	)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	peerTx.resp = &transactionpb.SiTxInitiateResponse{TransactionId: "tx-d2", Status: "initiated"}
+	if _, err := h.AcceptNegotiation(ctx, &stockpb.AcceptNegotiationRequest{
+		PeerBankCode:  "222",
+		NegotiationId: &stockpb.PeerForeignBankId{RoutingNumber: 111, Id: "neg-dir2"},
+	}); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	postings := peerTx.gotReq.GetPostings()
+	if len(postings) != 4 {
+		t.Fatalf("expected 4 postings, got %d", len(postings))
+	}
+	// postings[2] = seller OPTION leg; AssetId is the OptionDescription JSON.
+	var od contractsitx.OptionDescription
+	if e := json.Unmarshal([]byte(postings[2].GetAssetId()), &od); e != nil {
+		t.Fatalf("decode option desc: %v", e)
+	}
+	if od.NegotiationID.RoutingNumber != 222 {
+		t.Fatalf("option negotiationId.routingNumber = %d, want 222 (seller's bank hosts the option pseudo-account)", od.NegotiationID.RoutingNumber)
+	}
+}

@@ -986,7 +986,13 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	// 3. Seller debits 1× OptionDescription (asset)
 	// 4. Buyer credits 1× OptionDescription
 	optDesc := contractsitx.OptionDescription{
-		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: h.ownRouting, ID: foreignID},
+		// The option pseudo-account always lives in the SELLER's bank (SI-TX §7), so
+		// the negotiationId authority is the seller's routing — NOT ours. These match
+		// when WE host as seller (Direction 1: sellerRouting == ownRouting), but when
+		// the seller is a peer (Direction 2: our bank is the buyer) using ownRouting
+		// made the seller's bank vote NO: UNACCEPTABLE_ASSET (it can't resolve an
+		// option keyed to our routing).
+		NegotiationID:  contractsitx.ForeignBankId{RoutingNumber: sellerRouting, ID: foreignID},
 		Stock:          contractsitx.StockDescription{Ticker: offer.Ticker},
 		PricePerUnit:   contractsitx.MonetaryValue{Amount: contractsitx.DecimalNumber{Decimal: offer.PricePerStock}, Currency: offer.Currency},
 		SettlementDate: offer.SettlementDate,
