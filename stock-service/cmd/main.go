@@ -1009,7 +1009,7 @@ func main() {
 
 	// OTC expiry cron (daily). Covers intra-bank option_contracts and
 	// — via WithPeerContracts — cross-bank peer_option_contracts.
-	otcExpiry := service.NewOTCExpiryCron(optionContractRepo, otcOfferRepo, holdingReservationSvc, producer, cfg.OTCExpiryBatchSize, cfg.OTCExpiryCronUTC, cronRegistry).
+	otcExpiry := service.NewOTCExpiryCron(optionContractRepo, holdingReservationSvc, producer, cfg.OTCExpiryBatchSize, cfg.OTCExpiryCronUTC, cronRegistry).
 		WithOutbox(ob, db).
 		WithPeerContracts(peerOptionRepo).
 		WithCapitalGains(capitalGainRepo).

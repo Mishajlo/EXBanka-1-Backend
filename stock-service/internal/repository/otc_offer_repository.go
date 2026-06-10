@@ -442,19 +442,6 @@ func derefOr0(p *uint64) uint64 {
 	return *p
 }
 
-// ListExpiringOffers returns up to limit pending/countered offers whose
-// settlement_date is in the past. Used by the expiry cron.
-//
-// Guard: only local rows (local == true) are returned so remote offers folded
-// in by Tasks 4-6 never enter the local expiry path.
-func (r *OTCOfferRepository) ListExpiringOffers(today string, limit int) ([]model.OTCOffer, error) {
-	var out []model.OTCOffer
-	err := r.db.Where("status IN ? AND settlement_date < ? AND local = ?",
-		[]string{model.OTCOfferStatusPending, model.OTCOfferStatusCountered}, today, true).
-		Order("id ASC").Limit(limit).Find(&out).Error
-	return out, err
-}
-
 // SumActiveQuantityForSeller returns Σ over (a) active option contracts
 // where the seller matches, plus (b) PENDING/COUNTERED sell-initiated
 // offers where the initiator is the seller, plus (c) PENDING/COUNTERED

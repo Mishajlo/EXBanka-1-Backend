@@ -80,7 +80,7 @@ func seedGuardFixtures(t *testing.T, db *gorm.DB) (
 		Quantity:                    decimal.NewFromInt(10),
 		StrikePrice:                 decimal.NewFromFloat(100),
 		Premium:                     decimal.NewFromFloat(5),
-		SettlementDate:              pastDate, // past → eligible for ListExpiringOffers
+		SettlementDate:              pastDate, // past settlement (offers no longer auto-expire)
 		Status:                      model.OTCOfferStatusPending,
 		LastModifiedByPrincipalType: "client",
 		LastModifiedByPrincipalID:   1,
@@ -103,7 +103,7 @@ func seedGuardFixtures(t *testing.T, db *gorm.DB) (
 		Quantity:                    decimal.NewFromInt(10),
 		StrikePrice:                 decimal.NewFromFloat(100),
 		Premium:                     decimal.NewFromFloat(5),
-		SettlementDate:              pastDate, // also past → should be EXCLUDED by guarded ListExpiringOffers
+		SettlementDate:              pastDate, // past settlement (offers no longer auto-expire)
 		Status:                      model.OTCOfferStatusPending,
 		LastModifiedByPrincipalType: "client",
 		LastModifiedByPrincipalID:   2,
@@ -285,29 +285,6 @@ func TestGuard_ListOpenForCache_ExcludesRemote(t *testing.T) {
 	// Must still return the local open offer (sanity check it's not empty).
 	if len(rows) == 0 {
 		t.Errorf("ListOpenForCache returned nothing — local row missing from result")
-	}
-}
-
-// TestGuard_ListExpiringOffers_ExcludesRemote verifies that ListExpiringOffers
-// only returns offers whose routing_number == OwnRouting() (111).
-func TestGuard_ListExpiringOffers_ExcludesRemote(t *testing.T) {
-	db := newGuardTestDB(t)
-	r := NewOTCOfferRepository(db)
-	seedGuardFixtures(t, db)
-
-	today := time.Now().UTC().Format("2006-01-02")
-	rows, err := r.ListExpiringOffers(today, 1000)
-	if err != nil {
-		t.Fatalf("ListExpiringOffers: %v", err)
-	}
-	for _, o := range rows {
-		if !o.Local {
-			t.Errorf("ListExpiringOffers returned remote row id=%d (local=%v routing=%d)", o.ID, o.Local, o.RoutingNumber)
-		}
-	}
-	// Sanity: at least the local expired offer is returned.
-	if len(rows) == 0 {
-		t.Errorf("ListExpiringOffers returned nothing — local expired row missing")
 	}
 }
 
