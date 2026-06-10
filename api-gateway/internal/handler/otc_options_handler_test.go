@@ -248,10 +248,36 @@ func TestOTCOpt_CreateOffer_Success(t *testing.T) {
 		},
 	}
 	r := otcOptionsRouter(otcHandler(cl))
-	body := `{"direction":"sell_initiated","ticker":"AAPL","quantity":"100","strike_price":"5","premium":"1","settlement_date":"2026-12-31","account_id":50}`
+	// Terms (strike_price/premium/settlement_date) are no longer part of the
+	// create body — offers are posted open and terms are negotiated later.
+	body := `{"direction":"sell_initiated","ticker":"AAPL","quantity":"100","account_id":50}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
 	require.Equal(t, http.StatusCreated, rec.Code)
+}
+
+// TestOTCOpt_CreateOffer_Duplicate_Conflict asserts that a duplicate open
+// offer per (owner, ticker, direction) — surfaced by the service as a gRPC
+// AlreadyExists — is mapped to HTTP 409 with an apiError body whose code is
+// "conflict".
+func TestOTCOpt_CreateOffer_Duplicate_Conflict(t *testing.T) {
+	cl := &stubOTCOptionsClient{
+		createFn: func(*stockpb.CreateOTCOfferRequest) (*stockpb.OTCOfferResponse, error) {
+			return nil, status.Error(codes.AlreadyExists, "an open offer for this ticker and direction already exists")
+		},
+	}
+	r := otcOptionsRouter(otcHandler(cl))
+	body := `{"direction":"sell_initiated","ticker":"AAPL","quantity":"100","account_id":50}`
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
+	require.Equal(t, http.StatusConflict, rec.Code)
+	var body2 struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body2))
+	require.Equal(t, "conflict", body2.Error.Code)
 }
 
 func TestOTCOpt_CreateOffer_EmployeeBank_ForwardsActingEmployee(t *testing.T) {
@@ -275,7 +301,7 @@ func TestOTCOpt_CreateOffer_EmployeeBank_ForwardsActingEmployee(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.POST("/otc/offers", setEmployeeBankIdentity(17), h.CreateOffer)
-	body := `{"direction":"buy_initiated","ticker":"AAPL","quantity":"100","strike_price":"5","premium":"1","settlement_date":"2026-12-31","account_id":50}`
+	body := `{"direction":"buy_initiated","ticker":"AAPL","quantity":"100","account_id":50}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
 	require.Equal(t, http.StatusCreated, rec.Code)
@@ -287,7 +313,7 @@ func TestOTCOpt_CreateOffer_UnknownTicker(t *testing.T) {
 	}}
 	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, sec, &otcStubAccountClient{})
 	r := otcOptionsRouter(h)
-	body := `{"direction":"sell_initiated","ticker":"NOPE","quantity":"1","strike_price":"5","premium":"1","settlement_date":"2026-12-31","account_id":50}`
+	body := `{"direction":"sell_initiated","ticker":"NOPE","quantity":"1","account_id":50}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -299,7 +325,7 @@ func TestOTCOpt_CreateOffer_AccountNotOwned(t *testing.T) {
 	}}
 	h := handler.NewOTCOptionsHandler(&stubOTCOptionsClient{}, &otcStubSecurityClient{}, acct)
 	r := otcOptionsRouter(h)
-	body := `{"direction":"sell_initiated","ticker":"AAPL","quantity":"1","strike_price":"5","premium":"1","settlement_date":"2026-12-31","account_id":50}`
+	body := `{"direction":"sell_initiated","ticker":"AAPL","quantity":"1","account_id":50}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
 	require.Equal(t, http.StatusForbidden, rec.Code)
@@ -307,7 +333,7 @@ func TestOTCOpt_CreateOffer_AccountNotOwned(t *testing.T) {
 
 func TestOTCOpt_CreateOffer_BadDirection(t *testing.T) {
 	r := otcOptionsRouter(otcHandler(&stubOTCOptionsClient{}))
-	body := `{"direction":"weird","stock_id":1,"quantity":"100","strike_price":"5","settlement_date":"2026-12-31"}`
+	body := `{"direction":"weird","stock_id":1,"quantity":"100"}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -338,7 +364,7 @@ func TestOTCOpt_CreateOffer_WithCounterparty(t *testing.T) {
 		},
 	}
 	r := otcOptionsRouter(otcHandler(cl))
-	body := `{"direction":"buy_initiated","ticker":"AAPL","quantity":"100","strike_price":"5","premium":"1","settlement_date":"2026-12-31","counterparty_user_id":7,"account_id":50}`
+	body := `{"direction":"buy_initiated","ticker":"AAPL","quantity":"100","counterparty_user_id":7,"account_id":50}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
 	require.Equal(t, http.StatusCreated, rec.Code)
@@ -351,7 +377,7 @@ func TestOTCOpt_CreateOffer_GRPCError(t *testing.T) {
 		},
 	}
 	r := otcOptionsRouter(otcHandler(cl))
-	body := `{"direction":"sell_initiated","ticker":"AAPL","quantity":"100","strike_price":"5","premium":"1","settlement_date":"2026-12-31","account_id":50}`
+	body := `{"direction":"sell_initiated","ticker":"AAPL","quantity":"100","account_id":50}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("POST", "/otc/offers", strings.NewReader(body)))
 	require.Equal(t, http.StatusForbidden, rec.Code)

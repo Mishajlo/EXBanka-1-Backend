@@ -36,9 +36,6 @@ type createOTCOfferRequest struct {
 	Direction              string  `json:"direction"`
 	Ticker                 string  `json:"ticker"`
 	Quantity               string  `json:"quantity"`
-	StrikePrice            string  `json:"strike_price"`
-	Premium                string  `json:"premium"`
-	SettlementDate         string  `json:"settlement_date"`
 	AccountID              uint64  `json:"account_id"`
 	CounterpartyUserID     *int64  `json:"counterparty_user_id,omitempty"`
 	CounterpartySystemType *string `json:"counterparty_system_type,omitempty"`
@@ -47,14 +44,16 @@ type createOTCOfferRequest struct {
 
 // CreateOffer godoc
 // @Summary      Create an OTC option offer
+// @Description  Posts an open OTC option offer. Terms (strike_price, premium, settlement_date) are NOT set at creation — they are agreed during negotiation. Only one open offer per (owner, ticker, direction) is allowed; a duplicate returns 409.
 // @Tags         OTCOptions
 // @Security     BearerAuth
 // @Accept       json
 // @Produce      json
-// @Param        body body createOTCOfferRequest true "offer details (ticker-keyed; account_id is the initiator's account)"
+// @Param        body body createOTCOfferRequest true "offer details (ticker-keyed, open terms; account_id is the initiator's account)"
 // @Success      201 {object} map[string]interface{}
 // @Failure      400 {object} map[string]interface{}
 // @Failure      403 {object} map[string]interface{}
+// @Failure      409 {object} map[string]interface{}
 // @Router       /api/v3/me/otc/options [post]
 func (h *OTCOptionsHandler) CreateOffer(c *gin.Context) {
 	var req createOTCOfferRequest
@@ -66,8 +65,8 @@ func (h *OTCOptionsHandler) CreateOffer(c *gin.Context) {
 		apiError(c, http.StatusBadRequest, ErrValidation, err.Error())
 		return
 	}
-	if req.Ticker == "" || req.Quantity == "" || req.StrikePrice == "" || req.SettlementDate == "" {
-		apiError(c, http.StatusBadRequest, ErrValidation, "ticker, quantity, strike_price and settlement_date are required")
+	if req.Ticker == "" || req.Quantity == "" {
+		apiError(c, http.StatusBadRequest, ErrValidation, "ticker and quantity are required")
 		return
 	}
 	identity := c.MustGet("identity").(*middleware.ResolvedIdentity)
@@ -79,6 +78,10 @@ func (h *OTCOptionsHandler) CreateOffer(c *gin.Context) {
 		apiError(c, http.StatusBadRequest, ErrValidation, "unknown ticker: "+req.Ticker)
 		return
 	}
+	// Terms (strike_price/premium/settlement_date) are intentionally not set:
+	// offers are posted open and the terms are agreed during negotiation. The
+	// proto still carries those fields (cleanup is a later task); we simply
+	// leave them unset here.
 	in := &stockpb.CreateOTCOfferRequest{
 		ActorUserId:        int64(ownerToLegacyUserID(identity.OwnerID)),
 		ActorSystemType:    ownerToLegacySystemType(identity.OwnerType),
@@ -86,9 +89,6 @@ func (h *OTCOptionsHandler) CreateOffer(c *gin.Context) {
 		Direction:          req.Direction,
 		StockId:            stock.Id,
 		Quantity:           req.Quantity,
-		StrikePrice:        req.StrikePrice,
-		Premium:            req.Premium,
-		SettlementDate:     req.SettlementDate,
 		AccountId:          req.AccountID,
 		OnBehalfOfClientId: req.OnBehalfOfClientID,
 		Ticker:             req.Ticker,
