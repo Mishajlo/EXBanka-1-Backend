@@ -264,23 +264,14 @@ type CreateOfferInput struct {
 	StockID                uint64
 	Ticker                 string
 	Quantity               decimal.Decimal
-	StrikePrice            decimal.Decimal
-	Premium                decimal.Decimal
-	SettlementDate         time.Time
 	CounterpartyUserID     *int64
 	CounterpartySystemType *string
 	InitiatorAccountID     uint64
 }
 
 func (s *OTCOfferService) Create(ctx context.Context, in CreateOfferInput) (*model.OTCOffer, error) {
-	if !in.Quantity.IsPositive() || !in.StrikePrice.IsPositive() {
-		return nil, fmt.Errorf("quantity and strike_price must be positive: %w", ErrOTCOfferFieldInvalid)
-	}
-	if in.Premium.IsNegative() {
-		return nil, fmt.Errorf("premium must be non-negative: %w", ErrOTCOfferFieldInvalid)
-	}
-	if !in.SettlementDate.After(time.Now().UTC().Truncate(24 * time.Hour)) {
-		return nil, fmt.Errorf("settlement_date must be in the future: %w", ErrOTCOfferFieldInvalid)
+	if !in.Quantity.IsPositive() {
+		return nil, fmt.Errorf("quantity must be positive: %w", ErrOTCOfferFieldInvalid)
 	}
 	switch in.Direction {
 	case model.OTCDirectionSellInitiated, model.OTCDirectionBuyInitiated:
@@ -306,6 +297,19 @@ func (s *OTCOfferService) Create(ctx context.Context, in CreateOfferInput) (*mod
 	}
 
 	initOwnerType, initOwnerID := model.OwnerFromLegacy(uint64(in.ActorUserID), in.ActorSystemType)
+
+	// One-open-offer-per-(owner,ticker,direction) invariant. Offers are
+	// termless inventory; a duplicate open offer for the same ticker+direction
+	// is rejected here (friendlier than relying on the DB partial unique index
+	// ux_otc_offer_open_owner_ticker_dir, which is a backstop).
+	existing, err := s.offers.CountOpenByOwnerTickerDirection(initOwnerType, initOwnerID, in.Ticker, in.Direction)
+	if err != nil {
+		return nil, fmt.Errorf("duplicate check: %w", err)
+	}
+	if existing > 0 {
+		return nil, ErrOTCOfferDuplicateOpen
+	}
+
 	var cpOwnerType *model.OwnerType
 	var cpOwnerID *uint64
 	if in.CounterpartyUserID != nil {
@@ -334,9 +338,6 @@ func (s *OTCOfferService) Create(ctx context.Context, in CreateOfferInput) (*mod
 		StockID:                     in.StockID,
 		Ticker:                      in.Ticker,
 		Quantity:                    in.Quantity,
-		StrikePrice:                 in.StrikePrice,
-		Premium:                     in.Premium,
-		SettlementDate:              in.SettlementDate,
 		Status:                      model.OTCOfferStatusPending,
 		LastModifiedByPrincipalType: in.ActorSystemType,
 		LastModifiedByPrincipalID:   uint64(in.ActorUserID),

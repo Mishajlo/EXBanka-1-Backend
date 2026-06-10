@@ -318,28 +318,18 @@ func (h *OTCOptionsHandler) CreateOffer(ctx context.Context, in *stockpb.CreateO
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "quantity is not a valid decimal")
 	}
-	strike, err := decimal.NewFromString(in.StrikePrice)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "strike_price is not a valid decimal")
-	}
-	prem, err := decimal.NewFromString(in.Premium)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "premium is not a valid decimal")
-	}
-	settle, err := time.Parse("2006-01-02", in.SettlementDate)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "settlement_date must be YYYY-MM-DD")
-	}
 	if in.AccountId == 0 {
 		return nil, status.Error(codes.InvalidArgument, "account_id is required")
 	}
+	// Option offers are termless inventory: strike_price / premium /
+	// settlement_date on the proto request are no longer consumed (terms are
+	// negotiated per chain). The proto fields are removed in a later task.
 	input := service.CreateOfferInput{
 		ActorUserID: in.ActorUserId, ActorSystemType: in.ActorSystemType,
 		ActingEmployeeID: optionalPtr(in.GetActingEmployeeId()),
 		Direction:        in.Direction, StockID: in.StockId,
-		Ticker:   in.Ticker,
-		Quantity: qty, StrikePrice: strike, Premium: prem,
-		SettlementDate:     settle,
+		Ticker:             in.Ticker,
+		Quantity:           qty,
 		InitiatorAccountID: in.AccountId,
 	}
 	if in.Counterparty != nil && in.Counterparty.UserId != 0 {

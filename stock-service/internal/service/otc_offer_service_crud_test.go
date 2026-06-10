@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"gorm.io/driver/sqlite"
@@ -91,9 +92,6 @@ func TestOTCOfferService_Create_SellInitiated_HappyPath(t *testing.T) {
 		Direction:       model.OTCDirectionSellInitiated,
 		StockID:         42,
 		Quantity:        decimal.NewFromInt(10),
-		StrikePrice:     decimal.NewFromInt(150),
-		Premium:         decimal.NewFromInt(20),
-		SettlementDate:  time.Now().AddDate(0, 0, 30),
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -116,9 +114,6 @@ func TestOTCOfferService_Create_StoresInitiatorAccount(t *testing.T) {
 		Direction:          model.OTCDirectionSellInitiated,
 		StockID:            42,
 		Quantity:           decimal.NewFromInt(10),
-		StrikePrice:        decimal.NewFromInt(150),
-		Premium:            decimal.NewFromInt(20),
-		SettlementDate:     time.Now().AddDate(0, 0, 30),
 		InitiatorAccountID: 9001,
 	})
 	if err != nil {
@@ -142,9 +137,6 @@ func TestOTCOfferService_Create_BankOffer_CapturesActingEmployeeID(t *testing.T)
 		Direction:        model.OTCDirectionBuyInitiated,
 		StockID:          42,
 		Quantity:         decimal.NewFromInt(10),
-		StrikePrice:      decimal.NewFromInt(150),
-		Premium:          decimal.NewFromInt(20),
-		SettlementDate:   time.Now().AddDate(0, 0, 30),
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -179,9 +171,6 @@ func TestOTCOfferService_Create_OnBehalfOfClient_NoActingEmployeeID(t *testing.T
 		Direction:        model.OTCDirectionSellInitiated,
 		StockID:          7,
 		Quantity:         decimal.NewFromInt(10),
-		StrikePrice:      decimal.NewFromInt(150),
-		Premium:          decimal.NewFromInt(20),
-		SettlementDate:   time.Now().AddDate(0, 0, 30),
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -203,9 +192,6 @@ func TestOTCOfferService_Create_ClientOffer_NoActingEmployeeID(t *testing.T) {
 		Direction:       model.OTCDirectionSellInitiated,
 		StockID:         42,
 		Quantity:        decimal.NewFromInt(10),
-		StrikePrice:     decimal.NewFromInt(150),
-		Premium:         decimal.NewFromInt(20),
-		SettlementDate:  time.Now().AddDate(0, 0, 30),
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -224,9 +210,6 @@ func TestOTCOfferService_Create_BankOffer_NilActingEmployeeForSystemPath(t *test
 		Direction:       model.OTCDirectionBuyInitiated,
 		StockID:         42,
 		Quantity:        decimal.NewFromInt(10),
-		StrikePrice:     decimal.NewFromInt(150),
-		Premium:         decimal.NewFromInt(20),
-		SettlementDate:  time.Now().AddDate(0, 0, 30),
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -244,55 +227,10 @@ func TestOTCOfferService_Create_RejectsZeroQuantity(t *testing.T) {
 	_, err := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity:       decimal.Zero,
-		StrikePrice:    decimal.NewFromInt(150),
-		Premium:        decimal.NewFromInt(20),
-		SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.Zero,
 	})
 	if err == nil {
 		t.Fatal("expected error for zero quantity")
-	}
-}
-
-func TestOTCOfferService_Create_RejectsZeroStrikePrice(t *testing.T) {
-	fx := newOTCCRUDFixture(t)
-	_, err := fx.svc.Create(context.Background(), CreateOfferInput{
-		ActorUserID: 7, ActorSystemType: "client",
-		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.Zero,
-		Premium:        decimal.NewFromInt(20),
-		SettlementDate: time.Now().AddDate(0, 0, 30),
-	})
-	if err == nil {
-		t.Fatal("expected error for zero strike price")
-	}
-}
-
-func TestOTCOfferService_Create_RejectsNegativePremium(t *testing.T) {
-	fx := newOTCCRUDFixture(t)
-	_, err := fx.svc.Create(context.Background(), CreateOfferInput{
-		ActorUserID: 7, ActorSystemType: "client",
-		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium:        decimal.NewFromInt(-1),
-		SettlementDate: time.Now().AddDate(0, 0, 30),
-	})
-	if err == nil {
-		t.Fatal("expected error for negative premium")
-	}
-}
-
-func TestOTCOfferService_Create_RejectsPastSettlementDate(t *testing.T) {
-	fx := newOTCCRUDFixture(t)
-	_, err := fx.svc.Create(context.Background(), CreateOfferInput{
-		ActorUserID: 7, ActorSystemType: "client",
-		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium:        decimal.NewFromInt(20),
-		SettlementDate: time.Now().AddDate(0, 0, -1),
-	})
-	if err == nil {
-		t.Fatal("expected error for past settlement date")
 	}
 }
 
@@ -302,9 +240,7 @@ func TestOTCOfferService_Create_RejectsUnknownDirection(t *testing.T) {
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: "weird",
 		StockID:   42,
-		Quantity:  decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium:        decimal.NewFromInt(20),
-		SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity:  decimal.NewFromInt(10),
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown direction")
@@ -319,9 +255,7 @@ func TestOTCOfferService_Create_BuyInitiated_OpenListingAllowed(t *testing.T) {
 	o, err := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionBuyInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium:            decimal.NewFromInt(20),
-		SettlementDate:     time.Now().AddDate(0, 0, 30),
+		Quantity:           decimal.NewFromInt(10),
 		InitiatorAccountID: 99,
 	})
 	if err != nil {
@@ -343,9 +277,6 @@ func TestOTCOfferService_Create_CounterpartyHalfSet(t *testing.T) {
 		Direction:          model.OTCDirectionSellInitiated,
 		StockID:            42,
 		Quantity:           decimal.NewFromInt(10),
-		StrikePrice:        decimal.NewFromInt(150),
-		Premium:            decimal.NewFromInt(20),
-		SettlementDate:     time.Now().AddDate(0, 0, 30),
 		CounterpartyUserID: &cpID,
 		// CounterpartySystemType intentionally nil
 	})
@@ -360,10 +291,7 @@ func TestOTCOfferService_Create_SellInitiated_NoSharesHeld(t *testing.T) {
 	_, err := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity:       decimal.NewFromInt(10),
-		StrikePrice:    decimal.NewFromInt(150),
-		Premium:        decimal.NewFromInt(20),
-		SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.NewFromInt(10),
 	})
 	if err == nil {
 		t.Fatal("expected seller-no-holdings error")
@@ -376,10 +304,7 @@ func TestOTCOfferService_Create_SellInitiated_InsufficientShares(t *testing.T) {
 	_, err := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity:       decimal.NewFromInt(10), // requesting 10 > 5
-		StrikePrice:    decimal.NewFromInt(150),
-		Premium:        decimal.NewFromInt(20),
-		SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.NewFromInt(10), // requesting 10 > 5
 	})
 	if err == nil {
 		t.Fatal("expected insufficient-shares error")
@@ -400,18 +325,11 @@ func TestOTCOfferService_Create_ValidationErrorsAreInvalidArgument(t *testing.T)
 		return CreateOfferInput{
 			ActorUserID: 7, ActorSystemType: "client",
 			Direction: model.OTCDirectionSellInitiated, StockID: 42,
-			Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-			Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+			Quantity: decimal.NewFromInt(10),
 		}
 	}
 	cases := map[string]func(CreateOfferInput) CreateOfferInput{
-		"zero quantity":    func(in CreateOfferInput) CreateOfferInput { in.Quantity = decimal.Zero; return in },
-		"zero strike":      func(in CreateOfferInput) CreateOfferInput { in.StrikePrice = decimal.Zero; return in },
-		"negative premium": func(in CreateOfferInput) CreateOfferInput { in.Premium = decimal.NewFromInt(-1); return in },
-		"past settlement": func(in CreateOfferInput) CreateOfferInput {
-			in.SettlementDate = time.Now().AddDate(0, 0, -1)
-			return in
-		},
+		"zero quantity":     func(in CreateOfferInput) CreateOfferInput { in.Quantity = decimal.Zero; return in },
 		"unknown direction": func(in CreateOfferInput) CreateOfferInput { in.Direction = "weird"; return in },
 		"counterparty half": func(in CreateOfferInput) CreateOfferInput { id := int64(9); in.CounterpartyUserID = &id; return in },
 	}
@@ -428,6 +346,23 @@ func TestOTCOfferService_Create_ValidationErrorsAreInvalidArgument(t *testing.T)
 	}
 }
 
+// TestCreate_RejectsDuplicateOpenOfferSameTickerDirection asserts that a second
+// OPEN offer for the same (owner, ticker, direction) is rejected with the
+// sentinel ErrOTCOfferDuplicateOpen (mapped to gRPC AlreadyExists).
+func TestCreate_RejectsDuplicateOpenOfferSameTickerDirection(t *testing.T) {
+	fx := newOTCCRUDFixture(t)
+	fx.seedHolding(t, 7, 1, 100) // seller 7 holds plenty of OPK (stock 1)
+	in := CreateOfferInput{
+		ActorUserID: 7, ActorSystemType: "client",
+		Direction: model.OTCDirectionSellInitiated, StockID: 1, Ticker: "OPK",
+		Quantity: decimal.NewFromInt(5), InitiatorAccountID: 1,
+	}
+	_, err := fx.svc.Create(context.Background(), in)
+	require.NoError(t, err)
+	_, err = fx.svc.Create(context.Background(), in) // duplicate (owner,ticker,direction)
+	require.ErrorIs(t, err, ErrOTCOfferDuplicateOpen)
+}
+
 // ---------------- Counter ----------------
 
 func TestOTCOfferService_Counter_HappyPath(t *testing.T) {
@@ -436,8 +371,7 @@ func TestOTCOfferService_Counter_HappyPath(t *testing.T) {
 	out, err := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.NewFromInt(10),
 	})
 	if err != nil {
 		t.Fatalf("seed offer: %v", err)
@@ -477,8 +411,7 @@ func TestOTCOfferService_Counter_TerminalOffer(t *testing.T) {
 	out, _ := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.NewFromInt(10),
 	})
 	out.Status = model.OTCOfferStatusRejected
 	_ = fx.offers.Save(out)
@@ -498,8 +431,7 @@ func TestOTCOfferService_Counter_LastMoverGuard(t *testing.T) {
 	out, _ := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.NewFromInt(10),
 	})
 	// Same actor (the initiator/seller) cannot counter their own most-recent terms
 	_, err := fx.svc.Counter(context.Background(), CounterInput{
@@ -520,8 +452,7 @@ func TestOTCOfferService_Reject_HappyPath(t *testing.T) {
 	out, _ := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.NewFromInt(10),
 	})
 	rej, err := fx.svc.Reject(context.Background(), RejectInput{
 		OfferID: out.ID, ActorUserID: 8, ActorSystemType: "client",
@@ -550,8 +481,7 @@ func TestOTCOfferService_Reject_TerminalOffer(t *testing.T) {
 	out, _ := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.NewFromInt(10),
 	})
 	out.Status = model.OTCOfferStatusAccepted
 	_ = fx.offers.Save(out)
@@ -573,8 +503,7 @@ func TestOTCOfferService_Create_NotifiesNamedClientCounterparty(t *testing.T) {
 	out, err := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42, Ticker: "ACME",
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity:           decimal.NewFromInt(10),
 		CounterpartyUserID: &cpID, CounterpartySystemType: &cpType,
 	})
 	if err != nil {
@@ -605,8 +534,7 @@ func TestOTCOfferService_Create_BroadcastOffer_NoNotification(t *testing.T) {
 	_, err := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.NewFromInt(10),
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -624,8 +552,7 @@ func TestOTCOfferService_Create_BankCounterparty_NoNotification(t *testing.T) {
 	_, err := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity:           decimal.NewFromInt(10),
 		CounterpartyUserID: &cpID, CounterpartySystemType: &cpType,
 	})
 	if err != nil {
@@ -642,8 +569,7 @@ func TestOTCOfferService_Counter_NotifiesOtherParty(t *testing.T) {
 	out, err := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.NewFromInt(10),
 	})
 	if err != nil {
 		t.Fatalf("seed offer: %v", err)
@@ -679,8 +605,7 @@ func TestOTCOfferService_Reject_NotifiesOtherParty(t *testing.T) {
 	out, err := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.NewFromInt(10),
 	})
 	if err != nil {
 		t.Fatalf("seed offer: %v", err)
@@ -716,8 +641,7 @@ func TestOTCOfferService_ListMyOffers_FindsByOwner(t *testing.T) {
 	_, _ = fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.NewFromInt(10),
 	})
 	rows, total, err := fx.svc.ListMyOffers(7, "client", "initiator", nil, 0, 1, 50)
 	if err != nil {
@@ -748,8 +672,7 @@ func TestOTCOfferService_GetOffer_HappyPath(t *testing.T) {
 	out, _ := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.NewFromInt(10),
 	})
 	got, revs, err := fx.svc.GetOffer(out.ID, 7, "client")
 	if err != nil {
@@ -771,8 +694,7 @@ func TestOTCOfferService_GetOffer_NonParticipantSeesOfferNotRevisions(t *testing
 	out, _ := fx.svc.Create(context.Background(), CreateOfferInput{
 		ActorUserID: 7, ActorSystemType: "client",
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Now().AddDate(0, 0, 30),
+		Quantity: decimal.NewFromInt(10),
 	})
 	got, revs, err := fx.svc.GetOffer(out.ID, 999, "client")
 	if err != nil {

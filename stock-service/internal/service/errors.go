@@ -115,6 +115,12 @@ var (
 	// counterparty, unknown direction). InvalidArgument → HTTP 400.
 	ErrOTCOfferFieldInvalid = svcerr.New(codes.InvalidArgument, "invalid OTC offer field")
 
+	// ErrOTCOfferDuplicateOpen — create rejected because the owner already has
+	// an OPEN offer for the same (ticker, direction). Offers are termless
+	// inventory; only one open offer per (owner, ticker, direction) is allowed.
+	// Carries codes.AlreadyExists so the handler passthrough maps it to HTTP 409.
+	ErrOTCOfferDuplicateOpen = svcerr.New(codes.AlreadyExists, "an open option offer already exists for this ticker and direction")
+
 	// ErrOTCSettlementInvalid — settlement_date constraint violated
 	// (in the past, or after underlying expiry).
 	ErrOTCSettlementInvalid = svcerr.New(codes.FailedPrecondition, "invalid settlement_date")

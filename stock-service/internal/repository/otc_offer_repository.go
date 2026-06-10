@@ -84,6 +84,35 @@ func (r *OTCOfferRepository) Create(o *model.OTCOffer) error {
 	return r.db.Create(o).Error
 }
 
+// CountOpenByOwnerTickerDirection counts this bank's OPEN LOCAL offers for the
+// (owner, ticker, direction) triple — the partial-unique-index key. Used to
+// reject a duplicate before insert (friendlier than relying on the DB error).
+//
+// New offers are created with the legacy status PENDING (the negotiation-thread
+// vocabulary), but the DB partial unique index keys on status = 'open'. To keep
+// the service-level guard authoritative and consistent across the legacy and
+// new lifecycles, this counts every IsOpenListing status
+// ('open','PENDING','COUNTERED'). The DB index is a backstop for 'open'; this
+// service check is the primary guard and additionally covers the legacy
+// pending/countered statuses.
+func (r *OTCOfferRepository) CountOpenByOwnerTickerDirection(ownerType model.OwnerType, ownerID *uint64, ticker, direction string) (int64, error) {
+	var n int64
+	openStatuses := []string{
+		model.OTCOfferStatusOpen,
+		model.OTCOfferStatusPending,
+		model.OTCOfferStatusCountered,
+	}
+	q := r.db.Model(&model.OTCOffer{}).
+		Where("status IN ? AND local = ? AND ticker = ? AND direction = ? AND initiator_owner_type = ?",
+			openStatuses, true, ticker, direction, ownerType)
+	if ownerID != nil {
+		q = q.Where("initiator_owner_id = ?", *ownerID)
+	} else {
+		q = q.Where("initiator_owner_id IS NULL")
+	}
+	return n, q.Count(&n).Error
+}
+
 func (r *OTCOfferRepository) GetByID(id uint64) (*model.OTCOffer, error) {
 	return r.getByID(r.db, id)
 }
