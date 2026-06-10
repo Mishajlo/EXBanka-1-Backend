@@ -8,8 +8,10 @@
 // to the gateway as GET /api/v3/otc/options.
 //
 // Local source: stock-service OTCOfferRepository.ListOpenForCache().
-// Remote source: GET /api/v3/public-option-offers on each registered
-// active peer bank, polled every refresh interval.
+// Remote source: GET /public-stock on each registered active peer bank,
+// polled every refresh interval and synthesized into sell_initiated option
+// shells (no preset terms). The outbound /public-option-offers ingestion was
+// removed — /public-stock shells are the sole cross-bank option source.
 package otccache
 
 import (
@@ -54,9 +56,9 @@ type OptionOffer struct {
 	SettlementDate  string // RFC3339 UTC
 	CreatedAt       string // RFC3339 UTC
 
-	// HasPresetTerms: true for /public-option-offers rows (offer carries
-	// owner-set strike + premium). false for shells synthesized from
-	// /public-stock (fully buyer-negotiated, no preset terms).
+	// HasPresetTerms: true for LOCAL rows (offer carries owner-set strike +
+	// premium). false for shells synthesized from a peer's /public-stock
+	// (fully buyer-negotiated, no preset terms).
 	HasPresetTerms bool
 
 	// Best-bid / best-ask aggregation (Part A 2026-05-16). Empty
@@ -258,21 +260,11 @@ func (r *OptionRefresher) refresh(ctx context.Context) {
 			wg.Add(1)
 			go func(peer *transactionpb.PeerBank) {
 				defer wg.Done()
-				// fetchPeer (option-offers) and fetchPeerStocks (/public-stock
-				// shells) are INDEPENDENT: a peer that 404s /public-option-offers
-				// (base-spec peer, no proprietary extension) must still have its
-				// shells ingested. The early-return on fetchPeer failure was the
-				// Bug-1 root cause — fixed by restructuring to if/else.
+				// The peer's /public-stock is the SOLE cross-bank option source:
+				// each peer listing is synthesized into a sell_initiated shell. A
+				// peer counts as "reached" iff its /public-stock fetch succeeds, so
+				// the options view reports peers up like the stocks view.
 				reached := false
-				if peerOffers, err := r.fetchPeer(cycleCtx, peer); err != nil {
-					log.Printf("otccache(options): peer %s fetch failed: %v", peer.GetBankCode(), err)
-				} else {
-					reached = true
-					mu.Lock()
-					offers = append(offers, peerOffers...)
-					mu.Unlock()
-				}
-
 				if shells, serr := r.fetchPeerStocks(cycleCtx, peer); serr != nil {
 					log.Printf("otccache(stock-shells): peer %s fetch failed: %v", peer.GetBankCode(), serr)
 				} else {
@@ -281,10 +273,6 @@ func (r *OptionRefresher) refresh(ctx context.Context) {
 					offers = append(offers, shells...)
 					mu.Unlock()
 				}
-
-				// A base-spec peer (only /public-stock) is "reached" via shells even
-				// though /public-option-offers 404s — count the peer if EITHER feed
-				// succeeded, so the options view reports peers up like the stocks view.
 				if reached {
 					mu.Lock()
 					peersReached++
@@ -364,28 +352,6 @@ func (r *OptionRefresher) fetchLocal() ([]OptionOffer, error) {
 	return out, nil
 }
 
-func (r *OptionRefresher) fetchPeer(ctx context.Context, peer *transactionpb.PeerBank) ([]OptionOffer, error) {
-	// Outbound HTTP to the peer's /public-option-offers is centralized in
-	// interbank-service: ProxyToPeer resolves the peer's base_url, signs, GETs,
-	// and returns the peer's status + body verbatim.
-	proxyResp, err := r.egress.ProxyToPeer(ctx, &transactionpb.ProxyToPeerRequest{
-		PeerBankCode: peer.GetBankCode(),
-		Method:       http.MethodGet,
-		Path:         "/public-option-offers",
-	})
-	if err != nil {
-		return nil, err
-	}
-	if proxyResp.GetStatusCode() != http.StatusOK {
-		return nil, fmt.Errorf("status %d: %s", proxyResp.GetStatusCode(), string(proxyResp.GetBody()))
-	}
-	var resp sitx.PublicOptionOffersResponse
-	if err := json.Unmarshal(proxyResp.GetBody(), &resp); err != nil {
-		return nil, err
-	}
-	return r.buildAndMirrorRemoteOffers(peer.GetBankCode(), peerRoutingOf(peer), resp.Offers), nil
-}
-
 func (r *OptionRefresher) fetchPeerStocks(ctx context.Context, peer *transactionpb.PeerBank) ([]OptionOffer, error) {
 	proxyResp, err := r.egress.ProxyToPeer(ctx, &transactionpb.ProxyToPeerRequest{
 		PeerBankCode: peer.GetBankCode(),
@@ -403,123 +369,6 @@ func (r *OptionRefresher) fetchPeerStocks(ctx context.Context, peer *transaction
 		return nil, err
 	}
 	return r.buildAndMirrorRemoteStockShells(peer.GetBankCode(), peerRoutingOf(peer), resp), nil
-}
-
-// buildAndMirrorRemoteOffers converts a peer's public option offers into
-// unified cache rows, upserting each into the persistent mirror (stamping
-// the stable LocalID) and reconciling that peer's vanished offers to
-// cancelled. Called ONLY after a successful (2xx) peer fetch, so the
-// reconcile never runs on a transport/HTTP error (false-cancel guard).
-// The mirror row is keyed by the POLLED peer's routing so reconcile scope
-// always matches what we upserted.
-func (r *OptionRefresher) buildAndMirrorRemoteOffers(peerBankCode string, peerRouting int64, offers []sitx.PublicOptionOffer) []OptionOffer {
-	// Ingestion collision guard (SP-2a): if the peer's routing matches our own,
-	// ingesting any of its offers would stamp routing_number=OwnRouting() on the
-	// mirror row, making it look LOCAL. Reject the entire peer's payload.
-	if peerRouting == model.OwnRouting() {
-		log.Printf("WARN otccache(options): peer bank_code=%s routing=%d collides with own routing (%d) — skipping entire peer payload",
-			peerBankCode, peerRouting, model.OwnRouting())
-		return nil
-	}
-	now := time.Now().UTC()
-	seen := make([]string, 0, len(offers))
-	out := make([]OptionOffer, 0, len(offers))
-	for i := range offers {
-		o := offers[i]
-		// Per-offer guard: reject any offer claiming our own routing as its id
-		// namespace (defense-in-depth: the per-peer guard above should catch this,
-		// but a malformed payload could mix routings).
-		if o.OfferID.RoutingNumber == model.OwnRouting() {
-			log.Printf("WARN otccache(options): peer=%s offer %s claims own routing (%d) — skipping offer",
-				peerBankCode, o.OfferID.ID, model.OwnRouting())
-			continue
-		}
-		// Seller-centric discovery guard (SI-TX §3 / §3.1 / §3.2): the OTC
-		// cross-bank model only conveys SELLER-side listings. A buy_initiated
-		// offer's poster is a BUYER, which has no spec wire representation. We
-		// never publish our own buy_initiated offers, but a non-conformant peer
-		// could still emit one with our proprietary `direction` field set.
-		// Ingesting it would create a remote listing a local user could "bid" on
-		// — only to hit the role-inversion fail-closed at openRemoteNegotiation.
-		// Drop it at the ingest boundary so it never becomes a biddable row.
-		if o.Direction == model.OTCDirectionBuyInitiated {
-			log.Printf("WARN otccache(options): peer=%s offer %s is buy_initiated — skipping (seller-centric cross-bank discovery)",
-				peerBankCode, o.OfferID.ID)
-			continue
-		}
-		row := OptionOffer{
-			Kind:              "remote",
-			BankCode:          peerBankCode,
-			RoutingNumber:     peerRouting, // authoritative (registrar-verified); peer's wire value is advisory
-			OfferID:           o.OfferID.ID,
-			SellerID:          o.SellerID.ID,
-			Direction:         o.Direction,
-			Ticker:            o.Ticker,
-			Amount:            o.Amount,
-			StrikePrice:       o.StrikePrice.String(),
-			StrikeCurrency:    o.StrikeCurrency,
-			Premium:           o.Premium.String(),
-			PremiumCurrency:   o.PremiumCurrency,
-			SettlementDate:    o.SettlementDate,
-			CreatedAt:         o.CreatedAt,
-			BestBid:           o.BestBid,
-			BestAsk:           o.BestAsk,
-			ActiveChainsCount: o.ActiveChainsCount,
-			HasPresetTerms:    true,
-		}
-		if r.mirror != nil {
-			nativeID := o.OfferID.ID
-			bankCode := peerBankCode
-			sellerID := o.SellerID.ID
-			strikeCcy := o.StrikeCurrency
-			premiumCcy := o.PremiumCurrency
-			remoteRow := &model.OTCOffer{
-				RoutingNumber:     peerRouting,
-				NativeID:          &nativeID,
-				InitiatorBankCode: &bankCode,
-				RemoteSellerID:    &sellerID,
-				// Remote rows are "bank-ish" from our view: OwnerBank + nil id
-				// is the only owner combination ValidateOwner accepts without a
-				// concrete local owner. The actual remote seller is carried in
-				// RemoteSellerID / InitiatorBankCode for display.
-				InitiatorOwnerType: model.OwnerBank,
-				Direction:          o.Direction,
-				// StockID is local-only and meaningless for a peer listing; 0.
-				Ticker: o.Ticker,
-				// Wire amount is int64; OTCOffer.Quantity is decimal.
-				Quantity:        decimal.NewFromInt(o.Amount),
-				StrikePrice:     o.StrikePrice,
-				Premium:         o.Premium,
-				StrikeCurrency:  &strikeCcy,
-				PremiumCurrency: &premiumCcy,
-				SettlementDate:  parseRFC3339OrZero(o.SettlementDate),
-				Status:          model.OTCOfferStatusOpen,
-				// HasPresetTerms = true: a /public-option-offers listing always
-				// carries owner-set strike and premium terms.
-				HasPresetTerms: true,
-				// NOT-NULL audit columns: the refresher is the actor for
-				// remote rows. "system"/0 marks a machine-written row.
-				LastModifiedByPrincipalType: "system",
-				LastModifiedByPrincipalID:   0,
-			}
-			id, err := r.mirror.UpsertRemote(remoteRow, now)
-			if err != nil {
-				log.Printf("otccache(options): mirror upsert peer=%s foreign=%s failed: %v", peerBankCode, o.OfferID.ID, err)
-			} else {
-				row.LocalID = id
-				seen = append(seen, o.OfferID.ID)
-			}
-		}
-		out = append(out, row)
-	}
-	if r.mirror != nil {
-		if n, err := r.mirror.ReconcileRemoteNotSeen(peerRouting, seen); err != nil {
-			log.Printf("otccache(options): reconcile peer=%s failed: %v", peerBankCode, err)
-		} else if n > 0 {
-			log.Printf("otccache(options): reconciled %d cancelled offers from peer=%s", n, peerBankCode)
-		}
-	}
-	return out
 }
 
 // buildAndMirrorRemoteStockShells converts a peer's /public-stock listings into
@@ -627,22 +476,6 @@ func (r *OptionRefresher) buildAndMirrorRemoteStockShells(peerBankCode string, p
 		}
 	}
 	return out
-}
-
-// parseRFC3339OrZero parses an RFC3339 timestamp string into time.Time.
-// On a parse error (or empty string) it logs and returns the zero time, so a
-// malformed peer settlement_date never aborts the whole refresh — the remote
-// row is still folded in, just with a zero settlement_date.
-func parseRFC3339OrZero(s string) time.Time {
-	if s == "" {
-		return time.Time{}
-	}
-	t, err := time.Parse(time.RFC3339, s)
-	if err != nil {
-		log.Printf("otccache(options): bad RFC3339 settlement_date %q: %v (using zero time)", s, err)
-		return time.Time{}
-	}
-	return t
 }
 
 // peerRoutingOf returns the polled peer's routing number (SI-TX bank codes
