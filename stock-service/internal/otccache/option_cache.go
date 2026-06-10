@@ -258,15 +258,19 @@ func (r *OptionRefresher) refresh(ctx context.Context) {
 			wg.Add(1)
 			go func(peer *transactionpb.PeerBank) {
 				defer wg.Done()
-				peerOffers, err := r.fetchPeer(cycleCtx, peer)
-				if err != nil {
+				// fetchPeer (option-offers) and fetchPeerStocks (/public-stock
+				// shells) are INDEPENDENT: a peer that 404s /public-option-offers
+				// (base-spec peer, no proprietary extension) must still have its
+				// shells ingested. The early-return on fetchPeer failure was the
+				// Bug-1 root cause — fixed by restructuring to if/else.
+				if peerOffers, err := r.fetchPeer(cycleCtx, peer); err != nil {
 					log.Printf("otccache(options): peer %s fetch failed: %v", peer.GetBankCode(), err)
-					return
+				} else {
+					mu.Lock()
+					offers = append(offers, peerOffers...)
+					peersReached++
+					mu.Unlock()
 				}
-				mu.Lock()
-				offers = append(offers, peerOffers...)
-				peersReached++
-				mu.Unlock()
 
 				if shells, serr := r.fetchPeerStocks(cycleCtx, peer); serr != nil {
 					log.Printf("otccache(stock-shells): peer %s fetch failed: %v", peer.GetBankCode(), serr)
@@ -509,8 +513,11 @@ func (r *OptionRefresher) buildAndMirrorRemoteOffers(peerBankCode string, peerRo
 
 // buildAndMirrorRemoteStockShells converts a peer's /public-stock listings into
 // biddable sell_initiated SHELL rows (no preset terms — buyer proposes
-// strike/premium/settlement on bid). native_id = "ps:<peerRouting>:<sellerId>:<ticker>"
-// so reconcile scopes to the shell namespace. Call ONLY after a successful peer fetch.
+// strike/premium/settlement on bid). native_id = "ps:<sellerRouting>:<sellerId>:<ticker>"
+// where sellerRouting is the individual seller's routing number (s.Seller.RoutingNumber),
+// NOT the peer gateway routing. This avoids collisions when sellers from different
+// origin banks appear in a single peer's /public-stock response.
+// Call ONLY after a successful peer fetch.
 func (r *OptionRefresher) buildAndMirrorRemoteStockShells(peerBankCode string, peerRouting int64, stocks []sitx.PublicStock) []OptionOffer {
 	if peerRouting == model.OwnRouting() {
 		log.Printf("WARN otccache(stock-shells): peer bank_code=%s routing=%d collides with own routing — skipping", peerBankCode, peerRouting)
@@ -528,7 +535,7 @@ func (r *OptionRefresher) buildAndMirrorRemoteStockShells(peerBankCode string, p
 			if s.Seller.RoutingNumber == model.OwnRouting() || s.Seller.ID == "" {
 				continue
 			}
-			native := fmt.Sprintf("%s%d:%s:%s", model.RemoteStockShellPrefix, peerRouting, s.Seller.ID, ticker)
+			native := fmt.Sprintf("%s%d:%s:%s", model.RemoteStockShellPrefix, s.Seller.RoutingNumber, s.Seller.ID, ticker)
 			row := OptionOffer{
 				Kind:           "remote",
 				BankCode:       peerBankCode,

@@ -111,8 +111,17 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 	// stale, so re-confirm the seller still publicly offers this ticker before we
 	// dispatch a doomed negotiation. Preset option-offers skip this — the seller's
 	// bank validates them on POST /negotiations.
+	//
+	// Bug-2 fix: use PublicStock (not Proxy) so the egress path is exactly
+	// /public-stock. Proxy hardcodes /negotiations/{rid}/{foreignID}{subpath},
+	// which would build /negotiations///public-stock on the peer — a 404 on
+	// every conformant base-spec implementation.
 	if !remoteOffer.HasPresetTerms {
-		liveBody, _, perr := h.peerDispatch.Proxy(ctx, strconv.FormatInt(remoteOffer.RoutingNumber, 10), "", "", "GET", "/public-stock", nil)
+		guardBankCode := derefStr(remoteOffer.InitiatorBankCode)
+		if guardBankCode == "" {
+			guardBankCode = strconv.FormatInt(remoteOffer.RoutingNumber, 10)
+		}
+		liveBody, _, perr := h.peerDispatch.PublicStock(ctx, guardBankCode)
 		if perr != nil {
 			return nil, false, status.Errorf(codes.FailedPrecondition, "cannot re-validate peer stock listing: %v", perr)
 		}
@@ -141,8 +150,8 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 		return nil, false, status.Error(codes.InvalidArgument, "unsupported bidder owner type")
 	}
 
-	// The bid's premium currency is the listing's published premium currency
-	// (the gateway sends premium as a bare decimal; the currency is the peer's).
+	// Read the listing's pre-set currencies (preset offers publish these; shells
+	// have nil — buyer proposes currency via their bound account, Bug-3 fix).
 	premiumCurrency := ""
 	if remoteOffer.PremiumCurrency != nil {
 		premiumCurrency = *remoteOffer.PremiumCurrency
@@ -151,14 +160,17 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 	if remoteOffer.StrikeCurrency != nil {
 		strikeCurrency = *remoteOffer.StrikeCurrency
 	}
-	if premiumCurrency == "" {
+	// Preset offers MUST carry a currency — if absent the listing is malformed.
+	// Shells intentionally have no preset currency; the bidder's account determines it.
+	if remoteOffer.HasPresetTerms && premiumCurrency == "" {
 		return nil, false, status.Error(codes.FailedPrecondition,
 			"remote listing has no premium currency; cannot validate bidder account")
 	}
 
-	// Validate the bidder account against account-service: ownership, active,
-	// and currency == premium currency (no cross-bank FX). Read its number so
-	// the seller's bank debits this exact account on accept.
+	// Validate the bidder account against account-service: ownership and active.
+	// For preset offers: also enforce currency == listing currency (no FX in SI-TX).
+	// For shells: derive premiumCurrency (and strikeCurrency when absent) from the
+	// account — the buyer proposes the currency by choosing which account to bind.
 	if h.accounts == nil {
 		return nil, false, status.Error(codes.FailedPrecondition, "account-service client not wired for cross-bank bidding")
 	}
@@ -182,7 +194,15 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 	if acct.GetStatus() != "active" {
 		return nil, false, status.Error(codes.FailedPrecondition, "bidder account is not active")
 	}
-	if acct.GetCurrencyCode() != premiumCurrency {
+	// Bug-3 fix: shells have nil currencies — derive from account so the bid
+	// carries the buyer's actual currency to the seller's bank.
+	// Preset offers keep the listing currency and enforce matching (no FX).
+	if !remoteOffer.HasPresetTerms {
+		premiumCurrency = acct.GetCurrencyCode()
+		if strikeCurrency == "" {
+			strikeCurrency = premiumCurrency
+		}
+	} else if acct.GetCurrencyCode() != premiumCurrency {
 		return nil, false, status.Errorf(codes.InvalidArgument,
 			"currency mismatch: account is %s but the listing's premium is %s (cross-bank SI-TX has no FX)",
 			acct.GetCurrencyCode(), premiumCurrency)
