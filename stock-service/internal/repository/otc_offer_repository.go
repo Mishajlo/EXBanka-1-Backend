@@ -208,6 +208,33 @@ func (r *OTCOfferRepository) ListOpenForCache(limit int) ([]model.OTCOffer, erro
 	return out, err
 }
 
+// ListPublicOptionOffersForPeer returns this bank's OPEN, sell-initiated, public,
+// non-private, LOCAL option offers — the "optionable inventory" exposed to peer
+// banks on the SI-TX /public-stock endpoint (PeerOTCGRPCHandler.GetPublicStocks).
+// One row per (owner, ticker, direction): the partial unique index already
+// guarantees one open sell offer per that triple, so no aggregation is needed.
+//
+// Status predicate: the SAME open-listing set ListOpenForCache uses
+// ('open','PENDING','COUNTERED'). New sell offers are created with the legacy
+// status PENDING (IsOpenListing treats open/PENDING/COUNTERED as open), so a
+// strict status='open' filter would MISS freshly-created offers and peers would
+// see an empty catalog. Mirroring ListOpenForCache's predicate keeps peer
+// /public-stock discovery in agreement with local /public-option-offers
+// discovery (both read the same open set).
+func (r *OTCOfferRepository) ListPublicOptionOffersForPeer() ([]model.OTCOffer, error) {
+	openStatuses := []string{
+		model.OTCOfferStatusOpen,
+		model.OTCOfferStatusPending,
+		model.OTCOfferStatusCountered,
+	}
+	var rows []model.OTCOffer
+	err := r.db.Where(
+		"status IN ? AND local = ? AND direction = ? AND public = ? AND private = ?",
+		openStatuses, true, model.OTCDirectionSellInitiated, true, false,
+	).Find(&rows).Error
+	return rows, err
+}
+
 // UpsertRemote inserts or refreshes a REMOTE OTCOffer row keyed by the
 // natural key (routing_number, native_id), stamping LastSeenAt and
 // (re)opening the row. Returns the stable surrogate id. The caller MUST

@@ -35,10 +35,11 @@ type PeerNotifier interface {
 
 // HoldingReader is the subset of HoldingRepository methods that
 // PeerOTCGRPCHandler needs. Decoupled for testability.
-//   - ListPublic backs GetPublicStocks.
 //   - GetByOwnerAndTicker backs CheckSellerCanDeliver.
+//
+// GetPublicStocks no longer reads holdings — it serves our open option offers
+// via OTCOfferReader.ListPublicOptionOffersForPeer (Task C1).
 type HoldingReader interface {
-	ListPublic() ([]model.Holding, error)
 	GetByOwnerAndTicker(ownerType model.OwnerType, ownerID *uint64, securityType, ticker string) (*model.Holding, error)
 }
 
@@ -92,8 +93,9 @@ type SellerAccountResolver interface {
 
 // PeerOTCGRPCHandler implements stockpb.PeerOTCServiceServer.
 //
-// GetPublicStocks queries the local holdings table for rows flagged
-// public_quantity > 0 and returns them as PeerPublicStock entries.
+// GetPublicStocks serves our OPEN, sell-initiated, public, non-private, LOCAL
+// option offers (the optionable inventory peers negotiate options off) as
+// PeerPublicStock entries — one seller entry per (owner, ticker).
 //
 // Negotiation lifecycle: peers POST/PUT/GET/DELETE on
 // /negotiations/{rid}/{id}; we persist in peer_otc_negotiations.
@@ -305,10 +307,14 @@ func notifDataFromOffer(offer contractsitx.OtcOffer) map[string]string {
 }
 
 // OTCOfferReader is the narrow interface the peer endpoint uses to
-// read open OTC listings. OTCOfferRepository.ListOpenForCache
-// satisfies it.
+// read open OTC listings. *OTCOfferRepository satisfies it.
+//   - ListOpenForCache backs GetPublicOptionOffers (/public-option-offers).
+//   - ListPublicOptionOffersForPeer backs GetPublicStocks (/public-stock) —
+//     our open sell-initiated public local option offers (the optionable
+//     inventory peers negotiate options off).
 type OTCOfferReader interface {
 	ListOpenForCache(limit int) ([]model.OTCOffer, error)
+	ListPublicOptionOffersForPeer() ([]model.OTCOffer, error)
 }
 
 // OptionCurrencyResolver maps a stockID → currency for the cache row.
@@ -534,50 +540,41 @@ func deriveLastModifiedBy(lm contractsitx.ForeignBankId, peerRouting int64) cont
 }
 
 func (h *PeerOTCGRPCHandler) GetPublicStocks(ctx context.Context, req *stockpb.GetPublicStocksRequest) (*stockpb.GetPublicStocksResponse, error) {
-	rows, err := h.holdings.ListPublic()
+	if h.otcOffers == nil {
+		return nil, status.Error(codes.Unimplemented, "OTCOfferReader not wired")
+	}
+	// Cross-bank discovery now serves our OPEN, sell-initiated, public,
+	// non-private, LOCAL option offers — the optionable inventory peers
+	// negotiate options off (Task C1) — instead of the holdings table. The
+	// partial unique index guarantees one open sell offer per (owner, ticker,
+	// direction), so the result is already one seller entry per (owner, ticker).
+	rows, err := h.otcOffers.ListPublicOptionOffersForPeer()
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list public holdings: %v", err)
+		return nil, status.Errorf(codes.Internal, "list public option offers: %v", err)
 	}
 	out := make([]*stockpb.PeerPublicStock, 0, len(rows))
 	for i := range rows {
-		hd := rows[i]
-		// Publish the STANDARD SI-TX participant id (sellerIDForOwner):
-		// "client-<ownerId>" for a client-held holding, "bank" for a
-		// bank-held one. This is the SAME opaque form parseSellerOwner
-		// accepts inbound on POST /negotiations, so a discovering bank can
-		// echo our catalog's seller id back verbatim and have it resolve.
-		// We MUST NOT emit the bare numeric owner id (the prior "7"/"0"
-		// form): per SI-TX §2.3 the id is opaque and other banks return it
-		// verbatim, but the bare numeric could not be addressed back here.
-		ownerID := sellerIDForOwner(hd.OwnerType, hd.OwnerID)
-		if ownerID == "" {
-			// Defensive: a malformed row (client owner with nil id) has no
-			// addressable seller id; skip rather than publish an empty one.
-			log.Printf("WARN: public stock holding %d skipped: no conformant seller id (owner_type=%q)", hd.ID, hd.OwnerType)
+		o := &rows[i]
+		// Publish the conformant SI-TX seller id (composePeerSellerID):
+		// "client-<n>" / "employee-<n>", NEVER the legacy literal "bank". This is
+		// the SAME id form GetPublicOptionOffers emits and that a discovering bank
+		// echoes back verbatim on POST /negotiations (SI-TX §2.3).
+		sellerID := composePeerSellerID(o)
+		if sellerID == "" {
+			// A legacy/seed bank offer with no acting employee (or a client offer
+			// with no owner id) has no addressable seller id; skip rather than
+			// ever publishing an empty / bare-numeric id a peer cannot address back.
+			log.Printf("WARN: public stock offer %d skipped: no conformant seller id", o.ID)
 			continue
 		}
-		// Phase 11 — surface the seller's set ask price + the listing's
-		// real currency. Fallbacks: AveragePrice (weighted-avg cost)
-		// for legacy rows without an explicit ask; "USD" if the
-		// currency resolver isn't wired or the lookup fails.
-		price := "0"
-		if hd.PublicPrice.Sign() > 0 {
-			price = hd.PublicPrice.String()
-		} else if hd.AveragePrice.Sign() > 0 {
-			price = hd.AveragePrice.String()
-		}
-		currency := "USD"
-		if h.otcOptionCurrency != nil {
-			if c, err := h.otcOptionCurrency.CurrencyForStock(hd.SecurityID); err == nil && c != "" {
-				currency = c
-			}
-		}
+		// The /public-stock wire shape carries ONLY seller + amount (the gateway
+		// groups by ticker). A termless option offer has no preset price/currency
+		// in this discovery surface, so PricePerStock/Currency are intentionally
+		// left unset — nothing downstream reads them for /public-stock.
 		out = append(out, &stockpb.PeerPublicStock{
-			OwnerId:       &stockpb.PeerForeignBankId{RoutingNumber: h.ownRouting, Id: ownerID},
-			Ticker:        hd.Ticker,
-			Amount:        hd.PublicQuantity,
-			PricePerStock: price,
-			Currency:      currency,
+			OwnerId: &stockpb.PeerForeignBankId{RoutingNumber: h.ownRouting, Id: sellerID},
+			Ticker:  o.Ticker,
+			Amount:  o.Quantity.IntPart(),
 		})
 	}
 	return &stockpb.GetPublicStocksResponse{Stocks: out}, nil

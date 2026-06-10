@@ -47,13 +47,6 @@ func (f *fakeHoldingReader) GetByOwnerAndTicker(ownerType model.OwnerType, owner
 	return nil, gorm.ErrRecordNotFound
 }
 
-func (f *fakeHoldingReader) ListPublic() ([]model.Holding, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.rows, nil
-}
-
 type fakePeerTxClient struct {
 	gotReq *transactionpb.SiTxInitiateWithPostingsRequest
 	resp   *transactionpb.SiTxInitiateResponse
@@ -95,16 +88,19 @@ func newPeerOtcHandler(t *testing.T) (*handler.PeerOTCGRPCHandler, *gorm.DB, *fa
 		t.Fatalf("open: %v", err)
 	}
 	// SP-2a: remote negotiations AND remote option contracts live in the
-	// unified otc_negotiations / option_contracts tables.
+	// unified otc_negotiations / option_contracts tables. otc_offers backs
+	// GetPublicStocks (Task C1 — peer /public-stock serves our option offers).
 	model.SetOwnRouting("111")
-	if err := db.AutoMigrate(&model.OTCNegotiation{}, &model.OTCNegotiationRevision{}, &model.OptionContract{}); err != nil {
+	if err := db.AutoMigrate(&model.OTCNegotiation{}, &model.OTCNegotiationRevision{}, &model.OptionContract{}, &model.OTCOffer{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	repo := repository.NewOTCNegotiationRepository(db)
 	optRepo := repository.NewOptionContractRepository(db)
 	holdings := &fakeHoldingReader{}
 	peerTx := &fakePeerTxClient{}
-	return handler.NewPeerOTCGRPCHandler(repo, optRepo, holdings, peerTx, 111), db, peerTx, holdings
+	h := handler.NewPeerOTCGRPCHandler(repo, optRepo, holdings, peerTx, 111).
+		WithOTCOfferReader(repository.NewOTCOfferRepository(db), nil)
+	return h, db, peerTx, holdings
 }
 
 // seedRemoteContractRow builds a REMOTE model.OptionContract for handler tests

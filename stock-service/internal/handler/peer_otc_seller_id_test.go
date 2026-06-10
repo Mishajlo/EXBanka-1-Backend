@@ -23,6 +23,22 @@ func (f *fakeOTCOfferReader) ListOpenForCache(limit int) ([]model.OTCOffer, erro
 	return f.rows, nil
 }
 
+// ListPublicOptionOffersForPeer mirrors the repo predicate: OPEN, sell-initiated,
+// public, non-private, LOCAL offers — the inventory GetPublicStocks exposes.
+func (f *fakeOTCOfferReader) ListPublicOptionOffersForPeer() ([]model.OTCOffer, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	var out []model.OTCOffer
+	for _, o := range f.rows {
+		if o.IsOpenListing() && o.Local && o.Direction == model.OTCDirectionSellInitiated &&
+			o.Public && !o.Private {
+			out = append(out, o)
+		}
+	}
+	return out, nil
+}
+
 // TestComposePeerSellerID covers every branch of composePeerSellerID, the
 // outbound SI-TX wire-identity composer. The literal "bank" must NEVER be
 // emitted: a bank offer with an acting employee maps to "employee-<N>", a
