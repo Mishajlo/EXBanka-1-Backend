@@ -107,6 +107,20 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 			"cross-bank bidding on a buy_initiated listing is not supported: the SI-TX OTC discovery model is seller-centric (spec §3.1/§3.2/§3.6.1), so buy_initiated offers are intra-bank only")
 	}
 
+	// Freshness guard for /public-stock shells (no preset terms): the mirror can be
+	// stale, so re-confirm the seller still publicly offers this ticker before we
+	// dispatch a doomed negotiation. Preset option-offers skip this — the seller's
+	// bank validates them on POST /negotiations.
+	if !remoteOffer.HasPresetTerms {
+		liveBody, _, perr := h.peerDispatch.Proxy(ctx, strconv.FormatInt(remoteOffer.RoutingNumber, 10), "", "", "GET", "/public-stock", nil)
+		if perr != nil {
+			return nil, false, status.Errorf(codes.FailedPrecondition, "cannot re-validate peer stock listing: %v", perr)
+		}
+		if !publicStockHasSeller(liveBody, derefStr(remoteOffer.RemoteSellerID), remoteOffer.Ticker) {
+			return nil, false, status.Error(codes.FailedPrecondition, "peer no longer offers this stock for OTC")
+		}
+	}
+
 	// Build the SI-TX wire buyer identity per owner type (SP-3 Task 4).
 	//   - client bid → "client-<ownerID>"
 	//   - bank bid   → "employee-<actingEmployeeID>" (the stable wire identity
@@ -293,4 +307,32 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 	// routing; id = the upserted surrogate id; terms from the mirror).
 	resp, _ := peerNegToProto(mirror, h.ownRouting)
 	return resp, true, nil
+}
+
+// derefStr safely dereferences a *string, returning "" for nil.
+func derefStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// publicStockHasSeller reports whether a /public-stock response body (§3.1 bare
+// array) contains an entry for the given (sellerID, ticker) pair.
+func publicStockHasSeller(body []byte, sellerID, ticker string) bool {
+	var resp contractsitx.PublicStocksResponse
+	if json.Unmarshal(body, &resp) != nil {
+		return false
+	}
+	for _, ps := range resp {
+		if ps.Stock.Ticker != ticker {
+			continue
+		}
+		for _, s := range ps.Sellers {
+			if s.Seller.ID == sellerID {
+				return true
+			}
+		}
+	}
+	return false
 }

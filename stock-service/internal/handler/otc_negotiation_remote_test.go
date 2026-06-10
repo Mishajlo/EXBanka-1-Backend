@@ -160,6 +160,7 @@ func seedRemoteOffer(t *testing.T, db *gorm.DB) uint64 {
 		NativeID:                    &nid,
 		InitiatorBankCode:           &bankCode,
 		RemoteSellerID:              &sellerID,
+		HasPresetTerms:              true, // preset: existing tests cover general dispatch, not shell freshness
 		InitiatorOwnerType:          model.OwnerBank,
 		Direction:                   model.OTCDirectionSellInitiated,
 		Ticker:                      "AAPL",
