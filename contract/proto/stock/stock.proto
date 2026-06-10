@@ -885,11 +885,11 @@ message UnifiedOptionOffer {
   // my_negotiation_status carries that chain's status. (SP-2b)
   uint64 my_negotiation_id     = 21;
   string my_negotiation_status = 22;
-  // has_preset_terms is true when the offer carries owner-set terms
-  // (strike + premium) — i.e. it came from /public-option-offers or is a
-  // local offer. false for negotiable shells synthesised from a peer's
-  // /public-stock listing (no preset strike/premium).
-  bool has_preset_terms = 23;
+  // NOTE: strike_price / premium / settlement_date (fields 10/12/14) are NO
+  // LONGER preset on the listing (option offers are termless inventory). They
+  // are re-sourced PER VIEWER from the negotiation chain (D2): a bidder sees
+  // their own chain's current terms; the listing owner sees their most recent
+  // counter; anyone else sees empty strings.
 }
 
 message ListUnifiedOptionOffersRequest {
@@ -912,6 +912,13 @@ message ListUnifiedOptionOffersRequest {
   // acting as the bank.
   string acting_owner_type = 8;
   uint64 acting_owner_id   = 9;
+  // Acting PRINCIPAL used to re-source the listing owner's most recent counter
+  // terms onto their own rows (D2). actor_system_type is "client" | "employee"
+  // and is the revision-author key passed to LatestRevisionByAuthorForOffer;
+  // unlike acting_owner_type/id (which collapse every employee to "bank"), this
+  // carries the concrete employee id so a bank owner resolves correctly.
+  int64  actor_user_id     = 10;
+  string actor_system_type = 11;
 }
 
 message ListUnifiedOptionOffersResponse {

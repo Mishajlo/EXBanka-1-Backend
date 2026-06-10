@@ -6124,13 +6124,8 @@ type UnifiedOptionOffer struct {
 	// my_negotiation_status carries that chain's status. (SP-2b)
 	MyNegotiationId     uint64 `protobuf:"varint,21,opt,name=my_negotiation_id,json=myNegotiationId,proto3" json:"my_negotiation_id,omitempty"`
 	MyNegotiationStatus string `protobuf:"bytes,22,opt,name=my_negotiation_status,json=myNegotiationStatus,proto3" json:"my_negotiation_status,omitempty"`
-	// has_preset_terms is true when the offer carries owner-set terms
-	// (strike + premium) — i.e. it came from /public-option-offers or is a
-	// local offer. false for negotiable shells synthesised from a peer's
-	// /public-stock listing (no preset strike/premium).
-	HasPresetTerms bool `protobuf:"varint,23,opt,name=has_preset_terms,json=hasPresetTerms,proto3" json:"has_preset_terms,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *UnifiedOptionOffer) Reset() {
@@ -6317,13 +6312,6 @@ func (x *UnifiedOptionOffer) GetMyNegotiationStatus() string {
 	return ""
 }
 
-func (x *UnifiedOptionOffer) GetHasPresetTerms() bool {
-	if x != nil {
-		return x.HasPresetTerms
-	}
-	return false
-}
-
 type ListUnifiedOptionOffersRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Ticker    string                 `protobuf:"bytes,1,opt,name=ticker,proto3" json:"ticker,omitempty"`
@@ -6345,6 +6333,13 @@ type ListUnifiedOptionOffersRequest struct {
 	// acting as the bank.
 	ActingOwnerType string `protobuf:"bytes,8,opt,name=acting_owner_type,json=actingOwnerType,proto3" json:"acting_owner_type,omitempty"`
 	ActingOwnerId   uint64 `protobuf:"varint,9,opt,name=acting_owner_id,json=actingOwnerId,proto3" json:"acting_owner_id,omitempty"`
+	// Acting PRINCIPAL used to re-source the listing owner's most recent counter
+	// terms onto their own rows (D2). actor_system_type is "client" | "employee"
+	// and is the revision-author key passed to LatestRevisionByAuthorForOffer;
+	// unlike acting_owner_type/id (which collapse every employee to "bank"), this
+	// carries the concrete employee id so a bank owner resolves correctly.
+	ActorUserId     int64  `protobuf:"varint,10,opt,name=actor_user_id,json=actorUserId,proto3" json:"actor_user_id,omitempty"`
+	ActorSystemType string `protobuf:"bytes,11,opt,name=actor_system_type,json=actorSystemType,proto3" json:"actor_system_type,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -6440,6 +6435,20 @@ func (x *ListUnifiedOptionOffersRequest) GetActingOwnerId() uint64 {
 		return x.ActingOwnerId
 	}
 	return 0
+}
+
+func (x *ListUnifiedOptionOffersRequest) GetActorUserId() int64 {
+	if x != nil {
+		return x.ActorUserId
+	}
+	return 0
+}
+
+func (x *ListUnifiedOptionOffersRequest) GetActorSystemType() string {
+	if x != nil {
+		return x.ActorSystemType
+	}
+	return ""
 }
 
 type ListUnifiedOptionOffersResponse struct {
@@ -19475,7 +19484,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	"peersTotal\x12#\n" +
 	"\rpeers_reached\x18\x04 \x01(\x05R\fpeersReached\x12\x18\n" +
 	"\apartial\x18\x05 \x01(\bR\apartial\x12*\n" +
-	"\x11last_refresh_unix\x18\x06 \x01(\x03R\x0flastRefreshUnix\"\x92\x06\n" +
+	"\x11last_refresh_unix\x18\x06 \x01(\x03R\x0flastRefreshUnix\"\xe8\x05\n" +
 	"\x12UnifiedOptionOffer\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x1b\n" +
 	"\tbank_code\x18\x02 \x01(\tR\bbankCode\x12%\n" +
@@ -19501,8 +19510,7 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\blocal_id\x18\x13 \x01(\x04R\alocalId\x12\x19\n" +
 	"\bme_owner\x18\x14 \x01(\bR\ameOwner\x12*\n" +
 	"\x11my_negotiation_id\x18\x15 \x01(\x04R\x0fmyNegotiationId\x122\n" +
-	"\x15my_negotiation_status\x18\x16 \x01(\tR\x13myNegotiationStatus\x12(\n" +
-	"\x10has_preset_terms\x18\x17 \x01(\bR\x0ehasPresetTerms\"\xbd\x02\n" +
+	"\x15my_negotiation_status\x18\x16 \x01(\tR\x13myNegotiationStatus\"\x8d\x03\n" +
 	"\x1eListUnifiedOptionOffersRequest\x12\x16\n" +
 	"\x06ticker\x18\x01 \x01(\tR\x06ticker\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x1b\n" +
@@ -19512,7 +19520,10 @@ const file_stock_stock_proto_rawDesc = "" +
 	"\tpage_size\x18\x06 \x01(\x05R\bpageSize\x12/\n" +
 	"\x14owner_only_seller_id\x18\a \x01(\tR\x11ownerOnlySellerId\x12*\n" +
 	"\x11acting_owner_type\x18\b \x01(\tR\x0factingOwnerType\x12&\n" +
-	"\x0facting_owner_id\x18\t \x01(\x04R\ractingOwnerId\"\x81\x02\n" +
+	"\x0facting_owner_id\x18\t \x01(\x04R\ractingOwnerId\x12\"\n" +
+	"\ractor_user_id\x18\n" +
+	" \x01(\x03R\vactorUserId\x12*\n" +
+	"\x11actor_system_type\x18\v \x01(\tR\x0factorSystemType\"\x81\x02\n" +
 	"\x1fListUnifiedOptionOffersResponse\x121\n" +
 	"\x06offers\x18\x01 \x03(\v2\x19.stock.UnifiedOptionOfferR\x06offers\x12\x1f\n" +
 	"\vtotal_count\x18\x02 \x01(\x03R\n" +

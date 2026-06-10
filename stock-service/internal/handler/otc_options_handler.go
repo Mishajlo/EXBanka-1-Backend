@@ -72,6 +72,11 @@ type OTCOptionsHandler struct {
 	// has an own (bidder) chain against it (SP-2b). Same source/keying as the
 	// unified-list path; reuses h.ownRouting for the remote-chain match.
 	myNegs MyNegotiationLister
+	// ownerLatestCounter is optional; when wired, GetOffer re-sources the
+	// strike/premium/settlement of a LOCAL offer the caller OWNS from the acting
+	// principal's most recent counter on that offer (D2). Same source as the
+	// unified-list path.
+	ownerLatestCounter OwnerLatestCounterFn
 	// crossBankExerciser backs the SP-2b Task-5 remote branch of
 	// ExerciseContract: when the contract :id resolves to a REMOTE row (a
 	// peer-hosted contract this bank holds the buyer side of), the unified
@@ -231,6 +236,15 @@ func NewOTCOptionsHandler(svc *service.OTCOfferService, contracts *repository.Op
 func (h *OTCOptionsHandler) WithMyNegotiations(l MyNegotiationLister) *OTCOptionsHandler {
 	cp := *h
 	cp.myNegs = l
+	return &cp
+}
+
+// WithOwnerLatestCounter wires the owner-latest-counter source so GetOffer can
+// project the acting owner's most recent counter terms onto a LOCAL offer they
+// own (D2). Same source as the unified-list path.
+func (h *OTCOptionsHandler) WithOwnerLatestCounter(fn OwnerLatestCounterFn) *OTCOptionsHandler {
+	cp := *h
+	cp.ownerLatestCounter = fn
 	return &cp
 }
 
@@ -603,9 +617,33 @@ func (h *OTCOptionsHandler) GetOffer(ctx context.Context, in *stockpb.GetOTCOffe
 	// SP-2b — caller's own (bidder) chain on this LOCAL offer. Keyed by the
 	// offer's surrogate id (== parent_offer_id of a local chain). Absent for a
 	// poster who never bid on their own listing (me_owner true, my_nid empty).
-	if s, ok := myNegIdx.localFor(offer.GetId()); ok {
-		offer.MyNegotiationId = s.id
-		offer.MyNegotiationStatus = s.status
+	stamp, haveStamp := myNegIdx.localFor(offer.GetId())
+	if haveStamp {
+		offer.MyNegotiationId = stamp.id
+		offer.MyNegotiationStatus = stamp.status
+	}
+	// D2 — the listing is termless; re-source strike/premium/settlement per
+	// viewer. The toOTCOfferProto projection above copied the (now zero) listing
+	// terms, so clear them first, then fill from the caller's position: a BIDDER
+	// sees their own chain's current terms; the OWNER sees their most recent
+	// counter; anyone else sees empty strings.
+	offer.StrikePrice = ""
+	offer.Premium = ""
+	offer.SettlementDate = ""
+	switch {
+	case !offer.GetMeOwner() && haveStamp:
+		offer.StrikePrice = stamp.terms.StrikePrice
+		offer.Premium = stamp.terms.Premium
+		offer.SettlementDate = stamp.terms.SettlementDate
+	case offer.GetMeOwner() && h.ownerLatestCounter != nil:
+		terms, terr := h.ownerLatestCounter(offer.GetId(), in.GetActorSystemType(), uint64(in.GetActorUserId()))
+		if terr != nil {
+			log.Printf("WARN GetOffer: owner-latest-counter for offer %d failed (leaving terms empty): %v", offer.GetId(), terr)
+		} else if terms != nil {
+			offer.StrikePrice = terms.StrikePrice
+			offer.Premium = terms.Premium
+			offer.SettlementDate = terms.SettlementDate
+		}
 	}
 	out := &stockpb.OTCOfferDetailResponse{
 		Offer:     offer,
@@ -680,6 +718,13 @@ func (h *OTCOptionsHandler) resolveRemoteOffer(id uint64, myNegIdx myNegotiation
 		return nil, err
 	}
 	offer := remoteOfferToProto(m)
+	// D2 — a remote shell listing is termless; re-source strike/premium/
+	// settlement per viewer. Remote offers are never me_owner, so only the
+	// BIDDER branch applies: clear the (zero) shell terms, then fill from the
+	// caller's own chain if they have one.
+	offer.StrikePrice = ""
+	offer.Premium = ""
+	offer.SettlementDate = ""
 	// SP-2b — caller's own (bidder) chain on this REMOTE offer. The chain keys
 	// on the peer-hosted parent (routing, native); the remote offer row carries
 	// that as (RoutingNumber, NativeID).
@@ -687,6 +732,9 @@ func (h *OTCOptionsHandler) resolveRemoteOffer(id uint64, myNegIdx myNegotiation
 		if s, ok := myNegIdx.remoteFor(m.RoutingNumber, *m.NativeID); ok {
 			offer.MyNegotiationId = s.id
 			offer.MyNegotiationStatus = s.status
+			offer.StrikePrice = s.terms.StrikePrice
+			offer.Premium = s.terms.Premium
+			offer.SettlementDate = s.terms.SettlementDate
 		}
 	}
 	return &stockpb.OTCOfferDetailResponse{

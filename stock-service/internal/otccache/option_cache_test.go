@@ -182,7 +182,8 @@ func TestOptionRefresher_IngestsPublicStockShells(t *testing.T) {
 	snap := c.Get()
 	var shells []OptionOffer
 	for _, o := range snap.Offers {
-		if !o.HasPresetTerms {
+		// Shells synthesised from a peer's /public-stock are the remote rows.
+		if o.Kind == "remote" {
 			shells = append(shells, o)
 		}
 	}

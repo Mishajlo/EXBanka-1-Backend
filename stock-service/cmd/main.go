@@ -1105,6 +1105,26 @@ func main() {
 	// peer resolution + signing live there, not in stock-service.
 	peerNegDispatcher := peeregress.NewDispatcher(peerEgressClient)
 
+	// D2 — owner-latest-counter adapter: re-source an offer-row's terms onto the
+	// LOCAL offers the acting owner posted, from that principal's most recent
+	// counter revision. Formats decimals StringFixed(2) and the date as RFC3339
+	// UTC, matching the per-viewer projection on the bidder side. Returns nil
+	// when the principal never authored a revision on the offer.
+	ownerLatestCounter := func(offerID uint64, principalType string, principalID uint64) (*handler.OfferTerms, error) {
+		rev, err := otcNegRepo.LatestRevisionByAuthorForOffer(offerID, principalType, principalID)
+		if err != nil {
+			return nil, err
+		}
+		if rev == nil {
+			return nil, nil
+		}
+		return &handler.OfferTerms{
+			StrikePrice:    rev.StrikePrice.StringFixed(2),
+			Premium:        rev.Premium.StringFixed(2),
+			SettlementDate: rev.SettlementDate.UTC().Format(time.RFC3339),
+		}, nil
+	}
+
 	otcOptionsHandler := handler.NewOTCOptionsHandler(otcOfferSvc, optionContractRepo).
 		WithListings(listingRepo).
 		WithPeerContracts(peerOptionRepo, ownRouting).
@@ -1113,6 +1133,7 @@ func main() {
 		WithRemoteOffers(otcOfferRepo, cfg.OwnBankCode).
 		WithPeerNegotiations(otcNegRepo).                                  // SP-1 Task 7 + SP-2a: unified local+remote negotiation list (REMOTE rows in otc_negotiations)
 		WithMyNegotiations(otcNegRepo).                                    // SP-2b: stamp my_negotiation_id on GetOffer (caller's own bidder chain)
+		WithOwnerLatestCounter(ownerLatestCounter).                        // D2: re-source GetOffer terms from the owner's latest counter
 		WithPeerOTCDispatch(peerNegDispatcher, otcNegRepo, accountClient). // SP-2b: bid route dispatches cross-bank for remote listings
 		WithCrossBankExerciser(peerOtcHandler)                             // SP-2b Task 5: exercise route dispatches cross-bank for remote contracts
 
@@ -1154,7 +1175,8 @@ func main() {
 			pb.RegisterPortfolioGRPCServiceServer(s, handler.NewPortfolioHandler(portfolioSvc, taxSvc).WithUnifiedPortfolioService(unifiedPortfolioSvc))
 			pb.RegisterOTCGRPCServiceServer(s, handler.NewOTCHandlerWithCache(otcSvc, otcOfferCache).
 				WithOptionCache(optionOfferCache).
-				WithMyNegotiations(otcNegRepo, ownRouting)) // SP-2b: stamp my_negotiation_id on the unified offer list
+				WithMyNegotiations(otcNegRepo, ownRouting). // SP-2b: stamp my_negotiation_id on the unified offer list
+				WithOwnerLatestCounter(ownerLatestCounter)) // D2: re-source owner's terms from their latest counter
 			pb.RegisterTaxGRPCServiceServer(s, handler.NewTaxHandler(taxSvc))
 			pb.RegisterInvestmentFundServiceServer(s, fundHandler)
 			pb.RegisterOTCOptionsServiceServer(s, otcOptionsHandler)

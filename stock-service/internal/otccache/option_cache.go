@@ -47,19 +47,19 @@ type OptionOffer struct {
 	SellerName string // local-only display
 	Direction  string // "sell_initiated" | "buy_initiated"
 
-	Ticker          string
-	Amount          int64
+	Ticker string
+	Amount int64
+	// StrikePrice / Premium / SettlementDate are NO LONGER sourced from the
+	// listing (option offers are termless inventory). The cache leaves them
+	// empty; OTCHandler re-sources them per viewer from the negotiation chain
+	// (bidder position / owner latest counter) — see otc_handler.go (D2). The
+	// currencies still reflect the listing's trading currency.
 	StrikePrice     string // decimal as string
 	StrikeCurrency  string
 	Premium         string
 	PremiumCurrency string
 	SettlementDate  string // RFC3339 UTC
 	CreatedAt       string // RFC3339 UTC
-
-	// HasPresetTerms: true for LOCAL rows (offer carries owner-set strike +
-	// premium). false for shells synthesized from a peer's /public-stock
-	// (fully buyer-negotiated, no preset terms).
-	HasPresetTerms bool
 
 	// Best-bid / best-ask aggregation (Part A 2026-05-16). Empty
 	// strings ⇒ no active chains OR a remote peer that doesn't
@@ -316,23 +316,25 @@ func (r *OptionRefresher) fetchLocal() ([]OptionOffer, error) {
 		o := &rows[i]
 		currency := r.resolveCurrency(o.StockID)
 		row := OptionOffer{
-			Kind:            "local",
-			BankCode:        r.ownBankCode,
-			RoutingNumber:   r.ownRouting,
-			OfferID:         strconv.FormatUint(o.ID, 10),
-			LocalID:         o.ID,
-			SellerID:        composeSellerID(o),
-			SellerName:      "", // OTCOffer carries no display name — UI can resolve via /user/{rid}/{id}
-			Direction:       o.Direction,
-			Ticker:          o.Ticker,
-			Amount:          o.Quantity.IntPart(),
-			StrikePrice:     o.StrikePrice.String(),
+			Kind:          "local",
+			BankCode:      r.ownBankCode,
+			RoutingNumber: r.ownRouting,
+			OfferID:       strconv.FormatUint(o.ID, 10),
+			LocalID:       o.ID,
+			SellerID:      composeSellerID(o),
+			SellerName:    "", // OTCOffer carries no display name — UI can resolve via /user/{rid}/{id}
+			Direction:     o.Direction,
+			Ticker:        o.Ticker,
+			Amount:        o.Quantity.IntPart(),
+			// Terms are termless on the listing — re-sourced per viewer by the
+			// handler (D2). Leave strike/premium/settlement empty; keep the
+			// trading currency for the FE to render alongside negotiated terms.
+			StrikePrice:     "",
 			StrikeCurrency:  currency,
-			Premium:         o.Premium.String(),
+			Premium:         "",
 			PremiumCurrency: currency,
-			SettlementDate:  o.SettlementDate.UTC().Format(time.RFC3339),
+			SettlementDate:  "",
 			CreatedAt:       o.CreatedAt.UTC().Format(time.RFC3339),
-			HasPresetTerms:  true,
 		}
 		// Pick the side relevant to the parent's direction. A buyer-
 		// posted listing (buy_initiated) has sellers bidding their ask
@@ -427,15 +429,14 @@ func (r *OptionRefresher) buildAndMirrorRemoteStockShells(peerBankCode string, p
 	for _, native := range order {
 		a := agg[native]
 		row := OptionOffer{
-			Kind:           "remote",
-			BankCode:       peerBankCode,
-			RoutingNumber:  peerRouting,
-			OfferID:        a.native,
-			SellerID:       a.sellerID,
-			Direction:      model.OTCDirectionSellInitiated,
-			Ticker:         a.ticker,
-			Amount:         a.amount,
-			HasPresetTerms: false,
+			Kind:          "remote",
+			BankCode:      peerBankCode,
+			RoutingNumber: peerRouting,
+			OfferID:       a.native,
+			SellerID:      a.sellerID,
+			Direction:     model.OTCDirectionSellInitiated,
+			Ticker:        a.ticker,
+			Amount:        a.amount,
 		}
 		if r.mirror != nil {
 			n := a.native
