@@ -158,25 +158,55 @@ func (r *OTCOfferRepository) UpsertRemote(o *model.OTCOffer, seenAt time.Time) (
 	return o.ID, nil
 }
 
-// ReconcileRemoteNotSeen flips every open REMOTE row for peerRouting whose
-// native_id is NOT in seenNativeIDs to "cancelled", and returns the count
-// flipped. MUST be called only after a SUCCESSFUL poll of that peer. A
-// nil/empty seen slice means the peer listed nothing -> cancel all open
-// rows for that peer. Bulk update with SkipHooks (intentional non-versioned
-// mass flip per the Concurrency requirement).
-//
-// peerRouting is the peer's routing (!= OwnRouting(), guaranteed by the
-// caller), so this never touches local rows.
-func (r *OTCOfferRepository) ReconcileRemoteNotSeen(peerRouting int64, seenNativeIDs []string) (int64, error) {
+// reconcileScoped flips open remote rows for peerRouting whose native_id is NOT
+// in seenNativeIDs to cancelled, restricted to one native_id namespace.
+// shellsOnly=true touches only "ps:%" rows (public-stock shells);
+// shellsOnly=false touches only non-shell option-offer rows.
+// Bulk update with SkipHooks (intentional non-versioned mass flip per the
+// Concurrency requirement). peer offer counts are O(tens); NOT IN (...) is
+// acceptable.
+func (r *OTCOfferRepository) reconcileScoped(peerRouting int64, seenNativeIDs []string, shellsOnly bool) (int64, error) {
 	q := r.db.Session(&gorm.Session{SkipHooks: true}).
 		Model(&model.OTCOffer{}).
 		Where("routing_number = ? AND status = ?", peerRouting, model.OTCOfferStatusOpen)
-	// peer offer counts are O(tens) in this domain; NOT IN (...) is acceptable.
+	like := model.RemoteStockShellPrefix + "%"
+	if shellsOnly {
+		q = q.Where("native_id LIKE ?", like)
+	} else {
+		q = q.Where("native_id NOT LIKE ?", like)
+	}
 	if len(seenNativeIDs) > 0 {
 		q = q.Where("native_id NOT IN ?", seenNativeIDs)
 	}
 	res := q.Updates(map[string]any{"status": model.OTCOfferStatusCancelled, "updated_at": time.Now().UTC()})
 	return res.RowsAffected, res.Error
+}
+
+// ReconcileRemoteNotSeen flips every open REMOTE option-offer row (non-shell
+// namespace) for peerRouting whose native_id is NOT in seenNativeIDs to
+// "cancelled", and returns the count flipped. MUST be called only after a
+// SUCCESSFUL poll of that peer. A nil/empty seen slice means the peer listed
+// nothing -> cancel all open option-offer rows for that peer.
+//
+// peerRouting is the peer's routing (!= OwnRouting(), guaranteed by the
+// caller), so this never touches local rows. Shell rows (native_id LIKE "ps:%")
+// are excluded — use ReconcileRemoteShellsNotSeen for the /public-stock
+// namespace.
+func (r *OTCOfferRepository) ReconcileRemoteNotSeen(peerRouting int64, seenNativeIDs []string) (int64, error) {
+	return r.reconcileScoped(peerRouting, seenNativeIDs, false)
+}
+
+// ReconcileRemoteShellsNotSeen flips every open REMOTE public-stock shell row
+// (native_id LIKE "ps:%") for peerRouting whose native_id is NOT in
+// seenNativeIDs to "cancelled", and returns the count flipped. MUST be called
+// only after a SUCCESSFUL /public-stock poll of that peer. A nil/empty seen
+// slice means the peer listed nothing -> cancel all open shell rows for that
+// peer.
+//
+// Option-offer rows (non-shell namespace) are excluded — use
+// ReconcileRemoteNotSeen for the /public-option-offers namespace.
+func (r *OTCOfferRepository) ReconcileRemoteShellsNotSeen(peerRouting int64, seenNativeIDs []string) (int64, error) {
+	return r.reconcileScoped(peerRouting, seenNativeIDs, true)
 }
 
 // GetRemoteByID returns a REMOTE OTCOffer row by surrogate id, or

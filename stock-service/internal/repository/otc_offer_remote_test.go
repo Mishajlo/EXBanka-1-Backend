@@ -263,6 +263,48 @@ func TestUpsertRemote_SetsHasPresetTerms(t *testing.T) {
 	}
 }
 
+func TestReconcile_NamespaceScoped(t *testing.T) {
+	db := newRemoteOfferTestDB(t)
+	r := NewOTCOfferRepository(db)
+	mk := func(native string, preset bool) uint64 {
+		n := native
+		id, err := r.UpsertRemote(&model.OTCOffer{
+			RoutingNumber:               222,
+			NativeID:                    &n,
+			InitiatorOwnerType:          model.OwnerBank,
+			Direction:                   model.OTCDirectionSellInitiated,
+			Ticker:                      "AAPL",
+			Quantity:                    decimal.NewFromInt(1),
+			HasPresetTerms:              preset,
+			LastModifiedByPrincipalType: "system",
+		}, time.Now().UTC())
+		if err != nil {
+			t.Fatalf("upsert %s: %v", native, err)
+		}
+		return id
+	}
+	optID := mk("peer-offer-1", true)
+	shellID := mk("ps:222:client-5:AAPL", false)
+
+	// Reconcile option-offers namespace (non-shell): should cancel optID but spare shellID.
+	if _, err := r.ReconcileRemoteNotSeen(222, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.GetRemoteByID(shellID); got.Status != model.OTCOfferStatusOpen {
+		t.Fatalf("shell cancelled by option reconcile: %s", got.Status)
+	}
+	if got, _ := r.GetRemoteByID(optID); got.Status != model.OTCOfferStatusCancelled {
+		t.Fatalf("option-offer not cancelled: %s", got.Status)
+	}
+	// Reconcile shells namespace: should now cancel shellID.
+	if _, err := r.ReconcileRemoteShellsNotSeen(222, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.GetRemoteByID(shellID); got.Status != model.OTCOfferStatusCancelled {
+		t.Fatalf("shell not cancelled by shell reconcile: %s", got.Status)
+	}
+}
+
 func TestGetRemoteByID_RemoteRowAndLocalIsNotFound(t *testing.T) {
 	db := newRemoteOfferTestDB(t)
 	r := NewOTCOfferRepository(db)
