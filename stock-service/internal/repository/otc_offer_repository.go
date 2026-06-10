@@ -158,6 +158,27 @@ func (r *OTCOfferRepository) UpsertRemote(o *model.OTCOffer, seenAt time.Time) (
 	return o.ID, nil
 }
 
+// UpsertRemoteShell upserts a /public-stock SHELL remote row. Because
+// OTCOffer.HasPresetTerms is `default:true`, GORM substitutes `true` for the
+// zero-value `false` in the INSERT, and also scans the inserted value back
+// into the struct; capturing the desired value BEFORE calling UpsertRemote
+// and forcing it via a raw Exec afterward guarantees shells persist as
+// has_preset_terms=false.
+func (r *OTCOfferRepository) UpsertRemoteShell(o *model.OTCOffer, seenAt time.Time) (uint64, error) {
+	// Capture the caller's intent before UpsertRemote may overwrite o.HasPresetTerms
+	// with the DB default (true) via the GORM RETURNING scan.
+	wantPresetTerms := o.HasPresetTerms
+	id, err := r.UpsertRemote(o, seenAt)
+	if err != nil {
+		return 0, err
+	}
+	if err := r.db.Exec("UPDATE otc_offers SET has_preset_terms = ? WHERE id = ?",
+		wantPresetTerms, id).Error; err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
 // reconcileScoped flips open remote rows for peerRouting whose native_id is NOT
 // in seenNativeIDs to cancelled, restricted to one native_id namespace.
 // shellsOnly=true touches only "ps:%" rows (public-stock shells);

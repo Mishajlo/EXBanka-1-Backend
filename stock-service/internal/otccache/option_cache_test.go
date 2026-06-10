@@ -31,6 +31,9 @@ func (m *fakeMirror) UpsertRemote(o *model.OTCOffer, _ time.Time) (uint64, error
 	m.byKey[key] = m.nextID
 	return m.nextID, nil
 }
+func (m *fakeMirror) UpsertRemoteShell(o *model.OTCOffer, t time.Time) (uint64, error) {
+	return m.UpsertRemote(o, t)
+}
 func (m *fakeMirror) ReconcileRemoteNotSeen(peerRouting int64, seen []string) (int64, error) {
 	m.reconciled[peerRouting] = seen
 	return 0, nil
@@ -77,6 +80,9 @@ type errMirror struct{ reconciled map[int64][]string }
 
 func (m *errMirror) UpsertRemote(_ *model.OTCOffer, _ time.Time) (uint64, error) {
 	return 0, errors.New("db down")
+}
+func (m *errMirror) UpsertRemoteShell(o *model.OTCOffer, t time.Time) (uint64, error) {
+	return m.UpsertRemote(o, t)
 }
 func (m *errMirror) ReconcileRemoteNotSeen(peerRouting int64, seen []string) (int64, error) {
 	if m.reconciled == nil {
@@ -147,6 +153,9 @@ type fakeShellMirror struct {
 func (f *fakeShellMirror) UpsertRemote(o *model.OTCOffer, _ time.Time) (uint64, error) {
 	f.upserts = append(f.upserts, o)
 	return uint64(len(f.upserts)), nil
+}
+func (f *fakeShellMirror) UpsertRemoteShell(o *model.OTCOffer, t time.Time) (uint64, error) {
+	return f.UpsertRemote(o, t)
 }
 func (f *fakeShellMirror) ReconcileRemoteNotSeen(_ int64, _ []string) (int64, error) {
 	return 0, nil

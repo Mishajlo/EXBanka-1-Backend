@@ -305,6 +305,41 @@ func TestReconcile_NamespaceScoped(t *testing.T) {
 	}
 }
 
+// TestUpsertRemote_ShellPersistsFalse guards against the GORM default-skip bug:
+// HasPresetTerms is bool with gorm tag `default:true`, so GORM omits the
+// zero-value false from the INSERT and the DB DEFAULT (true) would apply.
+// UpsertRemoteShell fixes this by forcing has_preset_terms after the upsert.
+func TestUpsertRemote_ShellPersistsFalse(t *testing.T) {
+	db := newRemoteOfferTestDB(t)
+	r := NewOTCOfferRepository(db)
+	native := "ps:222:client-5:AAPL"
+	bc := "222"
+	sid := "client-5"
+	row := &model.OTCOffer{
+		RoutingNumber:               222,
+		NativeID:                    &native,
+		InitiatorBankCode:           &bc,
+		RemoteSellerID:              &sid,
+		InitiatorOwnerType:          model.OwnerBank,
+		Direction:                   model.OTCDirectionSellInitiated,
+		Ticker:                      "AAPL",
+		Quantity:                    decimal.NewFromInt(1),
+		HasPresetTerms:              false,
+		LastModifiedByPrincipalType: "system",
+	}
+	id, err := r.UpsertRemoteShell(row, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := r.GetRemoteByID(id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.HasPresetTerms {
+		t.Fatalf("shell persisted HasPresetTerms=true, want false (GORM default-skip bug)")
+	}
+}
+
 func TestGetRemoteByID_RemoteRowAndLocalIsNotFound(t *testing.T) {
 	db := newRemoteOfferTestDB(t)
 	r := NewOTCOfferRepository(db)
