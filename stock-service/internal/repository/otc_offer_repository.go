@@ -137,7 +137,7 @@ func (r *OTCOfferRepository) UpsertRemote(o *model.OTCOffer, seenAt time.Time) (
 		DoUpdates: clause.AssignmentColumns([]string{
 			"initiator_bank_code", "remote_seller_id", "direction", "ticker",
 			"quantity", "strike_price", "premium", "settlement_date",
-			"strike_currency", "premium_currency", "status", "last_seen_at", "updated_at",
+			"strike_currency", "premium_currency", "has_preset_terms", "status", "last_seen_at", "updated_at",
 		}),
 	}).Create(o).Error
 	if err != nil {

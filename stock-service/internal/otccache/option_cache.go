@@ -440,6 +440,9 @@ func (r *OptionRefresher) buildAndMirrorRemoteOffers(peerBankCode string, peerRo
 				PremiumCurrency: &premiumCcy,
 				SettlementDate:  parseRFC3339OrZero(o.SettlementDate),
 				Status:          model.OTCOfferStatusOpen,
+				// HasPresetTerms = true: a /public-option-offers listing always
+				// carries owner-set strike and premium terms.
+				HasPresetTerms: true,
 				// NOT-NULL audit columns: the refresher is the actor for
 				// remote rows. "system"/0 marks a machine-written row.
 				LastModifiedByPrincipalType: "system",

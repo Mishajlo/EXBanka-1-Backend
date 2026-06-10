@@ -230,6 +230,39 @@ func TestReconcileRemoteNotSeen_EmptySeenCancelsAllForPeer(t *testing.T) {
 	}
 }
 
+func TestUpsertRemote_SetsHasPresetTerms(t *testing.T) {
+	db := newRemoteOfferTestDB(t)
+	r := NewOTCOfferRepository(db)
+	ncy := "USD"
+	native := "peer-offer-1"
+	row := &model.OTCOffer{
+		RoutingNumber:               222,
+		NativeID:                    &native,
+		InitiatorOwnerType:          model.OwnerBank,
+		Direction:                   model.OTCDirectionSellInitiated,
+		Ticker:                      "AAPL",
+		Quantity:                    decimal.NewFromInt(10),
+		StrikePrice:                 decimal.NewFromInt(150),
+		Premium:                     decimal.NewFromInt(2),
+		StrikeCurrency:              &ncy,
+		PremiumCurrency:             &ncy,
+		SettlementDate:              time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC),
+		HasPresetTerms:              true,
+		LastModifiedByPrincipalType: "system",
+	}
+	id, err := r.UpsertRemote(row, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := r.GetRemoteByID(id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !got.HasPresetTerms {
+		t.Fatalf("HasPresetTerms = false, want true")
+	}
+}
+
 func TestGetRemoteByID_RemoteRowAndLocalIsNotFound(t *testing.T) {
 	db := newRemoteOfferTestDB(t)
 	r := NewOTCOfferRepository(db)
