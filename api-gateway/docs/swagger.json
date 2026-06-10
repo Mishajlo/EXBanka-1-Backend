@@ -10732,41 +10732,6 @@
                 }
             }
         },
-        "/api/v3/cross-bank-protocol/public-option-offers": {
-            "get": {
-                "description": "Phase 6 cross-bank discovery. Returns this bank's OPEN, undirected option listings as PeerPublicOptionOffer rows in SI-TX shape. Auth via X-Api-Key (PeerAuth); X-Bank-Code is stamped into peer_bank_code so privately-targeted listings are filtered per-caller.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "PeerOTC"
-                ],
-                "summary": "Peer-facing list of OPEN OTC option listings on this bank",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "501": {
-                        "description": "OTCOfferReader not wired",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
         "/api/v3/cross-bank-protocol/public-stock": {
             "get": {
                 "description": "Inbound from a peer bank. Returns this bank's holdings flagged public_quantity \u003e 0 — the candidate OTC sellers a discovering bank can negotiate against. SI-TX §3.2.",

@@ -7208,8 +7208,7 @@ Remove a peer bank.
 |---|---|---|
 | `POST` | `/api/v3/cross-bank-protocol/interbank` | SI-TX `Message<Type>` envelope (NEW_TX / COMMIT_TX / ROLLBACK_TX) |
 | `GET` | `/api/v3/cross-bank-protocol/interbank/:transaction_id/status` | CHECK_STATUS: query cross-bank TX state |
-| `GET` | `/api/v3/cross-bank-protocol/public-stock` | List this bank's OTC-public stock holdings |
-| `GET` | `/api/v3/cross-bank-protocol/public-option-offers` | List this bank's OPEN OTC option listings (Phase 6) |
+| `GET` | `/api/v3/cross-bank-protocol/public-stock` | List this bank's OTC option offers — the sole cross-bank option-discovery surface |
 | `POST` | `/api/v3/cross-bank-protocol/negotiations` | Create cross-bank OTC negotiation |
 | `PUT` | `/api/v3/cross-bank-protocol/negotiations/:rid/:id` | Counter-offer on existing negotiation |
 | `GET` | `/api/v3/cross-bank-protocol/negotiations/:rid/:id` | Read negotiation state |
@@ -8126,7 +8125,7 @@ The OTC surface is split into two clearly-separated marketplaces:
 - **`/api/v3/otc/stocks/...`** — public-stock listings, **no negotiation**. Sellers publish shares, buyers fill outright. Includes both sell-direction (publish shares from a holding) and buy-direction (publish a standing offer to buy at a fixed price, backed by a cash reservation).
 - **`/api/v3/otc/options/...`** — option-contract marketplace, **with negotiation**. Any user can post an option listing; many other users can each open their own bid chain on the same listing; first-to-accept wins atomically and sibling chains cascade-cancel inside the same DB transaction.
 
-Both marketplaces support local + cross-bank discovery (peer banks publish their listings via `/api/v3/cross-bank-protocol/public-stock` and `/api/v3/cross-bank-protocol/public-option-offers`; each bank's stock-service polls every ~5 s and merges into an in-memory cache).
+Both marketplaces support local + cross-bank discovery (peer banks publish their listings via `/api/v3/cross-bank-protocol/public-stock` — the sole cross-bank discovery surface; each bank's stock-service polls every ~5 s and merges into an in-memory cache).
 
 > **The bank is a first-class cross-bank OTC principal.** An employee acting **as the bank** (via the `bankIfEmp` group, which resolves `owner_type="bank"`) participates in the cross-bank option marketplace exactly like a client, settling against **BANK** accounts/holdings (owner sentinel `1000000000`):
 > - **Bank-owned offers are biddable cross-bank.** When a bank-owned `OTCOffer` is published to peers, its `sellerId` is the stable wire identity `employee-<ActingEmployeeID>` (never the legacy literal `"bank"`); legacy/seed bank offers with no acting employee are not exposed cross-bank. A peer bank may bid on it.
@@ -8960,43 +8959,7 @@ Templates are admin-editable via the 3a notification template management endpoin
 
 ### 47.3 Peer protocol (SI-TX cross-bank)
 
-#### GET /api/v3/cross-bank-protocol/public-option-offers
-
-Peer-facing endpoint for cross-bank option discovery. `PeerAuth` middleware validates `X-Api-Key` against the registered peer-bank's API token. The peer's `X-Bank-Code` is stamped onto the request context and used to filter listings marked `Private=true` to a specific recipient bank.
-
-**Authentication:** PeerAuth (X-Api-Key alone OR full HMAC bundle)
-
-**Response 200:**
-```json
-{
-  "offers": [
-    {
-      "offerId":           { "routingNumber": 111, "id": "42" },
-      "ticker":            "AAPL",
-      "amount":            50,
-      "strikePrice":       "180.50",
-      "strikeCurrency":    "USD",
-      "premium":           "700",
-      "premiumCurrency":   "USD",
-      "settlementDate":    "2026-12-31T00:00:00Z",
-      "sellerId":          { "routingNumber": 111, "id": "client-7" },
-      "direction":         "sell_initiated",
-      "createdAt":         "2026-05-10T14:00:00Z",
-      "lastModifiedBy":    { "routingNumber": 111, "id": "client-7" },
-      "bestBid":           "850",
-      "activeChainsCount": 3
-    }
-  ]
-}
-```
-
-**Best-bid / best-ask fields (Part A 2026-05-16).** `bestBid`, `bestAsk`, `activeChainsCount` are **strictly optional** — peers running an older protocol simply omit them. The JSON unmarshaller leaves them empty / 0, which the cache treats as "not reported"; the FE renders "—" for those rows. No coordination with other faculty banks is required: any bank can ship Part A and the others' clients still interop, and the bank that ships it surfaces best-bid info to its own clients for its own listings.
-
-Population rule: `bestBid` is set for `sell_initiated` parents (buyers compete on premium upward); `bestAsk` is set for `buy_initiated` parents (sellers compete on premium downward). `activeChainsCount` is the count of negotiation chains in `open` or `countered` status against the listing.
-
-Each entry corresponds to one `OTCOffer` row on this bank with `status IN ('open','PENDING','COUNTERED')` AND `counterparty_owner_id IS NULL`. `Private=true` rows are dropped unless `PrivateToBankCode` equals the calling peer's bank code.
-
-**Seller-centric discovery — `buy_initiated` offers are NEVER published.** The SI-TX bank-to-bank protocol's OTC discovery model is strictly seller-centric: §3.1 `PublicStock` lists only `sellers`; §3.2 a negotiation is created by a request "sent from a Buyer's bank to a Seller's bank"; §3.6.1 "the option pseudo-account is always in the bank of the seller". A `buy_initiated` listing's poster is a **BUYER** wanting to acquire shares — it has no conformant cross-bank representation (publishing it would mislabel the buyer-poster as a `sellerId` and invert the economic roles on accept/exercise). Therefore **only `sell_initiated` listings are exposed cross-bank**; `buy_initiated` listings are intra-bank only and are filtered out of this endpoint. Symmetrically, on ingest a peer's `buy_initiated` offer (should a non-conformant peer emit one with the proprietary `direction` field set) is dropped at the discovery-poll boundary, so it never becomes a biddable remote listing, and a cross-bank bid against a `buy_initiated` remote listing fails closed with HTTP 409 `business_rule_violation`.
+Cross-bank OTC option discovery happens **only** via `GET /api/v3/cross-bank-protocol/public-stock` (see §47.x / the cross-bank-protocol route table). The proprietary `GET /api/v3/cross-bank-protocol/public-option-offers` endpoint was **removed** on 2026-06-11 — peers now discover this bank's open, sell-initiated, public option offers through the `/public-stock` catalog (one seller entry per ticker, conformant SI-TX seller id). `buy_initiated` listings remain intra-bank only and are never exposed cross-bank.
 
 ---
 

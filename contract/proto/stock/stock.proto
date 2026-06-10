@@ -1979,13 +1979,6 @@ message ExerciseResponse {
 // money never moves on a contract the seller can't fulfil.
 service PeerOTCService {
   rpc GetPublicStocks(GetPublicStocksRequest) returns (GetPublicStocksResponse);
-  // Phase 6: peer-facing discovery of OPEN OTC OPTION listings.
-  // Returns OTCOffer rows on THIS bank where:
-  //   * status is open/PENDING (legacy alias) AND
-  //   * counterparty_owner_id IS NULL (undirected listings only) AND
-  //   * Private==false OR PrivateToBankCode == X-Bank-Code of caller.
-  // Wire shape parallels GetPublicStocks; PeerAuth via X-Api-Key.
-  rpc GetPublicOptionOffers(GetPublicOptionOffersRequest) returns (GetPublicOptionOffersResponse);
   rpc CreateNegotiation(CreateNegotiationRequest) returns (CreateNegotiationResponse);
   rpc UpdateNegotiation(UpdateNegotiationRequest) returns (UpdateNegotiationResponse);
   rpc GetNegotiation(GetNegotiationRequest) returns (GetNegotiationResponse);
@@ -2069,40 +2062,6 @@ message PeerPublicStock {
 
 message GetPublicStocksResponse {
   repeated PeerPublicStock stocks = 1;
-}
-
-// Phase 6 — discovery of open OTC OPTION listings (parallel chains
-// marketplace). See docs/superpowers/plans/2026-05-16-otc-options-cross-bank.md.
-message GetPublicOptionOffersRequest {
-  string peer_bank_code = 1; // X-Bank-Code stamped by PeerAuth ctx
-}
-
-message PeerPublicOptionOffer {
-  PeerForeignBankId offer_id        = 1;  // (own_routing, otc_offers.id stringified)
-  string            ticker          = 2;
-  int64             amount          = 3;
-  string            strike_price    = 4;
-  string            strike_currency = 5;
-  string            premium         = 6;
-  string            premium_currency = 7;
-  string            settlement_date = 8;  // RFC3339 UTC
-  PeerForeignBankId seller_id       = 9;  // SI-TX-prefixed: "client-<N>" | "bank"
-  string            direction       = 10; // "sell_initiated" | "buy_initiated"
-  string            created_at      = 11;
-  PeerForeignBankId last_modified_by = 12;
-  // Best-bid / best-ask surface (Part A 2026-05-16). STRICTLY
-  // ADDITIVE: peers that don't upgrade simply omit these fields and
-  // the receiver sees them as "" / 0 (proto3 default), which the
-  // unified-cache projection treats as "not reported". Peers
-  // publishing them populate from their own
-  // OTCNegotiationRepository.AggregateActiveBidsByOffer.
-  string best_bid             = 13;
-  string best_ask             = 14;
-  int32  active_chains_count  = 15;
-}
-
-message GetPublicOptionOffersResponse {
-  repeated PeerPublicOptionOffer offers = 1;
 }
 
 message CreateNegotiationRequest {

@@ -1476,8 +1476,7 @@ These routes are reached by other banks in the SI-TX cohort, not by employees or
 |---|---|---|---|---|
 | POST | `/api/v3/cross-bank-protocol/interbank` | PeerAuth | PeerTxHandler.PostInterbank | SI-TX `Message<Type>` envelope. Phase 3. |
 | GET | `/api/v3/cross-bank-protocol/interbank/:transaction_id/status` | PeerAuth | PeerTxStatusHandler.GetTxStatus | Celina-5 CHECK_STATUS: peer queries cross-bank TX state. |
-| GET | `/api/v3/cross-bank-protocol/public-stock` | PeerAuth | PeerOTCHandler.GetPublicStocks | Lists own bank's OTC-public holdings. Phase 4. |
-| GET | `/api/v3/cross-bank-protocol/public-option-offers` | PeerAuth | PeerOTCHandler.GetPublicOptionOffers | Phase 6 cross-bank discovery of OPEN option listings. |
+| GET | `/api/v3/cross-bank-protocol/public-stock` | PeerAuth | PeerOTCHandler.GetPublicStocks | Lists own bank's OTC option offers — the sole cross-bank option-discovery surface. Phase 4. |
 | POST | `/api/v3/cross-bank-protocol/negotiations` | PeerAuth | PeerOTCHandler.CreateNegotiation | Peer-initiated cross-bank OTC offer. Phase 4. |
 | PUT | `/api/v3/cross-bank-protocol/negotiations/:rid/:id` | PeerAuth | PeerOTCHandler.UpdateNegotiation | Counter-offer. Phase 4. SI-TX §3.3 turn/closed guards: **409** if closed or out of turn (2.9.2). |
 | GET | `/api/v3/cross-bank-protocol/negotiations/:rid/:id` | PeerAuth | PeerOTCHandler.GetNegotiation | Read negotiation state. Phase 4. |
@@ -1554,7 +1553,6 @@ Many bidders can each open their own negotiation chain against the same listing;
 | POST   | `/api/v3/me/otc/options/:id/negotiations/:nid/accept`  | OTCOptionsHandler.AcceptMyNegotiation       | Accept — first-accept-wins atomic TX |
 | POST   | `/api/v3/me/otc/options/:id/negotiations/:nid/reject`  | OTCOptionsHandler.RejectMyNegotiation       | Reject one chain only |
 | DELETE | `/api/v3/me/otc/options/:id/negotiations/:nid`         | OTCOptionsHandler.CancelMyNegotiation       | Bidder withdraws their own chain |
-| GET    | `/api/v3/public-option-offers`                         | PeerOTCHandler.GetPublicOptionOffers        | Peer-facing discovery endpoint (PeerAuth) |
 | GET    | `/api/v3/me/otc/contracts`                             | OTCOptionsHandler.ListMyContracts           | Caller's LOCAL + REMOTE contracts, merged; each item has `kind`/`routing_number`/`bank_code`/`me_owner` (SP-1 Task 8) |
 | GET    | `/api/v3/otc/contracts/:id`                            | OTCOptionsHandler.GetContract               | Single contract — resolves local→remote; `kind`/`me_owner` stamped in service layer (SP-1 Task 8) |
 
@@ -3150,7 +3148,7 @@ The auto-mirroring of counter/cancel onto the caller's local row is best-effort:
 **Cross-bank FX limitation (Fix #2, 2026-05-16).** SI-TX postings must balance per `asset_id` across banks. The buyer's bank therefore cannot convert at execution time — the buyer must already hold an account in the offer's currency. The intra-bank accept saga's `exchange-service.Convert` path does NOT extend to the cross-bank flow. Bids with currency mismatch are rejected at the gateway with HTTP 400 and an explanatory error.
 
 **Seller-centric discovery limitation — `buy_initiated` offers are intra-bank only (2.9.1).** The SI-TX OTC discovery + negotiation model is structurally **seller-centric**, by spec: a bank publishes only its **sellers'** public stock (§3.1 `PublicStock` lists `sellers`); a negotiation is created `POST /negotiations` "from a Buyer's bank to a Seller's bank" (§3.2), so the receiving bank is **always** the seller's bank; and "the option pseudo-account is always in the bank of the seller" (§3.6.1). The symmetric `OtcOffer` wire (`{buyerId, sellerId, …}`) carries no `direction` field — direction is a local-only concept of *this* implementation. A `buy_initiated` listing's poster is a **BUYER** wanting to acquire shares, which has **no conformant cross-bank representation**: publishing it would mislabel the buyer-poster as a `sellerId`, and a peer bidding on it would invert the economic roles on accept/exercise. Therefore cross-bank `buy_initiated` bidding is **out of scope of the protocol**, enforced end-to-end:
-- **Publish.** `PeerOTCGRPCHandler.GetPublicOptionOffers` skips `Direction == buy_initiated` rows — only `sell_initiated` listings are exposed cross-bank (the local `ListOpenForCache` still returns both for the bank's own marketplace UI).
+- **Publish.** `PeerOTCGRPCHandler.GetPublicStocks` (serving `/public-stock`, the sole cross-bank option-discovery surface) reads `ListPublicOptionOffersForPeer`, which returns only `sell_initiated` rows — `buy_initiated` listings are never exposed cross-bank (the local `ListOpenForCache` still returns both for the bank's own marketplace UI). The proprietary `/public-option-offers` serving endpoint + its `GetPublicOptionOffers` RPC were removed 2026-06-11.
 - **Ingest.** The discovery poll (`otccache.OptionRefresher.buildAndMirrorRemoteOffers`) drops any peer offer with `Direction == buy_initiated` at the poll boundary (defense vs a non-conformant peer that emits the proprietary `direction` field), so it never becomes a biddable remote listing.
 - **Bid.** `openRemoteNegotiation` fails closed (`FailedPrecondition` → HTTP 409) on a remote `buy_initiated` listing with a spec-grounded message; now effectively unreachable because ingest drops such offers, retained as defense-in-depth.
 
@@ -3158,8 +3156,8 @@ LOCAL `buy_initiated` offers/bids are **fully supported and unaffected** — the
 
 ### gRPC services
 
-- **`PeerOTCService`** (stock-service): 14 RPCs. (SP-2b clean-cut, 2026-06-05: the 4 dead `RecordOutboundNegotiation` / `ListMyPeerNegotiations` / `MarkNegotiationAccepted` / `CascadeCancelSiblings` RPCs were removed — they are NOT in this list.)
-  - Discovery + negotiation lifecycle: `GetPublicStocks`, `GetPublicOptionOffers`, `CreateNegotiation`, `UpdateNegotiation`, `GetNegotiation`, `DeleteNegotiation`, `AcceptNegotiation`.
+- **`PeerOTCService`** (stock-service): 13 RPCs. (SP-2b clean-cut, 2026-06-05: the 4 dead `RecordOutboundNegotiation` / `ListMyPeerNegotiations` / `MarkNegotiationAccepted` / `CascadeCancelSiblings` RPCs were removed. 2026-06-11: the proprietary `GetPublicOptionOffers` RPC was removed — cross-bank option discovery is `GetPublicStocks` / `/public-stock` only.)
+  - Discovery + negotiation lifecycle: `GetPublicStocks`, `CreateNegotiation`, `UpdateNegotiation`, `GetNegotiation`, `DeleteNegotiation`, `AcceptNegotiation`.
   - Seller-share reservation hooks (NEW_TX/rollback): `ReserveSellerSharesForNewTx`, `ReleaseSellerSharesForNewTx`.
   - Money-leg validation / contract lookup: `ValidatePeerOptionMoneyLeg`, `LookupPeerOptionContract` — the latter's response gained `seller_account_number` (field 9, 2.9.0): the seller's nominated 18-digit account number stored on the seller-side contract, used by `posting_executor.reserveExercisePseudoLeg` to credit the strike to the bound account (empty ⇒ first-active fallback).
   - SI-TX option leg materialisation (called by interbank-service; 2026-06-07 cutover — was transaction-service): `RecordOptionContract` — dispatches on transaction SHAPE (OPTION-as-asset → accept; OPTION-as-pseudo-account with STOCK legs → exercise), creates a remote `option_contracts` row (routing_number != own) + locks seller's holdings on accept, transitions to `exercised` + runs role-specific stock ops on exercise. Idempotent on `(crossbank_tx_id, posting_index)`.

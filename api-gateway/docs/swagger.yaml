@@ -8187,33 +8187,6 @@ paths:
         SI-TX)'
       tags:
       - PeerOTC
-  /api/v3/cross-bank-protocol/public-option-offers:
-    get:
-      description: Phase 6 cross-bank discovery. Returns this bank's OPEN, undirected
-        option listings as PeerPublicOptionOffer rows in SI-TX shape. Auth via X-Api-Key
-        (PeerAuth); X-Bank-Code is stamped into peer_bank_code so privately-targeted
-        listings are filtered per-caller.
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties: true
-            type: object
-        "501":
-          description: OTCOfferReader not wired
-          schema:
-            additionalProperties: true
-            type: object
-      summary: Peer-facing list of OPEN OTC option listings on this bank
-      tags:
-      - PeerOTC
   /api/v3/cross-bank-protocol/public-stock:
     get:
       description: Inbound from a peer bank. Returns this bank's holdings flagged

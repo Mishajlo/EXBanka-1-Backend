@@ -99,7 +99,7 @@ func newPeerOtcHandler(t *testing.T) (*handler.PeerOTCGRPCHandler, *gorm.DB, *fa
 	holdings := &fakeHoldingReader{}
 	peerTx := &fakePeerTxClient{}
 	h := handler.NewPeerOTCGRPCHandler(repo, optRepo, holdings, peerTx, 111).
-		WithOTCOfferReader(repository.NewOTCOfferRepository(db), nil)
+		WithOTCOfferReader(repository.NewOTCOfferRepository(db))
 	return h, db, peerTx, holdings
 }
 

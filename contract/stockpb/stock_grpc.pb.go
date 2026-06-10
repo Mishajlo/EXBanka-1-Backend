@@ -3884,7 +3884,6 @@ var OTCStockMarketGRPCService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	PeerOTCService_GetPublicStocks_FullMethodName             = "/stock.PeerOTCService/GetPublicStocks"
-	PeerOTCService_GetPublicOptionOffers_FullMethodName       = "/stock.PeerOTCService/GetPublicOptionOffers"
 	PeerOTCService_CreateNegotiation_FullMethodName           = "/stock.PeerOTCService/CreateNegotiation"
 	PeerOTCService_UpdateNegotiation_FullMethodName           = "/stock.PeerOTCService/UpdateNegotiation"
 	PeerOTCService_GetNegotiation_FullMethodName              = "/stock.PeerOTCService/GetNegotiation"
@@ -3918,14 +3917,6 @@ const (
 // money never moves on a contract the seller can't fulfil.
 type PeerOTCServiceClient interface {
 	GetPublicStocks(ctx context.Context, in *GetPublicStocksRequest, opts ...grpc.CallOption) (*GetPublicStocksResponse, error)
-	// Phase 6: peer-facing discovery of OPEN OTC OPTION listings.
-	// Returns OTCOffer rows on THIS bank where:
-	//   - status is open/PENDING (legacy alias) AND
-	//   - counterparty_owner_id IS NULL (undirected listings only) AND
-	//   - Private==false OR PrivateToBankCode == X-Bank-Code of caller.
-	//
-	// Wire shape parallels GetPublicStocks; PeerAuth via X-Api-Key.
-	GetPublicOptionOffers(ctx context.Context, in *GetPublicOptionOffersRequest, opts ...grpc.CallOption) (*GetPublicOptionOffersResponse, error)
 	CreateNegotiation(ctx context.Context, in *CreateNegotiationRequest, opts ...grpc.CallOption) (*CreateNegotiationResponse, error)
 	UpdateNegotiation(ctx context.Context, in *UpdateNegotiationRequest, opts ...grpc.CallOption) (*UpdateNegotiationResponse, error)
 	GetNegotiation(ctx context.Context, in *GetNegotiationRequest, opts ...grpc.CallOption) (*GetNegotiationResponse, error)
@@ -3979,16 +3970,6 @@ func (c *peerOTCServiceClient) GetPublicStocks(ctx context.Context, in *GetPubli
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetPublicStocksResponse)
 	err := c.cc.Invoke(ctx, PeerOTCService_GetPublicStocks_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *peerOTCServiceClient) GetPublicOptionOffers(ctx context.Context, in *GetPublicOptionOffersRequest, opts ...grpc.CallOption) (*GetPublicOptionOffersResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetPublicOptionOffersResponse)
-	err := c.cc.Invoke(ctx, PeerOTCService_GetPublicOptionOffers_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -4134,14 +4115,6 @@ func (c *peerOTCServiceClient) InitiateOptionExercise(ctx context.Context, in *I
 // money never moves on a contract the seller can't fulfil.
 type PeerOTCServiceServer interface {
 	GetPublicStocks(context.Context, *GetPublicStocksRequest) (*GetPublicStocksResponse, error)
-	// Phase 6: peer-facing discovery of OPEN OTC OPTION listings.
-	// Returns OTCOffer rows on THIS bank where:
-	//   - status is open/PENDING (legacy alias) AND
-	//   - counterparty_owner_id IS NULL (undirected listings only) AND
-	//   - Private==false OR PrivateToBankCode == X-Bank-Code of caller.
-	//
-	// Wire shape parallels GetPublicStocks; PeerAuth via X-Api-Key.
-	GetPublicOptionOffers(context.Context, *GetPublicOptionOffersRequest) (*GetPublicOptionOffersResponse, error)
 	CreateNegotiation(context.Context, *CreateNegotiationRequest) (*CreateNegotiationResponse, error)
 	UpdateNegotiation(context.Context, *UpdateNegotiationRequest) (*UpdateNegotiationResponse, error)
 	GetNegotiation(context.Context, *GetNegotiationRequest) (*GetNegotiationResponse, error)
@@ -4193,9 +4166,6 @@ type UnimplementedPeerOTCServiceServer struct{}
 
 func (UnimplementedPeerOTCServiceServer) GetPublicStocks(context.Context, *GetPublicStocksRequest) (*GetPublicStocksResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPublicStocks not implemented")
-}
-func (UnimplementedPeerOTCServiceServer) GetPublicOptionOffers(context.Context, *GetPublicOptionOffersRequest) (*GetPublicOptionOffersResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetPublicOptionOffers not implemented")
 }
 func (UnimplementedPeerOTCServiceServer) CreateNegotiation(context.Context, *CreateNegotiationRequest) (*CreateNegotiationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateNegotiation not implemented")
@@ -4268,24 +4238,6 @@ func _PeerOTCService_GetPublicStocks_Handler(srv interface{}, ctx context.Contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PeerOTCServiceServer).GetPublicStocks(ctx, req.(*GetPublicStocksRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PeerOTCService_GetPublicOptionOffers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetPublicOptionOffersRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PeerOTCServiceServer).GetPublicOptionOffers(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PeerOTCService_GetPublicOptionOffers_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PeerOTCServiceServer).GetPublicOptionOffers(ctx, req.(*GetPublicOptionOffersRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -4516,10 +4468,6 @@ var PeerOTCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPublicStocks",
 			Handler:    _PeerOTCService_GetPublicStocks_Handler,
-		},
-		{
-			MethodName: "GetPublicOptionOffers",
-			Handler:    _PeerOTCService_GetPublicOptionOffers_Handler,
 		},
 		{
 			MethodName: "CreateNegotiation",

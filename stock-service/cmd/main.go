@@ -979,10 +979,9 @@ func main() {
 	peerOtcHandler := handler.NewPeerOTCGRPCHandler(otcNegRepo, peerOptionRepo, holdingRepo, peerTxClient, ownRouting)
 	peerOtcHandler.SetHoldingReserver(holdingReservationSvc)
 	peerOtcHandler = peerOtcHandler.WithNotifier(producer)
-	// Phase 6: cross-bank option discovery — the peer endpoint
-	// (GET /api/v3/public-option-offers) needs the OTC offers repo +
-	// the currency resolver to stamp strike/premium currency.
-	peerOtcHandler = peerOtcHandler.WithOTCOfferReader(otcOfferRepo, optionCurrencyResolver)
+	// Cross-bank option discovery: the peer /public-stock catalog serves
+	// our open, sell-initiated, public, local OTC option offers.
+	peerOtcHandler = peerOtcHandler.WithOTCOfferReader(otcOfferRepo)
 	peerOtcHandler = peerOtcHandler.WithCapitalGain(capitalGainRepo)
 	// Phantom-seller guard: reject inbound cross-bank negotiations whose
 	// client-<n> seller does not resolve to a real local client (closes the
@@ -1097,23 +1096,6 @@ func main() {
 			}
 		}
 	}()
-
-	peerAgg := func(offerIDs []uint64) (map[uint64]handler.PeerOfferAggregate, error) {
-		got, err := otcNegRepo.AggregateActiveBidsByOffer(offerIDs)
-		if err != nil {
-			return nil, err
-		}
-		out := make(map[uint64]handler.PeerOfferAggregate, len(got))
-		for id, a := range got {
-			out[id] = handler.PeerOfferAggregate{
-				BestBid:     a.BestBid.String(),
-				BestAsk:     a.BestAsk.String(),
-				ActiveCount: a.ActiveCount,
-			}
-		}
-		return out, nil
-	}
-	peerOtcHandler.WithBidsAggregator(peerAgg)
 
 	// SP-2b — cross-bank bid dispatch. The bid route (OpenNegotiation)
 	// dispatches local OR cross-bank based on whether the parent listing is a
