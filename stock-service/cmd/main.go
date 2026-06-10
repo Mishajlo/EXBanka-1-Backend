@@ -845,6 +845,20 @@ func main() {
 
 	// --- Intra-bank OTC Options (Spec 2 / Celina 4) ---
 	otcOfferRepo := repository.NewOTCOfferRepository(db)
+
+	// One-open-offer-per-(owner, ticker, direction): collapse any pre-existing
+	// duplicate OPEN local offers BEFORE creating the partial unique index, else
+	// the index creation would fail on legacy duplicates. Migration first, index
+	// second — order matters.
+	if n, err := otcOfferRepo.MergeDuplicateOpenOffers(); err != nil {
+		log.Printf("WARN: OTC offer duplicate merge failed: %v", err)
+	} else if n > 0 {
+		log.Printf("OTC offer migration: merged %d duplicate open offers", n)
+	}
+	db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_otc_offer_open_owner_ticker_dir
+		ON otc_offers (initiator_owner_id, ticker, direction)
+		WHERE status = 'open' AND local = true AND initiator_owner_id IS NOT NULL`)
+
 	otcRevisionRepo := repository.NewOTCOfferRevisionRepository(db)
 	optionContractRepo := repository.NewOptionContractRepository(db)
 	otcReadReceiptRepo := repository.NewOTCReadReceiptRepository(db)

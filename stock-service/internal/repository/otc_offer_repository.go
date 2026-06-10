@@ -21,6 +21,65 @@ func NewOTCOfferRepository(db *gorm.DB) *OTCOfferRepository {
 
 func (r *OTCOfferRepository) DB() *gorm.DB { return r.db }
 
+// MergeDuplicateOpenOffers collapses pre-existing duplicate OPEN LOCAL offers
+// sharing (initiator_owner_id, ticker, direction) into the oldest row (summing
+// quantity) and marks the rest consumed, so the partial unique index can be
+// created. Idempotent: a second run is a no-op. Returns the number consumed.
+//
+// Column updates (UpdateColumn) intentionally bypass the optimistic-lock
+// BeforeUpdate hook: that hook appends `WHERE version = ?` keyed off the
+// zero-value model's Version (0), which would silently no-op rows whose version
+// has advanced past 0. This is a one-shot migration that must apply to the
+// exact id regardless of the live version.
+func (r *OTCOfferRepository) MergeDuplicateOpenOffers() (int64, error) {
+	var consumed int64
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var rows []model.OTCOffer
+		if err := tx.Where("status = ? AND local = ?", model.OTCOfferStatusOpen, true).
+			Order("id ASC").Find(&rows).Error; err != nil {
+			return err
+		}
+		type key struct {
+			owner uint64
+			tick  string
+			dir   string
+		}
+		keep := map[key]*model.OTCOffer{}
+		for i := range rows {
+			o := &rows[i]
+			if o.InitiatorOwnerID == nil {
+				continue
+			}
+			k := key{*o.InitiatorOwnerID, o.Ticker, o.Direction}
+			if first, ok := keep[k]; ok {
+				first.Quantity = first.Quantity.Add(o.Quantity)
+				res := tx.Model(&model.OTCOffer{}).Where("id = ?", first.ID).
+					UpdateColumn("quantity", first.Quantity)
+				if res.Error != nil {
+					return res.Error
+				}
+				if res.RowsAffected != 1 {
+					return errors.New("otc merge: quantity update did not apply")
+				}
+				res = tx.Model(&model.OTCOffer{}).Where("id = ?", o.ID).
+					UpdateColumn("status", model.OTCOfferStatusConsumed)
+				if res.Error != nil {
+					return res.Error
+				}
+				if res.RowsAffected != 1 {
+					return errors.New("otc merge: status update did not apply")
+				}
+				consumed++
+			} else {
+				cp := *o
+				keep[k] = &cp
+			}
+		}
+		return nil
+	})
+	return consumed, err
+}
+
 func (r *OTCOfferRepository) Create(o *model.OTCOffer) error {
 	return r.db.Create(o).Error
 }
