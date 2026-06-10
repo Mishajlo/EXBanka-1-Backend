@@ -233,6 +233,46 @@ func TestBuildAndMirrorRemoteStockShells(t *testing.T) {
 	}
 }
 
+// TestBuildAndMirrorRemoteStockShells_DuplicateSellerTickerAggregated reproduces
+// the bug where a peer's /public-stock lists the SAME (seller, ticker) more than
+// once with different amounts (e.g. seller 3 selling OPK as 5 and 70). The §3.1
+// schema has no per-offer key — (seller, ticker) is the only listing identity — so
+// both entries map to native_id "ps:444:3:OPK". Before the fix this produced two
+// cache rows colliding on the same native_id/local id, so a bid on one silently
+// targeted the other. The fix aggregates duplicates into ONE shell (summed amount),
+// guaranteeing every emitted row maps 1:1 to a distinct id.
+func TestBuildAndMirrorRemoteStockShells_DuplicateSellerTickerAggregated(t *testing.T) {
+	fake := &fakeShellMirror{}
+	r := &OptionRefresher{mirror: fake}
+	stocks := []sitx.PublicStock{{
+		Stock: sitx.StockDescription{Ticker: "OPK"},
+		Sellers: []sitx.PublicSeller{
+			{Seller: sitx.ForeignBankId{RoutingNumber: 444, ID: "3"}, Amount: 5},
+			{Seller: sitx.ForeignBankId{RoutingNumber: 444, ID: "3"}, Amount: 70},
+		},
+	}}
+	out := r.buildAndMirrorRemoteStockShells("444", 444, stocks)
+
+	if len(out) != 1 {
+		t.Fatalf("rows = %d, want 1 (duplicate (seller,ticker) must collapse to one shell)", len(out))
+	}
+	if out[0].OfferID != "ps:444:3:OPK" {
+		t.Fatalf("offer_id = %q, want ps:444:3:OPK", out[0].OfferID)
+	}
+	if out[0].Amount != 75 {
+		t.Fatalf("amount = %d, want 75 (aggregated 5+70)", out[0].Amount)
+	}
+	if len(fake.upserts) != 1 {
+		t.Fatalf("upserts = %d, want 1 (one DB row per unique native_id)", len(fake.upserts))
+	}
+	if !fake.upserts[0].Quantity.Equal(decimal.NewFromInt(75)) {
+		t.Fatalf("persisted quantity = %s, want 75", fake.upserts[0].Quantity)
+	}
+	if len(fake.shellReconcileSeen) != 1 {
+		t.Fatalf("shell reconcile seen = %d, want 1", len(fake.shellReconcileSeen))
+	}
+}
+
 // TestBuildAndMirrorRemoteOffers_OwnRoutingOffer_Skipped verifies that an
 // individual offer claiming our own routing in its OfferID is skipped even
 // when the overall peerRouting differs (defense-in-depth per-offer guard).
@@ -307,6 +347,12 @@ func TestOptionRefresher_ShellsIngestedWhenOptionOffersFails(t *testing.T) {
 	}
 	if shells[0].Ticker != "AAPL" {
 		t.Errorf("shell ticker = %q, want AAPL", shells[0].Ticker)
+	}
+	// A base-spec peer reachable only via /public-stock must still count toward
+	// PeersReached — otherwise the options view reports "0 peers up" while the
+	// stocks view (same peer) reports it up. Reachability = EITHER feed succeeded.
+	if snap.PeersTotal != 1 || snap.PeersReached != 1 {
+		t.Errorf("peers total/reached = %d/%d, want 1/1 (peer reachable via /public-stock alone must count)", snap.PeersTotal, snap.PeersReached)
 	}
 }
 

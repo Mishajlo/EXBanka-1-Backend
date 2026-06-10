@@ -263,20 +263,31 @@ func (r *OptionRefresher) refresh(ctx context.Context) {
 				// (base-spec peer, no proprietary extension) must still have its
 				// shells ingested. The early-return on fetchPeer failure was the
 				// Bug-1 root cause — fixed by restructuring to if/else.
+				reached := false
 				if peerOffers, err := r.fetchPeer(cycleCtx, peer); err != nil {
 					log.Printf("otccache(options): peer %s fetch failed: %v", peer.GetBankCode(), err)
 				} else {
+					reached = true
 					mu.Lock()
 					offers = append(offers, peerOffers...)
-					peersReached++
 					mu.Unlock()
 				}
 
 				if shells, serr := r.fetchPeerStocks(cycleCtx, peer); serr != nil {
 					log.Printf("otccache(stock-shells): peer %s fetch failed: %v", peer.GetBankCode(), serr)
 				} else {
+					reached = true
 					mu.Lock()
 					offers = append(offers, shells...)
+					mu.Unlock()
+				}
+
+				// A base-spec peer (only /public-stock) is "reached" via shells even
+				// though /public-option-offers 404s — count the peer if EITHER feed
+				// succeeded, so the options view reports peers up like the stocks view.
+				if reached {
+					mu.Lock()
+					peersReached++
 					mu.Unlock()
 				}
 			}(p)
@@ -524,8 +535,25 @@ func (r *OptionRefresher) buildAndMirrorRemoteStockShells(peerBankCode string, p
 		return nil
 	}
 	now := time.Now().UTC()
-	seen := make([]string, 0)
-	out := make([]OptionOffer, 0)
+
+	// §3.1 /public-stock identifies a listing SOLELY by its seller (ForeignBankId
+	// routing+id) within a ticker — there is NO per-offer key (see sitx.PublicSeller).
+	// So a seller's availability for a ticker is a single quantity, and
+	// native_id = "ps:<sellerRouting>:<sellerId>:<ticker>" is the unique negotiable
+	// unit. A non-conformant peer that lists the same (seller, ticker) more than once
+	// (e.g. two "offers" of 5 and 70) would otherwise yield multiple cache rows that
+	// COLLIDE on one native_id/local id — so a bid on one silently targets the other.
+	// Aggregate duplicates by native_id (summing the available amount) so every
+	// emitted shell maps 1:1 to a distinct id. Insertion order is preserved for
+	// determinism.
+	type aggShell struct {
+		native   string
+		sellerID string
+		ticker   string
+		amount   int64
+	}
+	order := make([]string, 0)
+	agg := make(map[string]*aggShell)
 	for i := range stocks {
 		ticker := stocks[i].Stock.Ticker
 		if ticker == "" {
@@ -536,48 +564,60 @@ func (r *OptionRefresher) buildAndMirrorRemoteStockShells(peerBankCode string, p
 				continue
 			}
 			native := fmt.Sprintf("%s%d:%s:%s", model.RemoteStockShellPrefix, s.Seller.RoutingNumber, s.Seller.ID, ticker)
-			row := OptionOffer{
-				Kind:           "remote",
-				BankCode:       peerBankCode,
-				RoutingNumber:  peerRouting,
-				OfferID:        native,
-				SellerID:       s.Seller.ID,
-				Direction:      model.OTCDirectionSellInitiated,
-				Ticker:         ticker,
-				Amount:         s.Amount,
-				HasPresetTerms: false,
+			if cur, ok := agg[native]; ok {
+				cur.amount += s.Amount
+				continue
 			}
-			if r.mirror != nil {
-				n := native
-				bc := peerBankCode
-				sid := s.Seller.ID
-				remoteRow := &model.OTCOffer{
-					RoutingNumber:               peerRouting,
-					NativeID:                    &n,
-					InitiatorBankCode:           &bc,
-					RemoteSellerID:              &sid,
-					InitiatorOwnerType:          model.OwnerBank,
-					Direction:                   model.OTCDirectionSellInitiated,
-					Ticker:                      ticker,
-					Quantity:                    decimal.NewFromInt(s.Amount),
-					StrikePrice:                 decimal.Zero,
-					Premium:                     decimal.Zero,
-					StrikeCurrency:              nil,
-					PremiumCurrency:             nil,
-					HasPresetTerms:              false,
-					Status:                      model.OTCOfferStatusOpen,
-					LastModifiedByPrincipalType: "system",
-					LastModifiedByPrincipalID:   0,
-				}
-				if id, err := r.mirror.UpsertRemoteShell(remoteRow, now); err != nil {
-					log.Printf("otccache(stock-shells): upsert peer=%s %s failed: %v", peerBankCode, native, err)
-				} else {
-					row.LocalID = id
-					seen = append(seen, native)
-				}
-			}
-			out = append(out, row)
+			agg[native] = &aggShell{native: native, sellerID: s.Seller.ID, ticker: ticker, amount: s.Amount}
+			order = append(order, native)
 		}
+	}
+
+	seen := make([]string, 0, len(order))
+	out := make([]OptionOffer, 0, len(order))
+	for _, native := range order {
+		a := agg[native]
+		row := OptionOffer{
+			Kind:           "remote",
+			BankCode:       peerBankCode,
+			RoutingNumber:  peerRouting,
+			OfferID:        a.native,
+			SellerID:       a.sellerID,
+			Direction:      model.OTCDirectionSellInitiated,
+			Ticker:         a.ticker,
+			Amount:         a.amount,
+			HasPresetTerms: false,
+		}
+		if r.mirror != nil {
+			n := a.native
+			bc := peerBankCode
+			sid := a.sellerID
+			remoteRow := &model.OTCOffer{
+				RoutingNumber:               peerRouting,
+				NativeID:                    &n,
+				InitiatorBankCode:           &bc,
+				RemoteSellerID:              &sid,
+				InitiatorOwnerType:          model.OwnerBank,
+				Direction:                   model.OTCDirectionSellInitiated,
+				Ticker:                      a.ticker,
+				Quantity:                    decimal.NewFromInt(a.amount),
+				StrikePrice:                 decimal.Zero,
+				Premium:                     decimal.Zero,
+				StrikeCurrency:              nil,
+				PremiumCurrency:             nil,
+				HasPresetTerms:              false,
+				Status:                      model.OTCOfferStatusOpen,
+				LastModifiedByPrincipalType: "system",
+				LastModifiedByPrincipalID:   0,
+			}
+			if id, err := r.mirror.UpsertRemoteShell(remoteRow, now); err != nil {
+				log.Printf("otccache(stock-shells): upsert peer=%s %s failed: %v", peerBankCode, native, err)
+			} else {
+				row.LocalID = id
+				seen = append(seen, native)
+			}
+		}
+		out = append(out, row)
 	}
 	if r.mirror != nil {
 		if n, err := r.mirror.ReconcileRemoteShellsNotSeen(peerRouting, seen); err != nil {

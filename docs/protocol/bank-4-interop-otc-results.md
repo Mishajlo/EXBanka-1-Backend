@@ -153,3 +153,46 @@ Double-entry balanced; reservation consumed; option marked exercised on both sid
 - **EXBanka-1:** 4 bugs found, **all fixed in-repo** (A-1…A-4), spec-compliant, `VERSION 2.22.3`. One open feature gap (A-5, discovery) blocking us-as-buyer.
 - **Banka 4:** 1 blocking bug to fix (B-1, key length), verified; plus minor conformance notes (B-2, B-3).
 - **Net:** with the EXBanka-1 fixes applied and Banka 4's B-1 fixed, the **entire cross-bank OTC option lifecycle works end-to-end** (Banka-4-buys-our-option direction, proven with real settlement). The reverse direction additionally needs A-5.
+
+---
+
+## F. A-5 RESOLVED + Direction 2 live-verified (2026-06-10, feature `2.23.0`)
+
+A-5 (our buyer couldn't bid off a peer's `/public-stock`) was implemented as a feature
+(spec `docs/superpowers/specs/2026-06-10-cross-bank-public-stock-option-negotiation-design.md`,
+plan `docs/superpowers/plans/2026-06-10-cross-bank-public-stock-option-negotiation.md`):
+each refresh ingests peer `/public-stock` into biddable `sell_initiated` "shell" `OTCOffer`
+rows (`has_preset_terms=false`, buyer-negotiated terms), surfaced through the existing
+list/bid routes; bid currency derives from the bidder's bound account.
+
+Building it exposed **one more pre-existing buyer-side accept bug (now fixed):**
+
+### A-7. Inbound accept option authority hardcoded to ownRouting
+- **File:** `stock-service/internal/handler/peer_otc_grpc_handler.go` `AcceptNegotiation` (commit `ac6b0f5f`).
+- **Symptom (Direction 2):** marko (peer seller) accepts → we form the accept TX → peer votes **NO: UNACCEPTABLE_ASSET**, no contract, Banka 4 500s "contract not created."
+- **Root cause** (via the `outbound_peer_txes.last_error`): `OptionDescription.NegotiationID = {RoutingNumber: h.ownRouting, …}`. The option pseudo-account lives in the **seller's** bank (§7), so when the seller is the peer the authority must be `sellerRouting` (444), not ours (111). Banka 4 couldn't resolve an option keyed to us → NO vote.
+- **Fix:** use `sellerRouting` (a no-op when we host as seller — Direction 1). TDD: `TestPeerOTC_AcceptNegotiation_OptionAuthorityIsSeller`.
+
+### Direction 2 live results (our bank BUYS a Banka 4 option) — FULL lifecycle verified
+
+| Step | Result |
+|---|---|
+| discover Banka 4 public AAPL as a shell | ✅ `ps:444:2:AAPL`, `has_preset_terms=false` |
+| bid (currency derived from EUR account) | ✅ Banka 4 view: `pricePerUnit{EUR,40}`, our `buyerAccountNumber` |
+| counter chains + turn enforcement | ✅ out-of-turn → 409; party-switch works |
+| accept → contract | ✅ active on **both** banks (after A-7) |
+| reserve + premium | ✅ marko AAPL reserved 10; buyer −2.2 EUR / seller +2.2 EUR |
+| **exercise** | ✅ exercised; buyer +10 AAPL / −410 EUR, seller −10 reserved / +410 EUR |
+| **cancel** (buyer withdraws) | ✅ both banks → cancelled (204) |
+| **reject** (seller declines) | ✅ Banka 4 → CANCELLED; our side reconciled → cancelled |
+| **multiple chains** | ✅ one buyer, concurrent AAPL + MSFT chains |
+| visibility | ✅ our client sees his remote chains + contracts; Banka 4 seller sees our chain |
+
+**Both directions of the full cross-bank OTC now work end-to-end, live-verified with real
+EUR + share settlement on both banks.** (Banka 4's B-1 exercise key length still applies only
+when Banka 4 *forms* the exercise TX, i.e. Direction 1 where Banka 4 is the buyer.)
+
+### Peer-registration gotchas (operator notes)
+- `bank_code` MUST be the 3-digit routing code (`"444"`), not a friendly name — our outbound resolves peers by the account prefix.
+- The real hosted Banka 4 is `https://banka-4.radenkovic.rs/interbank-service` (root, no trailing `/interbank`); the host `banka-4.radenko.rs` in their old notes is dead.
+- Shared API key is **`bank4-secret-key`** (not `banka4-secret-key`); a wrong key returns 401 which the peer-liveness probe surfaces as "unavailable."
