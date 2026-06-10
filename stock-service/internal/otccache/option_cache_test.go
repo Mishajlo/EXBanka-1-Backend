@@ -35,6 +35,9 @@ func (m *fakeMirror) ReconcileRemoteNotSeen(peerRouting int64, seen []string) (i
 	m.reconciled[peerRouting] = seen
 	return 0, nil
 }
+func (m *fakeMirror) ReconcileRemoteShellsNotSeen(_ int64, _ []string) (int64, error) {
+	return 0, nil
+}
 
 func TestBuildAndMirrorRemoteOffers_StampsIDsAndReconciles(t *testing.T) {
 	m := newFakeMirror()
@@ -82,6 +85,9 @@ func (m *errMirror) ReconcileRemoteNotSeen(peerRouting int64, seen []string) (in
 	m.reconciled[peerRouting] = seen
 	return 0, nil
 }
+func (m *errMirror) ReconcileRemoteShellsNotSeen(_ int64, _ []string) (int64, error) {
+	return 0, nil
+}
 
 func TestBuildAndMirrorRemoteOffers_UpsertFailureLeavesRowUnstamped(t *testing.T) {
 	m := &errMirror{}
@@ -125,6 +131,61 @@ func TestBuildAndMirrorRemoteOffers_OwnRoutingPeer_Skipped(t *testing.T) {
 	// No mirror calls should have been made.
 	if len(m.byKey) != 0 {
 		t.Errorf("expected no upsert calls, got %d entries in mirror", len(m.byKey))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SP-2b — buildAndMirrorRemoteStockShells (synthesized sell_initiated shells)
+// ---------------------------------------------------------------------------
+
+type fakeShellMirror struct {
+	upserts            []*model.OTCOffer
+	shellReconcilePeer int64
+	shellReconcileSeen []string
+}
+
+func (f *fakeShellMirror) UpsertRemote(o *model.OTCOffer, _ time.Time) (uint64, error) {
+	f.upserts = append(f.upserts, o)
+	return uint64(len(f.upserts)), nil
+}
+func (f *fakeShellMirror) ReconcileRemoteNotSeen(_ int64, _ []string) (int64, error) {
+	return 0, nil
+}
+func (f *fakeShellMirror) ReconcileRemoteShellsNotSeen(peer int64, seen []string) (int64, error) {
+	f.shellReconcilePeer = peer
+	f.shellReconcileSeen = seen
+	return 0, nil
+}
+
+func TestBuildAndMirrorRemoteStockShells(t *testing.T) {
+	fake := &fakeShellMirror{}
+	r := &OptionRefresher{mirror: fake}
+	stocks := []sitx.PublicStock{{
+		Stock:   sitx.StockDescription{Ticker: "AAPL"},
+		Sellers: []sitx.PublicSeller{{Seller: sitx.ForeignBankId{RoutingNumber: 222, ID: "client-5"}, Amount: 100}},
+	}}
+	out := r.buildAndMirrorRemoteStockShells("bank222", 222, stocks)
+	if len(out) != 1 {
+		t.Fatalf("rows = %d, want 1", len(out))
+	}
+	got := fake.upserts[0]
+	if got.NativeID == nil || *got.NativeID != "ps:222:client-5:AAPL" {
+		t.Fatalf("native_id = %v", got.NativeID)
+	}
+	if got.HasPresetTerms {
+		t.Fatalf("shell HasPresetTerms = true, want false")
+	}
+	if got.Direction != model.OTCDirectionSellInitiated {
+		t.Fatalf("direction = %s", got.Direction)
+	}
+	if !got.StrikePrice.IsZero() || !got.Premium.IsZero() {
+		t.Fatalf("shell must have zero terms")
+	}
+	if got.StrikeCurrency != nil || got.PremiumCurrency != nil {
+		t.Fatalf("shell currencies must be nil")
+	}
+	if fake.shellReconcilePeer != 222 || len(fake.shellReconcileSeen) != 1 {
+		t.Fatalf("shell reconcile scope wrong")
 	}
 }
 
