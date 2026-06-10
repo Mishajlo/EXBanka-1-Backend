@@ -202,6 +202,12 @@ func (h *OTCOptionsHandler) openRemoteNegotiation(
 		if strikeCurrency == "" {
 			strikeCurrency = premiumCurrency
 		}
+		// Defense-in-depth: a malformed bidder account with no currency would
+		// otherwise dispatch an empty-currency OtcOffer the seller's bank rejects.
+		if premiumCurrency == "" {
+			return nil, false, status.Error(codes.FailedPrecondition,
+				"bidder account has no currency; cannot derive shell offer currency")
+		}
 	} else if acct.GetCurrencyCode() != premiumCurrency {
 		return nil, false, status.Errorf(codes.InvalidArgument,
 			"currency mismatch: account is %s but the listing's premium is %s (cross-bank SI-TX has no FX)",
