@@ -864,9 +864,25 @@ func main() {
 	}
 
 	// One-open-offer-per-(owner, ticker, direction): collapse any pre-existing
-	// duplicate OPEN local offers BEFORE creating the partial unique index, else
+	// duplicate open LOCAL offers BEFORE creating the partial unique index, else
 	// the index creation would fail on legacy duplicates. Migration first, index
 	// second — order matters.
+	//
+	// Status set: the FULL open-listing set ('open','PENDING','COUNTERED').
+	// New LOCAL offers are created PENDING (never 'open'), so the previous
+	// status='open' predicate matched ZERO local rows — the index enforced
+	// nothing and the merge was inert. The widened predicate makes the index the
+	// authoritative backstop for the invariant (OTCOfferService.Create maps its
+	// 23505 violation to ErrOTCOfferDuplicateOpen, closing the count pre-check's
+	// TOCTOU).
+	//
+	// DROP before CREATE: `CREATE ... IF NOT EXISTS` will NOT replace an index
+	// that already exists under the same name with the OLD (status='open')
+	// predicate, so a previously-deployed DB would keep the inert index. Dropping
+	// first forces the corrected predicate to take effect on upgrade. The merge
+	// stays BEFORE the create so pre-existing PENDING/COUNTERED duplicates are
+	// collapsed first (otherwise the unique index build fails on them).
+	db.Exec(`DROP INDEX IF EXISTS ux_otc_offer_open_owner_ticker_dir`)
 	if n, err := otcOfferRepo.MergeDuplicateOpenOffers(); err != nil {
 		log.Printf("WARN: OTC offer duplicate merge failed: %v", err)
 	} else if n > 0 {
@@ -874,7 +890,7 @@ func main() {
 	}
 	db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_otc_offer_open_owner_ticker_dir
 		ON otc_offers (initiator_owner_id, ticker, direction)
-		WHERE status = 'open' AND local = true AND initiator_owner_id IS NOT NULL`)
+		WHERE status IN ('open','PENDING','COUNTERED') AND local = true AND initiator_owner_id IS NOT NULL`)
 
 	otcRevisionRepo := repository.NewOTCOfferRevisionRepository(db)
 	optionContractRepo := repository.NewOptionContractRepository(db)

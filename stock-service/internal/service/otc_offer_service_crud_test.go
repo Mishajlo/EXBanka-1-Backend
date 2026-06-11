@@ -364,6 +364,30 @@ func TestCreate_RejectsDuplicateOpenOfferSameTickerDirection(t *testing.T) {
 	require.ErrorIs(t, err, ErrOTCOfferDuplicateOpen)
 }
 
+// TestCreate_DBIndexBackstopsDuplicateOpen mounts the SAME partial unique index
+// that stock-service/cmd/main.go builds, then drives Create twice for the same
+// (owner,ticker,direction). The second Create must still surface
+// ErrOTCOfferDuplicateOpen — proving Create translates the DB's
+// unique-constraint violation (the TOCTOU backstop) to the typed sentinel, even
+// though the pre-check would also fire. With the index present the invariant
+// holds at the DB even when two racing inserts both pass the count pre-check.
+func TestCreate_DBIndexBackstopsDuplicateOpen(t *testing.T) {
+	fx := newOTCCRUDFixture(t)
+	require.NoError(t, fx.offers.DB().Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_otc_offer_open_owner_ticker_dir
+		ON otc_offers (initiator_owner_id, ticker, direction)
+		WHERE status IN ('open','PENDING','COUNTERED') AND local = true AND initiator_owner_id IS NOT NULL`).Error)
+	fx.seedHolding(t, 7, 1, 100)
+	in := CreateOfferInput{
+		ActorUserID: 7, ActorSystemType: "client",
+		Direction: model.OTCDirectionSellInitiated, StockID: 1, Ticker: "OPK",
+		Quantity: decimal.NewFromInt(5), InitiatorAccountID: 1,
+	}
+	_, err := fx.svc.Create(context.Background(), in)
+	require.NoError(t, err)
+	_, err = fx.svc.Create(context.Background(), in)
+	require.ErrorIs(t, err, ErrOTCOfferDuplicateOpen)
+}
+
 // ---------------- UpdateQuantity ----------------
 
 // Per Task B3: editing the total quantity of an open sell offer SETS the total

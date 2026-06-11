@@ -346,6 +346,15 @@ func (s *OTCOfferService) Create(ctx context.Context, in CreateOfferInput) (*mod
 		ActingEmployeeID:            actingEmployeeID,
 	}
 	if err := s.offers.Create(o); err != nil {
+		// The partial unique index ux_otc_offer_open_owner_ticker_dir is the
+		// authoritative backstop for the one-open-offer-per-(owner,ticker,
+		// direction) invariant: the CountOpenByOwnerTickerDirection pre-check
+		// above is non-transactional, so two concurrent creates can both read 0
+		// and both reach here. Map the DB's unique violation to the same typed
+		// sentinel the pre-check returns, closing the TOCTOU.
+		if repository.IsUniqueViolation(err) {
+			return nil, ErrOTCOfferDuplicateOpen
+		}
 		return nil, err
 	}
 	if err := s.revisions.Append(&model.OTCOfferRevision{

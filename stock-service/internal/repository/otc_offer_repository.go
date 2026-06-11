@@ -26,16 +26,28 @@ func (r *OTCOfferRepository) DB() *gorm.DB { return r.db }
 // quantity) and marks the rest consumed, so the partial unique index can be
 // created. Idempotent: a second run is a no-op. Returns the number consumed.
 //
+// Status set: the full open-listing set ('open','PENDING','COUNTERED'), matching
+// the partial unique index predicate. New LOCAL offers are created PENDING (never
+// 'open'), so a status='open'-only filter would never see a real-world duplicate
+// and the migration would be inert on deploy — and worse, the unique index would
+// then fail to build over pre-existing PENDING duplicates. Collapsing every
+// open-listing status keeps the merge a true precondition for the index.
+//
 // Column updates (UpdateColumn) intentionally bypass the optimistic-lock
 // BeforeUpdate hook: that hook appends `WHERE version = ?` keyed off the
 // zero-value model's Version (0), which would silently no-op rows whose version
 // has advanced past 0. This is a one-shot migration that must apply to the
 // exact id regardless of the live version.
 func (r *OTCOfferRepository) MergeDuplicateOpenOffers() (int64, error) {
+	openStatuses := []string{
+		model.OTCOfferStatusOpen,
+		model.OTCOfferStatusPending,
+		model.OTCOfferStatusCountered,
+	}
 	var consumed int64
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		var rows []model.OTCOffer
-		if err := tx.Where("status = ? AND local = ?", model.OTCOfferStatusOpen, true).
+		if err := tx.Where("status IN ? AND local = ?", openStatuses, true).
 			Order("id ASC").Find(&rows).Error; err != nil {
 			return err
 		}
@@ -89,12 +101,12 @@ func (r *OTCOfferRepository) Create(o *model.OTCOffer) error {
 // reject a duplicate before insert (friendlier than relying on the DB error).
 //
 // New offers are created with the legacy status PENDING (the negotiation-thread
-// vocabulary), but the DB partial unique index keys on status = 'open'. To keep
-// the service-level guard authoritative and consistent across the legacy and
-// new lifecycles, this counts every IsOpenListing status
-// ('open','PENDING','COUNTERED'). The DB index is a backstop for 'open'; this
-// service check is the primary guard and additionally covers the legacy
-// pending/countered statuses.
+// vocabulary). This counts every IsOpenListing status ('open','PENDING',
+// 'COUNTERED'), matching the DB partial unique index predicate exactly. This
+// service check is the friendly fast path (returns ErrOTCOfferDuplicateOpen
+// before the insert); the DB index over the SAME status set is the authoritative
+// backstop that closes the non-transactional gap between this count and the
+// insert.
 func (r *OTCOfferRepository) CountOpenByOwnerTickerDirection(ownerType model.OwnerType, ownerID *uint64, ticker, direction string) (int64, error) {
 	var n int64
 	openStatuses := []string{
