@@ -2131,6 +2131,23 @@ func (h *PeerOTCGRPCHandler) InitiateOptionExercise(ctx context.Context, req *st
 		}
 		return nil, status.Errorf(codes.Internal, "dispatch exercise: %v", err)
 	}
+
+	// Settlement-outcome gate (mirrors the accept path). InitiateOutboundTxWithPostings
+	// returns the SI-TX row's terminal status. A peer NO vote (e.g. the seller bank
+	// can't deliver, or the buyer can't afford the strike on the OTHER bank's check)
+	// is a valid protocol outcome — NOT a transport error — so the err==nil branch
+	// above does not catch it. Without this gate the claim stayed "exercising" and the
+	// contract was permanently un-exercisable ("contract status \"exercising\" is not
+	// exercisable", the user's bug). On rolled_back/failed, revert exercising → active
+	// so the buyer can retry, and surface a clear 409.
+	if txStatus := resp.GetStatus(); txStatus == "rolled_back" || txStatus == "failed" {
+		if _, rerr := h.peerOptionRepo.CompareAndSetRemoteContractStatus(contract.ID, "exercising", "active"); rerr != nil {
+			log.Printf("WARN: peer-option contract %d: failed to revert exercise claim after %s settlement: %v", contract.ID, txStatus, rerr)
+		}
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"cross-bank exercise settlement did not commit (%s): contract not exercised", txStatus)
+	}
+
 	return &stockpb.InitiateOptionExerciseResponse{
 		TransactionId: resp.GetTransactionId(),
 		Status:        resp.GetStatus(),
