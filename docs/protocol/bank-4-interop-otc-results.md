@@ -196,3 +196,11 @@ when Banka 4 *forms* the exercise TX, i.e. Direction 1 where Banka 4 is the buye
 - `bank_code` MUST be the 3-digit routing code (`"444"`), not a friendly name — our outbound resolves peers by the account prefix.
 - The real hosted Banka 4 is `https://banka-4.radenkovic.rs/interbank-service` (root, no trailing `/interbank`); the host `banka-4.radenko.rs` in their old notes is dead.
 - Shared API key is **`bank4-secret-key`** (not `banka4-secret-key`); a wrong key returns 401 which the peer-liveness probe surfaces as "unavailable."
+
+## G. Unified options-as-stock model (2026-06-11, `3.0.0`) — supersedes the `/public-option-offers` extension
+
+The cross-bank option model was unified onto the **base-spec `/public-stock` discovery surface only**, retiring our proprietary extension:
+
+- **`/public-option-offers` was REMOVED (404).** It was always our non-spec extension (see A-5 / B-4 above), so peers that never implemented it (like Banka 4) lose nothing. Cross-bank option discovery now happens **only** through `GET /api/v3/cross-bank-protocol/public-stock`: our open, **sell-initiated** public option offers surface as the base-spec `{stock, sellers:[{seller, amount}]}` shells (one seller entry per `owner+ticker`). Buyers discover a seller+ticker there and open a negotiation off it — exactly the spec's "discover a stock, then negotiate an option" flow that Direction 2 already exercises.
+- **Option offers are termless "optionable inventory"** `(owner, ticker, quantity)` — they carry no strike/premium/settlement of their own. Terms are buyer-proposed per negotiation chain. The old `has_preset_terms` flag (shown `false` for the shells in §F's table) **no longer exists**: every offer is now effectively a "shell", so there is **no per-offer key in the base protocol** — a bidder always proposes the terms on their chain.
+- **No wire-protocol change.** This is a local read/model unification; the SI-TX `/public-stock`, `/negotiations`, `/interbank` bodies on the wire are unchanged, so the Banka 4 lifecycle verified in §C/§F continues to work as-is. The `has_preset_terms=false` and `/public-option-offers` mentions earlier in this document are retained as the historical record of the 2026-06-10 state.

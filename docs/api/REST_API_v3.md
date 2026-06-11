@@ -8299,6 +8299,36 @@ Employee buys a sell offer **on behalf of a client**. The acquired shares land i
 
 Each OTC option listing (an `OTCOffer` posted by a seller or buyer) can accept many parallel **negotiation chains** in the new model. One bidder per chain; the chain has its own counter history and current terms. First chain to accept wins atomically; the parent listing flips to `consumed` and sibling chains cascade-cancel in the same transaction.
 
+An option offer is **termless "optionable inventory"** keyed by `(owner, ticker, quantity)` — it carries **no** strike/premium/settlement_date of its own. Those terms are negotiated per chain (each bidder proposes their own on `POST /api/v3/otc/options/:id/bid`). On read surfaces the `strike_price` / `premium` / `settlement_date` fields are **viewer-contextual**, projected from the negotiation chain: a bidder sees their own chain's current terms; the owner sees their most recent counter; otherwise the fields are empty. A freshly-created offer with no negotiation thus shows empty terms.
+
+#### POST /api/v3/me/otc/options
+
+Create a **termless** OTC option listing. At most **one open offer per `(owner, ticker, direction)`** may exist — a duplicate open offer returns **409 conflict** (resize the existing one with `PUT /api/v3/me/otc/options/:id` instead of posting a second).
+
+**Authentication:** `AnyAuthMiddleware` (client token, or employee acting as the bank / on behalf of a client) + `ResolveIdentity`.
+
+**Request Body:**
+
+| Field | Type | Description |
+|---|---|---|
+| `ticker` | string | Stock ticker symbol. Either `ticker` or `stock_id` is required; an unknown ticker ⇒ 400. |
+| `stock_id` | int | Alternative to `ticker`. |
+| `quantity` | string (decimal) | Total optionable quantity. Must be **> 0** and not exceed the owner's holding for the ticker. |
+| `account_id` | int | The owner's account bound to the listing (ownership-verified gateway-side: a client must own it; an employee acting as the bank must supply a bank account, or an on-behalf client's account). |
+| `direction` | string | `sell_initiated` (writer publishes shares to option out) or `buy_initiated` (publishes a standing demand). |
+
+Term fields (`strike_price`, `premium`, `settlement_date`) are **no longer accepted** — the create contract dropped them; the created offer is always termless (terms are negotiated per chain).
+
+**Response 201:** `{ "offer": OTCOfferResponse }` — the created listing (term fields empty/viewer-contextual).
+
+**Response 400:** Validation (missing/zero quantity, unknown ticker, quantity above the owner's holding).
+
+**Response 403:** `account_id` is not owned by the caller (or is not a bank account for an employee acting as the bank).
+
+**Response 409:** An open offer for the same `(owner, ticker, direction)` already exists — resize it via `PUT /api/v3/me/otc/options/:id`.
+
+---
+
 #### POST /api/v3/otc/options/:id/bid
 
 Open a new negotiation chain by placing the initial bid on an open listing. `:id` may resolve to a **LOCAL** listing (an `OTCOffer` this bank hosts) or a folded-in **REMOTE** listing (a peer-bank listing surfaced via the cross-bank discovery feed). The same route handles both — stock-service dispatches by the parent listing's routing (SP-2b):
@@ -8691,7 +8721,7 @@ Revisions are ordered by `revision_number ASC`. For **remote** chains, `action_b
 
 #### GET /api/v3/me/otc/options
 
-Marketplace view of the caller's OWN open OTC option listings. Returns the **same response shape as `GET /api/v3/otc/options`** (`kind` / `bank_code` / `routing_number` / `offer_id` / `seller_id` / `direction` / `ticker` / `amount` / `strike_price` / `strike_currency` / `premium` / `premium_currency` / `settlement_date` / `created_at` / `has_preset_terms` / optional `best_bid` / optional `best_ask` / optional `active_chains_count`), filtered to listings whose seller id matches the caller's SI-TX identity (`client-<principal_id>` for clients, `bank` for bank-on-behalf calls). Only listings in an OPEN status appear here — the unified cache is open-only. For full history (cancelled / accepted / expired listings the caller posted) use `GET /api/v3/me/otc/options/posted`.
+Marketplace view of the caller's OWN open OTC option listings. Returns the **same response shape as `GET /api/v3/otc/options`** (`kind` / `bank_code` / `routing_number` / `offer_id` / `seller_id` / `direction` / `ticker` / `amount` / viewer-contextual `strike_price` / `strike_currency` / `premium` / `premium_currency` / `settlement_date` / `created_at` / optional `best_bid` / optional `best_ask` / optional `active_chains_count`), filtered to listings whose seller id matches the caller's SI-TX identity (`client-<principal_id>` for clients, `bank` for bank-on-behalf calls). Only listings in an OPEN status appear here — the unified cache is open-only. For full history (cancelled / accepted / expired listings the caller posted) use `GET /api/v3/me/otc/options/posted`.
 
 **Query Parameters:** same `ticker` / `direction` / `page` / `page_size` as `GET /api/v3/otc/options`. `kind` and `bank_code` are accepted but redundant (results are always `kind=local` by definition).
 
@@ -8809,7 +8839,6 @@ Unified cross-bank discovery view: every open OTC option listing on this bank + 
       "premium_currency":    "USD",
       "settlement_date":     "2026-12-31T00:00:00Z",
       "created_at":          "2026-05-10T14:00:00Z",
-      "has_preset_terms":    true,
       "best_bid":            "850",
       "active_chains_count": 3,
       "my_negotiation_id":     88,
@@ -8833,7 +8862,7 @@ Unified cross-bank discovery view: every open OTC option listing on this bank + 
 | `bank_code` | string | 3-digit bank code. |
 | `local_id` | uint64 | Stable local surrogate id — the folded-in remote `OTCOffer.id` for remote rows (SP-2a); the numeric offer id for local rows. Use this as `:id` in `GET /api/v3/otc/options/:id`. |
 | `me_owner` | bool | `true` when the acting caller is the listing's poster/seller. Always `false` for remote rows. Omitted (falsy) when not owned. |
-| `has_preset_terms` | bool | `true` when the offer carries owner-set terms (strike price + premium), i.e. it originated from a `/public-option-offers` peer feed or is a local listing. `false` for negotiable shells synthesised from a peer's `/public-stock` feed (no preset strike/premium — fully buyer-negotiated). Always present on every row. |
+| `strike_price` / `premium` / `settlement_date` | string | **Viewer-contextual** — projected from the negotiation chain, NOT stored on the (termless) offer: a bidder sees their own chain's current terms; the owner sees their most recent counter; otherwise empty. A freshly-created offer with no negotiation shows empty terms. (The legacy `has_preset_terms` flag was removed — there is no preset/no-preset distinction anymore; the bidder always proposes the terms on their chain.) |
 
 **SP-2b caller's-own-chain fields (2026-06-05):** Each item the authenticated caller has an own (bidder) negotiation chain against also carries:
 
