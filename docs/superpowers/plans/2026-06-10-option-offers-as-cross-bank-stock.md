@@ -10,6 +10,46 @@
 
 ---
 
+## ⚠️ REVISION (2026-06-10, after A1 impact analysis) — corrected sequencing
+
+The first implementer's analysis showed the original "drop columns first" order was wrong: dropping `model.OTCOffer.{StrikePrice,Premium,SettlementDate,StrikeCurrency,PremiumCurrency,HasPresetTerms}` first breaks cross-bank money-path **branch conditions** (`otc_negotiation_remote.go` keys on `HasPresetTerms`) and functions later phases delete (`buildAndMirrorRemoteOffers`, `GetPublicOptionOffers` write/emit them), and it strands the **offer-expiry cron** (`ListExpiringOffers` queries `settlement_date`). The column drop must come **LAST**, after every consumer is migrated/deleted.
+
+**Decisions locked in:**
+- `HasPresetTerms` branch collapses to **always-shell-path** (this is the spec's "uniform termless model"): every remote offer gets the `/public-stock` freshness guard and derives premium/strike currency from the **bidder's bound account**.
+- **Offers never auto-expire** (user decision): they end only via cancel (DELETE) or consume (accept). Remove `ListExpiringOffers` + the **offer**-expiry portion of `OTCExpiryCron`; **contract** expiry (formed options, by the contract's settlement_date) is **untouched**.
+
+**Corrected execution order (supersedes the Phase A→E order below):**
+1. **R1 — A3** (migration + partial unique index): standalone, safe; merge duplicate open offers + `ux_otc_offer_open_owner_ticker_dir`. (Plan Task A3.) ✅ DONE
+2. **R2 — negotiation-remote migration**: `otc_negotiation_remote.go` → always-shell-path; stop reading `HasPresetTerms`/preset currencies (columns still exist). NEW task — see below. ✅ DONE
+2.5. **R9 (moved up) — remove OFFER expiry**: MUST land before B1. Once B1 stops writing `settlement_date`, new offers get a zero date (`0001-01-01`) which the offer-expiry cron would treat as instantly expired. Remove `ListExpiringOffers` + the offer-expiry pass first. (R9 detail below; the earlier "after C2" note was over-cautious — it only needs to precede B1 and R12.)
+3. **R3 — B1** Create rejects duplicate + stops writing terms.
+4. **R4 — B2** gateway create 409.
+5. **R5 — B3** UpdateQuantity + PUT.
+6. **R6 — C1** GetPublicStocks serves option offers.
+7. **R7 — C2** remove `/public-option-offers` endpoint (deletes `GetPublicOptionOffers`).
+8. **R8 — C3** remove outbound ingestion (deletes `buildAndMirrorRemoteOffers`).
+9. **R9 — offer-expiry removal**: delete `ListExpiringOffers` + the offer-expiry pass in `OTCExpiryCron`; keep contract expiry; update `otc_expiry_cron_test.go` + `otc_offer_and_tax_test.go` expiry-offer tests. NEW task — see below.
+10. **R10 — D1** `LatestRevisionByAuthorForOffer`.
+11. **R11 — D2** term projection + drop `HasPresetTerms` from the cache DTO + proto + gateway.
+12. **R12 — A1+A2 (final)** drop the 6 `model.OTCOffer` columns + fix ALL remaining model readers/writers: `buildAndMirrorRemoteStockShells` (stops writing zeros/nils), `toOTCOfferProto` (otc_options_handler), `UpsertRemote` `OnConflict` DoUpdates column list (otc_offer_repository), the `otc_offer_service.go` `Counter`/`Reject`/revision-seed readers, and all tests referencing the removed fields. (Plan Tasks A1+A2, now LAST.)
+13. **R13 — E1+E2+E3** integration, docs, `VERSION 3.0.0`, full CI.
+
+### NEW Task R2 — `otc_negotiation_remote.go` always-shell-path
+
+**File:** `stock-service/internal/handler/otc_negotiation_remote.go` (`openRemoteNegotiation`).
+- Remove the `if !remoteOffer.HasPresetTerms` / preset branches. The flow becomes uniform: ALWAYS run the `/public-stock` freshness guard (`publicStockHasSeller`) for the remote offer, and ALWAYS derive `premiumCurrency`/`strikeCurrency` from the bidder's bound account (`acct.GetCurrencyCode()`), never from `remoteOffer.PremiumCurrency`/`StrikeCurrency`.
+- Keep the empty-currency guard (reject if the account currency can't be resolved).
+- This makes the handler stop *reading* `HasPresetTerms`/`PremiumCurrency`/`StrikeCurrency` on `model.OTCOffer`, while the columns still physically exist (dropped in R12).
+- TDD: a test that an open-negotiation on a remote offer derives currency from the bidder account and runs the freshness guard regardless of any preset flag. Run unit tests for the package; commit.
+
+### NEW Task R9 — Remove offer-expiry (keep contract expiry)
+
+**Files:** `stock-service/internal/repository/otc_offer_repository.go` (delete `ListExpiringOffers`), `stock-service/internal/service/otc_expiry_cron.go` (delete the offer-expiry pass + the `offers` dependency use; keep all contract-expiry logic, `WithExpiryWarning`, capital-gains), `stock-service/cmd/main.go` (drop the offers arg if the cron constructor changes), tests `otc_expiry_cron_test.go` + `otc_offer_and_tax_test.go` (remove offer-expiry assertions).
+- TDD: assert the cron no longer expires offers (an old-style offer with a past settlement is left untouched) while still expiring a past-settlement **contract**. Run; commit.
+- Do R9 AFTER C2 (so no emitter reads `settlement_date`) and BEFORE R12 (so the column drop has no `ListExpiringOffers` referencing `settlement_date`).
+
+---
+
 ## ⚠️ CRITICAL GOTCHA — three different structs carry `StrikePrice`/`Premium`/`SettlementDate`
 
 The Explore map flagged ~40 reads of these field names. **Only `model.OTCOffer` and the local model→`otccache.OptionOffer` mapping change.** The others are different types and must be left **untouched**:
