@@ -511,8 +511,7 @@ func TestGetOffer_StampsMyNegotiation_Remote(t *testing.T) {
 		ID: 555, RoutingNumber: 333, NativeID: &foreignID,
 		InitiatorBankCode: &bankCode, RemoteSellerID: &sellerID,
 		InitiatorOwnerType: model.OwnerBank, Direction: model.OTCDirectionSellInitiated,
-		Ticker: "JNJ", Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(150),
-		Premium: decimal.NewFromInt(20), SettlementDate: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC), Status: "open",
+		Ticker: "JNJ", Quantity: decimal.NewFromInt(10), Status: "open",
 	}
 	lister := &fakeMyNegLister{remoteRows: []model.OTCNegotiation{
 		{ID: 88, RoutingNumber: 333, Status: "ongoing",

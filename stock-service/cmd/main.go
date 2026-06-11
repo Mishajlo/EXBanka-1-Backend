@@ -875,7 +875,6 @@ func main() {
 	// a terminal state with no human intervention. Done here (not at
 	// construction) because otcOfferSvc only exists now.
 	sagaRecovery.WithExerciseRecoverer(otcOfferSvc)
-	sagaRecovery.WithAcceptRecoverer(otcOfferSvc)
 	sagaRecovery.WithFundRecoverer(fundService)
 	sagaRecovery.WithPlacementRecoverer(orderSvc)
 	sagaRecovery.WithFillRecoverer(portfolioSvc, orderTxRepo)

@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/shopspring/decimal"
 	"google.golang.org/grpc"
@@ -172,32 +171,23 @@ func newRemoteBidFixture(t *testing.T, dispatcher PeerNegotiationDispatcher, acc
 }
 
 // seedRemoteOffer inserts a folded-in remote OTCOffer row (peer routing 222)
-// and returns its surrogate id. The row deliberately still carries the legacy
-// HasPresetTerms=true flag and non-nil USD strike/premium currencies — the
-// handler must now IGNORE all of these (uniform termless inventory): it always
-// runs the freshness guard and always derives currency from the bidder account.
+// and returns its surrogate id. Remote rows are uniform termless inventory: the
+// handler always runs the freshness guard and always derives currency from the
+// bidder account.
 func seedRemoteOffer(t *testing.T, db *gorm.DB) uint64 {
 	t.Helper()
 	nid := "peer-offer-1"
 	bankCode := "222"
 	sellerID := "client-9"
-	strikeCcy := "USD"
-	premiumCcy := "USD"
 	o := &model.OTCOffer{
 		RoutingNumber:               222,
 		NativeID:                    &nid,
 		InitiatorBankCode:           &bankCode,
-		RemoteSellerID:              &sellerID,
-		HasPresetTerms:              true, // legacy flag — handler now ignores it (always shell-path)
+		RemoteSellerID:              &sellerID, // legacy flag — handler now ignores it (always shell-path)
 		InitiatorOwnerType:          model.OwnerBank,
 		Direction:                   model.OTCDirectionSellInitiated,
 		Ticker:                      "AAPL",
 		Quantity:                    decimal.NewFromInt(10),
-		StrikePrice:                 decimal.RequireFromString("150"),
-		Premium:                     decimal.RequireFromString("20"),
-		StrikeCurrency:              &strikeCcy,
-		PremiumCurrency:             &premiumCcy,
-		SettlementDate:              time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
 		Status:                      model.OTCOfferStatusOpen,
 		LastModifiedByPrincipalType: "system",
 		LastModifiedByPrincipalID:   0,

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
@@ -107,15 +106,6 @@ func seedPeerOffer(t *testing.T, db *gorm.DB, o *model.OTCOffer) {
 	}
 	if o.Quantity.IsZero() {
 		o.Quantity = decimal.NewFromInt(1)
-	}
-	if o.StrikePrice.IsZero() {
-		o.StrikePrice = decimal.NewFromInt(100)
-	}
-	if o.Premium.IsZero() {
-		o.Premium = decimal.NewFromInt(5)
-	}
-	if o.SettlementDate.IsZero() {
-		o.SettlementDate = time.Now().Add(720 * time.Hour).UTC()
 	}
 	if o.LastModifiedByPrincipalType == "" {
 		o.LastModifiedByPrincipalType = "client"

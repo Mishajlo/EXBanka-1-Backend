@@ -251,8 +251,7 @@ func (r *OTCOfferRepository) UpsertRemote(o *model.OTCOffer, seenAt time.Time) (
 		Columns: []clause.Column{{Name: "routing_number"}, {Name: "native_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"initiator_bank_code", "remote_seller_id", "direction", "ticker",
-			"quantity", "strike_price", "premium", "settlement_date",
-			"strike_currency", "premium_currency", "has_preset_terms", "status", "last_seen_at", "updated_at",
+			"quantity", "status", "last_seen_at", "updated_at",
 		}),
 	}).Create(o).Error
 	if err != nil {
@@ -273,25 +272,13 @@ func (r *OTCOfferRepository) UpsertRemote(o *model.OTCOffer, seenAt time.Time) (
 	return o.ID, nil
 }
 
-// UpsertRemoteShell upserts a /public-stock SHELL remote row. Because
-// OTCOffer.HasPresetTerms is `default:true`, GORM substitutes `true` for the
-// zero-value `false` in the INSERT, and also scans the inserted value back
-// into the struct; capturing the desired value BEFORE calling UpsertRemote
-// and forcing it via a raw Exec afterward guarantees shells persist as
-// has_preset_terms=false.
+// UpsertRemoteShell upserts a /public-stock SHELL remote row (native_id
+// "ps:..."). Shells are termless listings just like every other OTCOffer, so
+// this is now a thin alias over UpsertRemote, retained as a named entry point
+// for the shell-mirror callers and to keep the shell/option-offer call sites
+// self-documenting.
 func (r *OTCOfferRepository) UpsertRemoteShell(o *model.OTCOffer, seenAt time.Time) (uint64, error) {
-	// Capture the caller's intent before UpsertRemote may overwrite o.HasPresetTerms
-	// with the DB default (true) via the GORM RETURNING scan.
-	wantPresetTerms := o.HasPresetTerms
-	id, err := r.UpsertRemote(o, seenAt)
-	if err != nil {
-		return 0, err
-	}
-	if err := r.db.Exec("UPDATE otc_offers SET has_preset_terms = ? WHERE id = ?",
-		wantPresetTerms, id).Error; err != nil {
-		return 0, err
-	}
-	return id, nil
+	return r.UpsertRemote(o, seenAt)
 }
 
 // reconcileScoped flips open remote rows for peerRouting whose native_id is NOT

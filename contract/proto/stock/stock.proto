@@ -1256,9 +1256,6 @@ service OTCOptionsService {
   rpc CreateOffer(CreateOTCOfferRequest)   returns (OTCOfferResponse);
   rpc ListMyOffers(ListMyOTCOffersRequest) returns (ListMyOTCOffersResponse);
   rpc GetOffer(GetOTCOfferRequest)         returns (OTCOfferDetailResponse);
-  rpc CounterOffer(CounterOTCOfferRequest) returns (OTCOfferResponse);
-  rpc AcceptOffer(AcceptOTCOfferRequest)   returns (AcceptOfferResponse);
-  rpc RejectOffer(RejectOTCOfferRequest)   returns (OTCOfferResponse);
 
   // Edit the TOTAL quantity of an open option offer (termless inventory).
   // Owner-only, local + open. Sets the quantity up or down, bounded below by
@@ -1822,42 +1819,6 @@ message GetOTCOfferRequest {
   // acting as the bank.
   string acting_owner_type = 4;
   uint64 acting_owner_id   = 5;
-}
-
-message CounterOTCOfferRequest {
-  uint64 offer_id = 1;
-  int64  actor_user_id = 2;
-  string actor_system_type = 3;
-  string quantity = 4;
-  string strike_price = 5;
-  string premium = 6;
-  string settlement_date = 7;
-  // Set when an employee acts on behalf of a client. 0 = acting as the bank.
-  uint64 on_behalf_of_client_id = 8;
-}
-
-message AcceptOTCOfferRequest {
-  uint64 offer_id = 1;
-  int64  actor_user_id = 2;
-  string actor_system_type = 3;
-  // The acceptor's own account. Maps to buyer or seller via offer.direction;
-  // the counterparty (initiator) account is read from the persisted offer.
-  uint64 account_id = 4;
-  // Set when an employee acts on behalf of a client. 0 = acting as the bank.
-  uint64 on_behalf_of_client_id = 5;
-}
-message AcceptOfferResponse {
-  uint64 offer_id = 1;
-  uint64 contract_id = 2;
-  string status = 3;
-  string saga_id = 4;
-  OptionContractResponse contract = 5;
-}
-
-message RejectOTCOfferRequest {
-  uint64 offer_id = 1;
-  int64  actor_user_id = 2;
-  string actor_system_type = 3;
 }
 
 message OptionContractResponse {

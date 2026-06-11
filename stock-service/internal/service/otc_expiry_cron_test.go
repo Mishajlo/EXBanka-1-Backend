@@ -95,10 +95,8 @@ func TestOTCExpiryCron_RunOnce_DoesNotExpireOffers(t *testing.T) {
 	o := &model.OTCOffer{
 		InitiatorOwnerType: model.OwnerClient, InitiatorOwnerID: &uid,
 		Direction: model.OTCDirectionSellInitiated, StockID: 42,
-		Quantity: decimal.NewFromInt(10), StrikePrice: decimal.NewFromInt(100),
-		Premium: decimal.NewFromInt(20), Status: model.OTCOfferStatusPending,
+		Quantity: decimal.NewFromInt(10), Status: model.OTCOfferStatusPending,
 		LastModifiedByPrincipalType: "client", LastModifiedByPrincipalID: 7,
-		SettlementDate: time.Now().Add(-48 * time.Hour), // long past
 	}
 	if err := offerRepo.Create(o); err != nil {
 		t.Fatalf("seed: %v", err)

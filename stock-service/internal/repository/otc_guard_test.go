@@ -77,10 +77,7 @@ func seedGuardFixtures(t *testing.T, db *gorm.DB) (
 		Direction:                   model.OTCDirectionSellInitiated,
 		StockID:                     stockID,
 		Ticker:                      "TST",
-		Quantity:                    decimal.NewFromInt(10),
-		StrikePrice:                 decimal.NewFromFloat(100),
-		Premium:                     decimal.NewFromFloat(5),
-		SettlementDate:              pastDate, // past settlement (offers no longer auto-expire)
+		Quantity:                    decimal.NewFromInt(10), // past settlement (offers no longer auto-expire)
 		Status:                      model.OTCOfferStatusPending,
 		LastModifiedByPrincipalType: "client",
 		LastModifiedByPrincipalID:   1,
@@ -100,10 +97,7 @@ func seedGuardFixtures(t *testing.T, db *gorm.DB) (
 		Direction:                   model.OTCDirectionSellInitiated,
 		StockID:                     stockID,
 		Ticker:                      "TST",
-		Quantity:                    decimal.NewFromInt(10),
-		StrikePrice:                 decimal.NewFromFloat(100),
-		Premium:                     decimal.NewFromFloat(5),
-		SettlementDate:              pastDate, // past settlement (offers no longer auto-expire)
+		Quantity:                    decimal.NewFromInt(10), // past settlement (offers no longer auto-expire)
 		Status:                      model.OTCOfferStatusPending,
 		LastModifiedByPrincipalType: "client",
 		LastModifiedByPrincipalID:   2,
@@ -124,9 +118,6 @@ func seedGuardFixtures(t *testing.T, db *gorm.DB) (
 		StockID:                     stockID,
 		Ticker:                      "TST",
 		Quantity:                    decimal.NewFromInt(10),
-		StrikePrice:                 decimal.NewFromFloat(100),
-		Premium:                     decimal.NewFromFloat(5),
-		SettlementDate:              futureDate,
 		Status:                      model.OTCOfferStatusOpen,
 		LastModifiedByPrincipalType: "client",
 		LastModifiedByPrincipalID:   1,
@@ -145,9 +136,6 @@ func seedGuardFixtures(t *testing.T, db *gorm.DB) (
 		StockID:                     stockID,
 		Ticker:                      "TST",
 		Quantity:                    decimal.NewFromInt(10),
-		StrikePrice:                 decimal.NewFromFloat(100),
-		Premium:                     decimal.NewFromFloat(5),
-		SettlementDate:              futureDate,
 		Status:                      model.OTCOfferStatusOpen,
 		LastModifiedByPrincipalType: "client",
 		LastModifiedByPrincipalID:   2,

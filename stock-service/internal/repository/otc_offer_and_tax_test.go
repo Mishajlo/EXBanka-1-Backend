@@ -30,9 +30,7 @@ func sampleSellOffer(uid uint64, stockID uint64, qty int64, status string) *mode
 	return &model.OTCOffer{
 		InitiatorOwnerType: model.OwnerClient, InitiatorOwnerID: &uid2,
 		Direction: model.OTCDirectionSellInitiated, StockID: stockID,
-		Quantity: decimal.NewFromInt(qty), StrikePrice: decimal.NewFromInt(150),
-		Premium:                     decimal.NewFromInt(20),
-		SettlementDate:              time.Now().Add(30 * 24 * time.Hour),
+		Quantity:                    decimal.NewFromInt(qty),
 		Status:                      status,
 		LastModifiedByPrincipalType: "client",
 		LastModifiedByPrincipalID:   uid,
@@ -122,8 +120,8 @@ func TestOTCOfferRevisionRepository_AppendAndList(t *testing.T) {
 	_ = r.Create(o)
 	rev := &model.OTCOfferRevision{
 		OfferID: o.ID, RevisionNumber: 1,
-		Quantity: o.Quantity, StrikePrice: o.StrikePrice,
-		Premium: o.Premium, SettlementDate: o.SettlementDate,
+		Quantity: o.Quantity, StrikePrice: decimal.Zero,
+		Premium: decimal.Zero, SettlementDate: time.Time{},
 		ModifiedByPrincipalType: "client", ModifiedByPrincipalID: 7,
 		Action: model.OTCActionCreate,
 	}

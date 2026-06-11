@@ -349,12 +349,15 @@ func (s *OTCOfferService) Create(ctx context.Context, in CreateOfferInput) (*mod
 		return nil, err
 	}
 	if err := s.revisions.Append(&model.OTCOfferRevision{
-		OfferID:                 o.ID,
-		RevisionNumber:          1,
-		Quantity:                o.Quantity,
-		StrikePrice:             o.StrikePrice,
-		Premium:                 o.Premium,
-		SettlementDate:          o.SettlementDate,
+		OfferID:        o.ID,
+		RevisionNumber: 1,
+		Quantity:       o.Quantity,
+		// Listings are termless inventory — the CREATE revision carries no
+		// strike/premium/settlement; those are proposed later on the
+		// negotiation chain.
+		StrikePrice:             decimal.Zero,
+		Premium:                 decimal.Zero,
+		SettlementDate:          time.Time{},
 		ModifiedByPrincipalType: o.LastModifiedByPrincipalType,
 		ModifiedByPrincipalID:   o.LastModifiedByPrincipalID,
 		Action:                  model.OTCActionCreate,
@@ -371,12 +374,13 @@ func (s *OTCOfferService) Create(ctx context.Context, in CreateOfferInput) (*mod
 				OwnerType: string(o.InitiatorOwnerType),
 				OwnerID:   o.InitiatorOwnerID,
 			},
-			Counterparty:   ptrCounterparty(o),
-			StockID:        o.StockID,
-			Quantity:       o.Quantity.String(),
-			StrikePrice:    o.StrikePrice.String(),
-			Premium:        o.Premium.String(),
-			SettlementDate: o.SettlementDate.Format("2006-01-02"),
+			Counterparty: ptrCounterparty(o),
+			StockID:      o.StockID,
+			Quantity:     o.Quantity.String(),
+			// Termless listing — no preset terms on the offer-created event.
+			StrikePrice:    "",
+			Premium:        "",
+			SettlementDate: "",
 		}
 		if data, err := json.Marshal(payload); err == nil {
 			s.publishViaOutboxOrDirect(ctx, kafkamsg.TopicOTCOfferCreated, data, "")
@@ -387,153 +391,10 @@ func (s *OTCOfferService) Create(ctx context.Context, in CreateOfferInput) (*mod
 			OwnerType: string(*o.CounterpartyOwnerType), OwnerID: o.CounterpartyOwnerID,
 		}, "OTC_OFFER_RECEIVED", "otc_offer", o.ID, map[string]string{
 			"ticker": o.Ticker, "quantity": o.Quantity.String(),
-			"strike_price": o.StrikePrice.String(), "premium": o.Premium.String(),
+			// Termless listing — no preset terms in the directed-offer notice.
+			"strike_price": "", "premium": "",
 		})
 	}
-	return o, nil
-}
-
-// CounterInput captures fields a counter call needs.
-type CounterInput struct {
-	OfferID         uint64
-	ActorUserID     int64
-	ActorSystemType string
-	Quantity        decimal.Decimal
-	StrikePrice     decimal.Decimal
-	Premium         decimal.Decimal
-	SettlementDate  time.Time
-}
-
-func (s *OTCOfferService) Counter(ctx context.Context, in CounterInput) (*model.OTCOffer, error) {
-	o, err := s.offers.GetByID(in.OfferID)
-	if err != nil {
-		return nil, err
-	}
-	if o.IsTerminal() {
-		return nil, ErrOTCOfferTerminalState
-	}
-	if o.LastModifiedByPrincipalType == in.ActorSystemType && o.LastModifiedByPrincipalID == uint64(in.ActorUserID) {
-		return nil, ErrOTCCounterOwnTerms
-	}
-	if !in.Quantity.Equal(o.Quantity) {
-		// Identify the seller's owner pair from the offer to validate share
-		// availability. Seller is the initiator on sell_initiated offers,
-		// otherwise the (required) counterparty.
-		var sellerOwnerType model.OwnerType
-		var sellerOwnerID *uint64
-		if o.Direction == model.OTCDirectionSellInitiated {
-			sellerOwnerType, sellerOwnerID = o.InitiatorOwnerType, o.InitiatorOwnerID
-		} else if o.CounterpartyOwnerType != nil {
-			sellerOwnerType, sellerOwnerID = *o.CounterpartyOwnerType, o.CounterpartyOwnerID
-		} else {
-			return nil, svcerr.New(codes.Internal, "cannot determine seller for invariant check")
-		}
-		if err := s.assertSellerHasShares(sellerOwnerType, sellerOwnerID, o.StockID, in.Quantity); err != nil {
-			return nil, err
-		}
-	}
-
-	revNum, err := s.revisions.NextRevisionNumber(o.ID)
-	if err != nil {
-		return nil, err
-	}
-
-	o.Quantity = in.Quantity
-	o.StrikePrice = in.StrikePrice
-	o.Premium = in.Premium
-	o.SettlementDate = in.SettlementDate
-	o.Status = model.OTCOfferStatusCountered
-	o.LastModifiedByPrincipalType = in.ActorSystemType
-	o.LastModifiedByPrincipalID = uint64(in.ActorUserID)
-	if err := s.offers.Save(o); err != nil {
-		return nil, err
-	}
-
-	if err := s.revisions.Append(&model.OTCOfferRevision{
-		OfferID: o.ID, RevisionNumber: revNum,
-		Quantity: o.Quantity, StrikePrice: o.StrikePrice, Premium: o.Premium, SettlementDate: o.SettlementDate,
-		ModifiedByPrincipalType: in.ActorSystemType,
-		ModifiedByPrincipalID:   uint64(in.ActorUserID),
-		Action:                  model.OTCActionCounter,
-	}); err != nil {
-		return nil, err
-	}
-
-	if s.producer != nil {
-		actorOwnerType, actorOwnerID := actorToOwnerParty(in.ActorUserID, in.ActorSystemType)
-		payload := kafkamsg.OTCOfferCounteredMessage{
-			MessageID:      uuid.NewString(),
-			OccurredAt:     time.Now().UTC().Format(time.RFC3339),
-			OfferID:        o.ID,
-			RevisionNumber: revNum,
-			ModifiedBy:     kafkamsg.OTCParty{OwnerType: actorOwnerType, OwnerID: actorOwnerID},
-			OtherParty:     otcOtherParty(o, in.ActorUserID, in.ActorSystemType),
-			Quantity:       o.Quantity.String(),
-			StrikePrice:    o.StrikePrice.String(),
-			Premium:        o.Premium.String(),
-			SettlementDate: o.SettlementDate.Format("2006-01-02"),
-			UpdatedAt:      o.UpdatedAt.Format(time.RFC3339),
-		}
-		if data, err := json.Marshal(payload); err == nil {
-			s.publishViaOutboxOrDirect(ctx, kafkamsg.TopicOTCOfferCountered, data, "")
-		}
-	}
-	s.notifyOTCParty(ctx, otcOtherParty(o, in.ActorUserID, in.ActorSystemType), "OTC_OFFER_COUNTERED", "otc_offer", o.ID, map[string]string{
-		"ticker": o.Ticker, "quantity": o.Quantity.String(),
-		"strike_price": o.StrikePrice.String(), "premium": o.Premium.String(),
-	})
-	return o, nil
-}
-
-// RejectInput captures fields a reject call needs.
-type RejectInput struct {
-	OfferID         uint64
-	ActorUserID     int64
-	ActorSystemType string
-}
-
-func (s *OTCOfferService) Reject(ctx context.Context, in RejectInput) (*model.OTCOffer, error) {
-	o, err := s.offers.GetByID(in.OfferID)
-	if err != nil {
-		return nil, err
-	}
-	if o.IsTerminal() {
-		return nil, ErrOTCOfferTerminalState
-	}
-	revNum, err := s.revisions.NextRevisionNumber(o.ID)
-	if err != nil {
-		return nil, err
-	}
-	o.Status = model.OTCOfferStatusRejected
-	o.LastModifiedByPrincipalType = in.ActorSystemType
-	o.LastModifiedByPrincipalID = uint64(in.ActorUserID)
-	if err := s.offers.Save(o); err != nil {
-		return nil, err
-	}
-	_ = s.revisions.Append(&model.OTCOfferRevision{
-		OfferID: o.ID, RevisionNumber: revNum,
-		Quantity: o.Quantity, StrikePrice: o.StrikePrice, Premium: o.Premium, SettlementDate: o.SettlementDate,
-		ModifiedByPrincipalType: in.ActorSystemType,
-		ModifiedByPrincipalID:   uint64(in.ActorUserID),
-		Action:                  model.OTCActionReject,
-	})
-	if s.producer != nil {
-		actorOwnerType, actorOwnerID := actorToOwnerParty(in.ActorUserID, in.ActorSystemType)
-		payload := kafkamsg.OTCOfferRejectedMessage{
-			MessageID:  uuid.NewString(),
-			OccurredAt: time.Now().UTC().Format(time.RFC3339),
-			OfferID:    o.ID,
-			RejectedBy: kafkamsg.OTCParty{OwnerType: actorOwnerType, OwnerID: actorOwnerID},
-			OtherParty: otcOtherParty(o, in.ActorUserID, in.ActorSystemType),
-			UpdatedAt:  o.UpdatedAt.Format(time.RFC3339),
-		}
-		if data, err := json.Marshal(payload); err == nil {
-			s.publishViaOutboxOrDirect(ctx, kafkamsg.TopicOTCOfferRejected, data, "")
-		}
-	}
-	s.notifyOTCParty(ctx, otcOtherParty(o, in.ActorUserID, in.ActorSystemType), "OTC_OFFER_REJECTED", "otc_offer", o.ID, map[string]string{
-		"ticker": o.Ticker,
-	})
 	return o, nil
 }
 

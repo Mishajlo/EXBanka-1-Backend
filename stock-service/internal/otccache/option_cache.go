@@ -92,9 +92,9 @@ type AggregateActiveBidsFn func(offerIDs []uint64) (map[uint64]OfferAggregate, e
 // *repository.OTCOfferRepository satisfies it (SP-2a).
 type RemoteOfferMirror interface {
 	UpsertRemote(o *model.OTCOffer, seenAt time.Time) (uint64, error)
-	// UpsertRemoteShell is like UpsertRemote but guarantees has_preset_terms is
-	// persisted as the struct value even when it is false (zero). Use this for
-	// /public-stock shells where HasPresetTerms must be false.
+	// UpsertRemoteShell upserts a /public-stock shell remote row. Shells are
+	// termless like every other OTCOffer, so this is a named alias over
+	// UpsertRemote kept for self-documenting shell call sites.
 	UpsertRemoteShell(o *model.OTCOffer, seenAt time.Time) (uint64, error)
 	ReconcileRemoteNotSeen(peerRouting int64, seenNativeIDs []string) (int64, error)
 	ReconcileRemoteShellsNotSeen(peerRouting int64, seenNativeIDs []string) (int64, error)
@@ -451,11 +451,6 @@ func (r *OptionRefresher) buildAndMirrorRemoteStockShells(peerBankCode string, p
 				Direction:                   model.OTCDirectionSellInitiated,
 				Ticker:                      a.ticker,
 				Quantity:                    decimal.NewFromInt(a.amount),
-				StrikePrice:                 decimal.Zero,
-				Premium:                     decimal.Zero,
-				StrikeCurrency:              nil,
-				PremiumCurrency:             nil,
-				HasPresetTerms:              false,
 				Status:                      model.OTCOfferStatusOpen,
 				LastModifiedByPrincipalType: "system",
 				LastModifiedByPrincipalID:   0,

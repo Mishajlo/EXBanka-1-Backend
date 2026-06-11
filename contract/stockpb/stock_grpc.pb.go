@@ -2637,9 +2637,6 @@ const (
 	OTCOptionsService_CreateOffer_FullMethodName               = "/stock.OTCOptionsService/CreateOffer"
 	OTCOptionsService_ListMyOffers_FullMethodName              = "/stock.OTCOptionsService/ListMyOffers"
 	OTCOptionsService_GetOffer_FullMethodName                  = "/stock.OTCOptionsService/GetOffer"
-	OTCOptionsService_CounterOffer_FullMethodName              = "/stock.OTCOptionsService/CounterOffer"
-	OTCOptionsService_AcceptOffer_FullMethodName               = "/stock.OTCOptionsService/AcceptOffer"
-	OTCOptionsService_RejectOffer_FullMethodName               = "/stock.OTCOptionsService/RejectOffer"
 	OTCOptionsService_UpdateOTCOfferQuantity_FullMethodName    = "/stock.OTCOptionsService/UpdateOTCOfferQuantity"
 	OTCOptionsService_ListMyContracts_FullMethodName           = "/stock.OTCOptionsService/ListMyContracts"
 	OTCOptionsService_GetContract_FullMethodName               = "/stock.OTCOptionsService/GetContract"
@@ -2667,9 +2664,6 @@ type OTCOptionsServiceClient interface {
 	CreateOffer(ctx context.Context, in *CreateOTCOfferRequest, opts ...grpc.CallOption) (*OTCOfferResponse, error)
 	ListMyOffers(ctx context.Context, in *ListMyOTCOffersRequest, opts ...grpc.CallOption) (*ListMyOTCOffersResponse, error)
 	GetOffer(ctx context.Context, in *GetOTCOfferRequest, opts ...grpc.CallOption) (*OTCOfferDetailResponse, error)
-	CounterOffer(ctx context.Context, in *CounterOTCOfferRequest, opts ...grpc.CallOption) (*OTCOfferResponse, error)
-	AcceptOffer(ctx context.Context, in *AcceptOTCOfferRequest, opts ...grpc.CallOption) (*AcceptOfferResponse, error)
-	RejectOffer(ctx context.Context, in *RejectOTCOfferRequest, opts ...grpc.CallOption) (*OTCOfferResponse, error)
 	// Edit the TOTAL quantity of an open option offer (termless inventory).
 	// Owner-only, local + open. Sets the quantity up or down, bounded below by
 	// the shares already committed to formed/forming contracts on the offer and
@@ -2737,36 +2731,6 @@ func (c *oTCOptionsServiceClient) GetOffer(ctx context.Context, in *GetOTCOfferR
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(OTCOfferDetailResponse)
 	err := c.cc.Invoke(ctx, OTCOptionsService_GetOffer_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *oTCOptionsServiceClient) CounterOffer(ctx context.Context, in *CounterOTCOfferRequest, opts ...grpc.CallOption) (*OTCOfferResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(OTCOfferResponse)
-	err := c.cc.Invoke(ctx, OTCOptionsService_CounterOffer_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *oTCOptionsServiceClient) AcceptOffer(ctx context.Context, in *AcceptOTCOfferRequest, opts ...grpc.CallOption) (*AcceptOfferResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AcceptOfferResponse)
-	err := c.cc.Invoke(ctx, OTCOptionsService_AcceptOffer_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *oTCOptionsServiceClient) RejectOffer(ctx context.Context, in *RejectOTCOfferRequest, opts ...grpc.CallOption) (*OTCOfferResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(OTCOfferResponse)
-	err := c.cc.Invoke(ctx, OTCOptionsService_RejectOffer_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -2960,9 +2924,6 @@ type OTCOptionsServiceServer interface {
 	CreateOffer(context.Context, *CreateOTCOfferRequest) (*OTCOfferResponse, error)
 	ListMyOffers(context.Context, *ListMyOTCOffersRequest) (*ListMyOTCOffersResponse, error)
 	GetOffer(context.Context, *GetOTCOfferRequest) (*OTCOfferDetailResponse, error)
-	CounterOffer(context.Context, *CounterOTCOfferRequest) (*OTCOfferResponse, error)
-	AcceptOffer(context.Context, *AcceptOTCOfferRequest) (*AcceptOfferResponse, error)
-	RejectOffer(context.Context, *RejectOTCOfferRequest) (*OTCOfferResponse, error)
 	// Edit the TOTAL quantity of an open option offer (termless inventory).
 	// Owner-only, local + open. Sets the quantity up or down, bounded below by
 	// the shares already committed to formed/forming contracts on the offer and
@@ -3014,15 +2975,6 @@ func (UnimplementedOTCOptionsServiceServer) ListMyOffers(context.Context, *ListM
 }
 func (UnimplementedOTCOptionsServiceServer) GetOffer(context.Context, *GetOTCOfferRequest) (*OTCOfferDetailResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetOffer not implemented")
-}
-func (UnimplementedOTCOptionsServiceServer) CounterOffer(context.Context, *CounterOTCOfferRequest) (*OTCOfferResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CounterOffer not implemented")
-}
-func (UnimplementedOTCOptionsServiceServer) AcceptOffer(context.Context, *AcceptOTCOfferRequest) (*AcceptOfferResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method AcceptOffer not implemented")
-}
-func (UnimplementedOTCOptionsServiceServer) RejectOffer(context.Context, *RejectOTCOfferRequest) (*OTCOfferResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RejectOffer not implemented")
 }
 func (UnimplementedOTCOptionsServiceServer) UpdateOTCOfferQuantity(context.Context, *UpdateOTCOfferQuantityRequest) (*OTCOfferResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateOTCOfferQuantity not implemented")
@@ -3149,60 +3101,6 @@ func _OTCOptionsService_GetOffer_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(OTCOptionsServiceServer).GetOffer(ctx, req.(*GetOTCOfferRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _OTCOptionsService_CounterOffer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CounterOTCOfferRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(OTCOptionsServiceServer).CounterOffer(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: OTCOptionsService_CounterOffer_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(OTCOptionsServiceServer).CounterOffer(ctx, req.(*CounterOTCOfferRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _OTCOptionsService_AcceptOffer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AcceptOTCOfferRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(OTCOptionsServiceServer).AcceptOffer(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: OTCOptionsService_AcceptOffer_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(OTCOptionsServiceServer).AcceptOffer(ctx, req.(*AcceptOTCOfferRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _OTCOptionsService_RejectOffer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RejectOTCOfferRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(OTCOptionsServiceServer).RejectOffer(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: OTCOptionsService_RejectOffer_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(OTCOptionsServiceServer).RejectOffer(ctx, req.(*RejectOTCOfferRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3549,18 +3447,6 @@ var OTCOptionsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetOffer",
 			Handler:    _OTCOptionsService_GetOffer_Handler,
-		},
-		{
-			MethodName: "CounterOffer",
-			Handler:    _OTCOptionsService_CounterOffer_Handler,
-		},
-		{
-			MethodName: "AcceptOffer",
-			Handler:    _OTCOptionsService_AcceptOffer_Handler,
-		},
-		{
-			MethodName: "RejectOffer",
-			Handler:    _OTCOptionsService_RejectOffer_Handler,
 		},
 		{
 			MethodName: "UpdateOTCOfferQuantity",

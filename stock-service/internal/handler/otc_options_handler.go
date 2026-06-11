@@ -679,21 +679,19 @@ func remoteOfferToProto(m *model.OTCOffer) *stockpb.OTCOfferResponse {
 	if m.RemoteSellerID != nil {
 		sellerID = *m.RemoteSellerID
 	}
-	settlement := ""
-	if !m.SettlementDate.IsZero() {
-		settlement = m.SettlementDate.UTC().Format(time.RFC3339)
-	}
 	return &stockpb.OTCOfferResponse{
-		Id:             m.ID,
-		Kind:           "remote",
-		RoutingNumber:  m.RoutingNumber,
-		BankCode:       bankCode,
-		Direction:      m.Direction,
-		StockTicker:    m.Ticker,
-		Quantity:       strconv.FormatInt(m.Quantity.IntPart(), 10),
-		StrikePrice:    m.StrikePrice.String(),
-		Premium:        m.Premium.String(),
-		SettlementDate: settlement,
+		Id:            m.ID,
+		Kind:          "remote",
+		RoutingNumber: m.RoutingNumber,
+		BankCode:      bankCode,
+		Direction:     m.Direction,
+		StockTicker:   m.Ticker,
+		Quantity:      strconv.FormatInt(m.Quantity.IntPart(), 10),
+		// Remote listings are termless inventory; strike/premium/settlement are
+		// re-sourced per viewer by resolveRemoteOffer's D2 projection.
+		StrikePrice:    "",
+		Premium:        "",
+		SettlementDate: "",
 		Status:         m.Status,
 		CreatedAt:      m.CreatedAt.UTC().Format(time.RFC3339),
 		MeOwner:        false,
@@ -741,60 +739,6 @@ func (h *OTCOptionsHandler) resolveRemoteOffer(id uint64, myNegIdx myNegotiation
 		Offer:     offer,
 		Revisions: nil,
 	}, nil
-}
-
-func (h *OTCOptionsHandler) CounterOffer(ctx context.Context, in *stockpb.CounterOTCOfferRequest) (*stockpb.OTCOfferResponse, error) {
-	qty, err := decimal.NewFromString(in.Quantity)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "quantity is not a valid decimal")
-	}
-	strike, err := decimal.NewFromString(in.StrikePrice)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "strike_price is not a valid decimal")
-	}
-	prem, err := decimal.NewFromString(in.Premium)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "premium is not a valid decimal")
-	}
-	settle, err := time.Parse("2006-01-02", in.SettlementDate)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "settlement_date must be YYYY-MM-DD")
-	}
-	o, err := h.svc.Counter(ctx, service.CounterInput{
-		OfferID: in.OfferId, ActorUserID: in.ActorUserId, ActorSystemType: in.ActorSystemType,
-		Quantity: qty, StrikePrice: strike, Premium: prem, SettlementDate: settle,
-	})
-	if err != nil {
-		return nil, mapOTCErr(err)
-	}
-	return h.withOfferMarketRef(o, toOTCOfferProto(o, false)), nil
-}
-
-func (h *OTCOptionsHandler) AcceptOffer(ctx context.Context, in *stockpb.AcceptOTCOfferRequest) (*stockpb.AcceptOfferResponse, error) {
-	if in.AccountId == 0 {
-		return nil, status.Error(codes.InvalidArgument, "account_id is required")
-	}
-	c, err := h.svc.Accept(ctx, service.AcceptInput{
-		OfferID: in.OfferId, ActorUserID: in.ActorUserId, ActorSystemType: in.ActorSystemType,
-		AcceptorAccountID: in.AccountId,
-	})
-	if err != nil {
-		return nil, mapOTCErr(err)
-	}
-	return &stockpb.AcceptOfferResponse{
-		OfferId: derefU64(c.OfferID), ContractId: c.ID, Status: c.Status,
-		SagaId: c.SagaID, Contract: h.withMarketRef(c, toContractProto(c)),
-	}, nil
-}
-
-func (h *OTCOptionsHandler) RejectOffer(ctx context.Context, in *stockpb.RejectOTCOfferRequest) (*stockpb.OTCOfferResponse, error) {
-	o, err := h.svc.Reject(ctx, service.RejectInput{
-		OfferID: in.OfferId, ActorUserID: in.ActorUserId, ActorSystemType: in.ActorSystemType,
-	})
-	if err != nil {
-		return nil, mapOTCErr(err)
-	}
-	return h.withOfferMarketRef(o, toOTCOfferProto(o, false)), nil
 }
 
 // UpdateOTCOfferQuantity sets the TOTAL quantity of an open option offer the
@@ -1305,13 +1249,18 @@ func (h *OTCOptionsHandler) withOfferMarketRef(o *model.OTCOffer, resp *stockpb.
 
 func toOTCOfferProto(o *model.OTCOffer, unread bool) *stockpb.OTCOfferResponse {
 	resp := &stockpb.OTCOfferResponse{
-		Id:             o.ID,
-		Direction:      o.Direction,
-		StockId:        o.StockID,
-		Quantity:       o.Quantity.String(),
-		StrikePrice:    o.StrikePrice.String(),
-		Premium:        o.Premium.String(),
-		SettlementDate: o.SettlementDate.Format("2006-01-02"),
+		Id:        o.ID,
+		Direction: o.Direction,
+		StockId:   o.StockID,
+		Quantity:  o.Quantity.String(),
+		// Option offers are termless inventory: strike/premium/settlement live
+		// on the negotiation chain, not the listing. Emit empty term fields here;
+		// the per-viewer terms are projected separately (otc_handler.go / the
+		// viewer-projection path), mirroring the otccache.OptionOffer DTO which
+		// also leaves these blank for the listing.
+		StrikePrice:    "",
+		Premium:        "",
+		SettlementDate: "",
 		Status:         o.Status,
 		Initiator: &stockpb.PartyRef{
 			UserId: int64(model.OwnerIDOrZero(o.InitiatorOwnerID)), SystemType: string(o.InitiatorOwnerType),

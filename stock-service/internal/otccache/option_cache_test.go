@@ -86,17 +86,8 @@ func TestBuildAndMirrorRemoteStockShells(t *testing.T) {
 	if got.NativeID == nil || *got.NativeID != "ps:222:client-5:AAPL" {
 		t.Fatalf("native_id = %v", got.NativeID)
 	}
-	if got.HasPresetTerms {
-		t.Fatalf("shell HasPresetTerms = true, want false")
-	}
 	if got.Direction != model.OTCDirectionSellInitiated {
 		t.Fatalf("direction = %s", got.Direction)
-	}
-	if !got.StrikePrice.IsZero() || !got.Premium.IsZero() {
-		t.Fatalf("shell must have zero terms")
-	}
-	if got.StrikeCurrency != nil || got.PremiumCurrency != nil {
-		t.Fatalf("shell currencies must be nil")
 	}
 	if fake.shellReconcilePeer != 222 || len(fake.shellReconcileSeen) != 1 {
 		t.Fatalf("shell reconcile scope wrong")
