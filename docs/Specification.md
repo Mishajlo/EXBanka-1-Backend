@@ -2142,6 +2142,8 @@ CreatedAt, UpdatedAt, Version(int64)
 ```
 Placement saga steps: `validate_listing` → ... → `reserve_funds` → `persist_order`. Fill saga steps: `record_transaction` → `convert_amount` → `settle_reservation` → `update_holding` → `credit_commission` → `publish_kafka`. Compensating rows set `IsCompensation=true` and `CompensationOf` pointing at the forward step.
 
+**Stuck-compensation escalation (recovery correctness):** when a step's `Backward` cannot complete (e.g. a seller-debit compensation fails because the seller already spent a credited amount), `saga.Compensate` now returns `saga.ErrCompensationStuck` (previously it returned `nil`, so the recovery reconciler force-marked the row `compensated` and permanently hid money in limbo). The recovery recoverers propagate it, so the stuck row keeps failing, its `retry_count` climbs, and it is eventually dead-lettered (`stock.saga-dead-letter`) for human review. To keep that escalation bounded, `Recorder.RecordCompensation` is **idempotent across recovery ticks** — it reuses the existing compensation row for a `(saga_id, step_name)` (via `SagaLogRepository.FindLatestCompensationRow`) instead of inserting a new one each time the loop re-drives the rollback, so a persistently-stuck compensation stays on ONE row rather than spawning unbounded `saga_logs` rows. Safe because every `Backward` in stock-service is idempotent.
+
 **SystemSetting** — Global key-value configuration (key = primary key)
 ```
 Key(string, PK, size:64), Value(string)
