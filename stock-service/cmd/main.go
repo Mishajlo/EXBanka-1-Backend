@@ -846,6 +846,23 @@ func main() {
 	// --- Intra-bank OTC Options (Spec 2 / Celina 4) ---
 	otcOfferRepo := repository.NewOTCOfferRepository(db)
 
+	// Option offers became termless "optionable inventory": the preset-term
+	// columns were removed from the model. GORM AutoMigrate ADDS/MODIFIES columns
+	// but NEVER drops them, so a previously-deployed otc_offers table keeps these
+	// columns — and strike_price/premium/settlement_date carry a NOT NULL
+	// constraint, which makes every new (termless) insert fail with
+	// "null value in column ... violates not-null constraint". Drop them
+	// explicitly. Idempotent (IF EXISTS); a no-op on a fresh DB created from the
+	// new model. Terms now live only on the negotiation chain.
+	for _, col := range []string{
+		"strike_price", "premium", "settlement_date",
+		"strike_currency", "premium_currency", "has_preset_terms",
+	} {
+		if err := db.Exec("ALTER TABLE otc_offers DROP COLUMN IF EXISTS " + col).Error; err != nil {
+			log.Printf("WARN: drop otc_offers.%s failed: %v", col, err)
+		}
+	}
+
 	// One-open-offer-per-(owner, ticker, direction): collapse any pre-existing
 	// duplicate OPEN local offers BEFORE creating the partial unique index, else
 	// the index creation would fail on legacy duplicates. Migration first, index
