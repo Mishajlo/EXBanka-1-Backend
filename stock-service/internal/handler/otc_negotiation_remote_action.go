@@ -335,6 +335,26 @@ func (h *OTCOptionsHandler) acceptRemoteNegotiation(
 		}
 	}
 
+	// Termless-model orphan-accept guard: the /public-stock wire carries no offer
+	// id, so a cross-bank bid has no RemoteParentNativeID for the linked-parent
+	// guard above. When the seller side is LOCAL (Direction 2) resolve the listing
+	// by its (owner, ticker, sell_initiated) unique key and reject an accept once
+	// the listing is no longer open — the seller already CONSUMED it (a prior
+	// accept) or CANCELLED it. This keeps one listing backing exactly one accepted
+	// contract: without it every still-"ongoing" sibling bid could be accepted and
+	// over-commit the seller's shares. Skipped when the offer ticker is unknown
+	// (malformed mirror) so a decode failure never blocks a legitimate accept.
+	if h.negotiations != nil && rc.offer.Ticker != "" {
+		if sellerRouting, sellerID := remoteSeller(rc.row); sellerRouting == h.ownRouting {
+			if ot, oid, perr := parseSellerOwner(sellerID); perr == nil {
+				if !h.negotiations.LocalSellOfferOpenForSeller(ot, oid, rc.offer.Ticker) {
+					return nil, status.Error(codes.FailedPrecondition,
+						"listing is no longer open (cancelled or already consumed)")
+				}
+			}
+		}
+	}
+
 	resp, code, err := h.peerDispatch.Proxy(ctx, rc.counterpartyCode, rc.rid, rc.foreignID, "GET", "/accept", nil)
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "cross-bank accept dispatch failed: %v", err)

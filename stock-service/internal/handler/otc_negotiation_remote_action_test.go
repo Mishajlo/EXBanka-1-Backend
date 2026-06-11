@@ -386,6 +386,67 @@ func TestAcceptNegotiation_RemoteChain_LocalSeller_ConsumesLocalListing(t *testi
 	}
 }
 
+// TestAcceptNegotiation_RemoteChain_LocalSeller_RejectsSecondAcceptAfterConsume
+// proves the termless orphan-accept guard: once the first Direction-2 accept
+// consumes the local listing, a second still-"ongoing" peer bid on the SAME
+// listing must be rejected (FailedPrecondition) rather than forming another
+// contract that over-commits the seller's shares.
+func TestAcceptNegotiation_RemoteChain_LocalSeller_RejectsSecondAcceptAfterConsume(t *testing.T) {
+	dispatcher := &fakePeerDispatcher{
+		proxyByKey: map[string]proxyResult{
+			"GET /accept": {resp: []byte(`{"transactionId":"tx-d2","status":"accepted"}`), status: 200},
+		},
+	}
+	accounts := &fakeOTCAccountClient{acct: usdAccount(1)}
+	h, db := newRemoteBidFixture(t, dispatcher, accounts)
+
+	offerRepo := repository.NewOTCOfferRepository(db)
+	sellerID := uint64(1)
+	listing := &model.OTCOffer{
+		InitiatorOwnerType:          model.OwnerClient,
+		InitiatorOwnerID:            &sellerID,
+		Direction:                   model.OTCDirectionSellInitiated,
+		StockID:                     1,
+		Ticker:                      "AAPL",
+		Quantity:                    decimal.NewFromInt(8),
+		Status:                      model.OTCOfferStatusOpen,
+		LastModifiedByPrincipalType: "client",
+		LastModifiedByPrincipalID:   sellerID,
+		InitiatorAccountID:          17,
+		Public:                      true,
+		Local:                       true,
+	}
+	if err := offerRepo.Create(listing); err != nil {
+		t.Fatalf("seed local listing: %v", err)
+	}
+
+	// Two distinct peer bids (buyers "2" and "3") on the same local listing.
+	nid1 := seedRemoteNegSellerLocal(t, db, "neg-d2a", "2", "client-1")
+	nid2 := seedRemoteNegSellerLocal(t, db, "neg-d2b", "3", "client-1")
+
+	accept := func(nid uint64) error {
+		_, err := h.AcceptNegotiationChain(context.Background(), &stockpb.OTCAcceptNegotiationRequest{
+			NegotiationId:       nid,
+			CallerOwnerType:     "client",
+			CallerOwnerId:       1,
+			ActingPrincipalType: "client",
+			ActingPrincipalId:   1,
+			AcceptorAccountId:   17,
+		})
+		return err
+	}
+
+	// First accept consumes the listing.
+	if err := accept(nid1); err != nil {
+		t.Fatalf("first accept: %v", err)
+	}
+	// Second accept on the now-consumed listing must be rejected.
+	err := accept(nid2)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("second accept on consumed listing: got code %v, want FailedPrecondition", status.Code(err))
+	}
+}
+
 // TestAcceptNegotiation_RemoteChain_CrossBankTxId asserts the peer's
 // transactionId is parsed out of the /accept body and surfaced on the response
 // (review fix #1). Uses a distinct id from the cascade test to keep them
