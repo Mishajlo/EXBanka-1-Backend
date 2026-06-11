@@ -386,6 +386,26 @@ func (h *OTCOptionsHandler) acceptRemoteNegotiation(
 	// reverse the accept (the contract already formed on the peer).
 	cancelled := h.cascadeCancelRemoteSiblings(ctx, rc)
 
+	// Consume the LOCAL listing the contract was written against (Direction 2:
+	// we host the seller). The termless /public-stock model carries no offer id
+	// on the wire, so the listing is resolved by the seller's (owner, ticker,
+	// sell_initiated) unique key — at most one open row. Without this the listing
+	// keeps advertising inventory already under contract. Best-effort: a consume
+	// failure must NOT reverse the accept (the contract already formed on the
+	// peer); log and continue. No-op when the seller is on a peer bank
+	// (Direction 1: that bank's local accept path consumes its own listing).
+	if h.negotiations != nil {
+		if sellerRouting, sellerID := remoteSeller(rc.row); sellerRouting == h.ownRouting {
+			if ot, oid, perr := parseSellerOwner(sellerID); perr == nil {
+				if cerr := h.negotiations.ConsumeLocalSellOfferForSeller(ot, oid, rc.offer.Ticker); cerr != nil {
+					log.Printf("WARN acceptRemoteNegotiation: row %d consume local listing failed: %v", rc.row.ID, cerr)
+				}
+			} else {
+				log.Printf("WARN acceptRemoteNegotiation: row %d local seller id %q unparseable: %v", rc.row.ID, sellerID, perr)
+			}
+		}
+	}
+
 	// Re-read the accepted row for the winning projection.
 	winningRow, gerr := h.remoteNegOps.GetRemoteNegByID(rc.row.ID)
 	if gerr != nil {

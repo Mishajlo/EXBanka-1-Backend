@@ -903,6 +903,18 @@ func (s *OTCNegotiationService) LocalParentIsOpen(offerID uint64) bool {
 	return parent.IsOpenListing()
 }
 
+// ConsumeLocalSellOfferForSeller marks this bank's open LOCAL option listing for
+// (ownerType, ownerID, ticker, sell_initiated) as consumed. The cross-bank
+// accept path (Direction 2: we host the seller) calls this once an option
+// contract forms against the listing so it stops advertising inventory already
+// under contract. Because the termless /public-stock model carries no offer id
+// on the wire, the listing is resolved by its (owner, ticker, direction) unique
+// key — the partial unique index guarantees at most one open row. Idempotent: a
+// missing/already-consumed listing is a no-op (no error).
+func (s *OTCNegotiationService) ConsumeLocalSellOfferForSeller(ownerType model.OwnerType, ownerID *uint64, ticker string) error {
+	return s.offerRepo.ConsumeOpenByOwnerTickerDirection(ownerType, ownerID, ticker, model.OTCDirectionSellInitiated)
+}
+
 // ListMyNegotiations returns negotiation chains where the caller is the
 // bidder. The listing-poster sees their chains via a different code path
 // (list all chains on offers they posted), surfaced from the handler.
