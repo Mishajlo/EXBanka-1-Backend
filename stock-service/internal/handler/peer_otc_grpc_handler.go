@@ -1510,8 +1510,32 @@ func (h *PeerOTCGRPCHandler) RecordOptionContract(ctx context.Context, req *stoc
 	// first active <currency> account. Best-effort: an unresolved nomination leaves
 	// it NULL → the executor falls back to participant resolution. Buyer-side
 	// (CREDIT) rows never carry the seller's nomination.
-	if req.GetDirection() == contractsitx.DirectionDebit && h.sellerAccountResolver != nil {
-		if neg, nerr := h.negRepo.GetRemoteNegByNative(opt.NegotiationID.ID); nerr == nil && neg != nil {
+	// Resolve the originating negotiation once: it carries (a) the agreed premium
+	// + premium currency, and (b) on a seller-side (DEBIT) row the seller's
+	// nominated account. The SI-TX OptionDescription carries ONLY the strike (the
+	// premium is a separate MONAS posting), so without this the cross-bank contract
+	// mirror persists PremiumPaid=0 and the FE shows no premium on a cross-bank
+	// contract. The neg's RemoteOfferJSON is the serialised OtcOffer with the agreed
+	// Premium/PremiumCurrency. The neg is resolvable by opt.NegotiationID.ID on BOTH
+	// banks (the buyer-bank mirror's native_id == the seller-bank foreign id == the
+	// OptionDescription's neg id). Best-effort throughout: an unresolved neg /
+	// unparseable snapshot leaves the remote defaults and never fails the record.
+	if neg, nerr := h.negRepo.GetRemoteNegByNative(opt.NegotiationID.ID); nerr == nil && neg != nil {
+		if neg.RemoteOfferJSON != nil && *neg.RemoteOfferJSON != "" {
+			var snap contractsitx.OtcOffer
+			if jerr := json.Unmarshal([]byte(*neg.RemoteOfferJSON), &snap); jerr == nil {
+				if !snap.Premium.IsZero() {
+					row.PremiumPaid = snap.Premium
+				}
+				if snap.PremiumCurrency != "" {
+					row.PremiumCurrency = snap.PremiumCurrency
+				}
+			}
+		}
+		if row.PremiumPaid.IsZero() && !neg.Premium.IsZero() {
+			row.PremiumPaid = neg.Premium
+		}
+		if req.GetDirection() == contractsitx.DirectionDebit && h.sellerAccountResolver != nil {
 			if num := h.sellerAccountResolver.ResolveSellerAccountNumber(ctx, neg, opt.PricePerUnit.Currency); num != "" {
 				row.RemoteSellerAccountNumber = &num
 			}

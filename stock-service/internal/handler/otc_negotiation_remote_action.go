@@ -372,11 +372,27 @@ func (h *OTCOptionsHandler) acceptRemoteNegotiation(
 	if len(resp) > 0 {
 		var peerBody struct {
 			TransactionID string `json:"transactionId"`
+			Status        string `json:"status"`
 		}
 		if jerr := json.Unmarshal(resp, &peerBody); jerr != nil {
 			log.Printf("WARN acceptRemoteNegotiation: row %d peer /accept body decode failed: %v", rc.row.ID, jerr)
 		} else {
 			crossBankTxID = peerBody.TransactionID
+			// Settlement-status safety gate (mirror of the inbound AcceptNegotiation
+			// guard). Some peer implementations return HTTP 200 on /accept even when
+			// their settlement ABORTED (rolled_back/failed). Proceeding here would
+			// flip our mirror to accepted, cascade-cancel sibling bids, and CONSUME
+			// the local listing for a contract that never formed — silently losing
+			// the seller's inventory (the "accepted but contract not formed; listing
+			// consumed" symptom). On an explicit terminal failure we abort BEFORE
+			// mutating any local state, so the listing stays open and the seller can
+			// re-bid. Non-terminal statuses (committed/committing/prepared/pending or
+			// an absent status) proceed as before — forward-recovery settles those.
+			switch strings.ToLower(strings.TrimSpace(peerBody.Status)) {
+			case "rolled_back", "rolledback", "rolled-back", "failed", "aborted":
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"peer settlement %s: contract was not formed; listing preserved", peerBody.Status)
+			}
 		}
 	}
 
