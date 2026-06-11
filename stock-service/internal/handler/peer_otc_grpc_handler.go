@@ -1021,21 +1021,23 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 		}
 	}
 
-	// Seller-side notification: this bank is the SELLER's bank (the
-	// inbound /accept lands here because the buyer's bank POSTed). The
-	// local user is the seller. The buyer's bank emits its own
-	// OTC_CONTRACT_CREATED notification independently when it processes
-	// the SI-TX postings on its side.
+	// Notify the LOCAL counterparty that a contract formed. The inbound /accept
+	// lands on the bank of the side that LAST PROPOSED (guarded above) — which may
+	// be the BUYER or the SELLER, so notify whichever is local (cross-bank: at most
+	// one side is on this bank). The accepting party is notified separately by
+	// their own bank's OUTBOUND acceptRemoteNegotiation. Previously only the seller
+	// was notified, so a local BIDDER whose counter was accepted got nothing.
+	ccData := map[string]string{
+		"ticker":       offer.Ticker,
+		"quantity":     strconv.FormatInt(offer.Amount, 10),
+		"strike_price": offer.PricePerStock.String(),
+		"premium_paid": offer.Premium.String(),
+	}
 	if uid, ok := h.localClientUserID(sellerRouting, sellerID); ok {
-		h.publishPeerNotif(ctx, uid, "OTC_CONTRACT_CREATED",
-			map[string]string{
-				"ticker":       offer.Ticker,
-				"quantity":     strconv.FormatInt(offer.Amount, 10),
-				"strike_price": offer.PricePerStock.String(),
-				"premium_paid": offer.Premium.String(),
-			},
-			"otc_negotiation", row.ID,
-		)
+		h.publishPeerNotif(ctx, uid, "OTC_CONTRACT_CREATED", ccData, "otc_negotiation", row.ID)
+	}
+	if uid, ok := h.localClientUserID(buyerRouting, buyerID); ok {
+		h.publishPeerNotif(ctx, uid, "OTC_CONTRACT_CREATED", ccData, "otc_negotiation", row.ID)
 	}
 
 	return &stockpb.AcceptNegotiationResponse{
