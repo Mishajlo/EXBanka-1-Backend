@@ -316,6 +316,17 @@ func (h *OTCOptionsHandler) acceptRemoteNegotiation(
 			"cannot accept the terms you last proposed — the counterparty must accept")
 	}
 
+	// Chain-status guard: only an ONGOING chain may be accepted. Once a chain is
+	// terminal — already accepted, cascade-cancelled by a sibling's accept,
+	// rejected, or expired — a second accept must fail. This is the authoritative
+	// double-accept defence now that a partial accept RE-LISTS the unsold remainder
+	// (the (owner,ticker) listing stays open, so the orphan-accept guards below no
+	// longer reject a second accept on a consumed lot). FailedPrecondition → 409.
+	if rc.row.Status != "ongoing" {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"negotiation is closed (status %q): cannot accept", rc.row.Status)
+	}
+
 	// Orphan-accept guard: when the parent listing is LOCAL to this bank
 	// (remote_parent_routing == ownRouting), the listing's native id is our local
 	// offer id. The accept happens on the seller's bank (the listing's host), so
@@ -433,7 +444,7 @@ func (h *OTCOptionsHandler) acceptRemoteNegotiation(
 	if h.negotiations != nil {
 		if sellerRouting, sellerID := remoteSeller(rc.row); sellerRouting == h.ownRouting {
 			if ot, oid, perr := parseSellerOwner(sellerID); perr == nil {
-				if cerr := h.negotiations.ConsumeLocalSellOfferForSeller(ot, oid, rc.offer.Ticker); cerr != nil {
+				if cerr := h.negotiations.ConsumeLocalSellOfferForSeller(ot, oid, rc.offer.Ticker, rc.offer.Amount); cerr != nil {
 					log.Printf("WARN acceptRemoteNegotiation: row %d consume local listing failed: %v", rc.row.ID, cerr)
 				}
 			} else {

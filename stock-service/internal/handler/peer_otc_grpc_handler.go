@@ -80,7 +80,7 @@ type LocalParentChecker interface {
 	// ConsumeLocalSellOfferForSeller flips that listing to consumed once an inbound
 	// accept forms a contract against it — one listing backs exactly one accepted
 	// contract (symmetric with the outbound acceptRemoteNegotiation consume).
-	ConsumeLocalSellOfferForSeller(ownerType model.OwnerType, ownerID *uint64, ticker string) error
+	ConsumeLocalSellOfferForSeller(ownerType model.OwnerType, ownerID *uint64, ticker string, acceptedQty int64) error
 }
 
 // SellerAccountResolver returns the seller's NOMINATED account NUMBER for a
@@ -1027,7 +1027,7 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 	// listing). Symmetric with the OUTBOUND acceptRemoteNegotiation consume.
 	if h.parentChecker != nil && sellerRouting == h.ownRouting && offer.Ticker != "" {
 		if ot, oid, perr := parseSellerOwner(sellerID); perr == nil {
-			if cerr := h.parentChecker.ConsumeLocalSellOfferForSeller(ot, oid, offer.Ticker); cerr != nil {
+			if cerr := h.parentChecker.ConsumeLocalSellOfferForSeller(ot, oid, offer.Ticker, offer.Amount); cerr != nil {
 				log.Printf("WARN: peer-otc accept: consume local listing failed for %s/%s: %v",
 					req.GetPeerBankCode(), req.GetNegotiationId().GetId(), cerr)
 			}

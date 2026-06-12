@@ -85,3 +85,48 @@ func TestRelistAcceptRemainder_FullTake_NoRelist(t *testing.T) {
 		t.Fatalf("full take must not re-list; got %d open offers", len(open))
 	}
 }
+
+// TestConsumeLocalSellOfferForSeller_PartialReList covers the CROSS-BANK accept
+// path's consume+re-list: accepting 30 of a 50-unit listing consumes the original
+// and re-lists the unsold 20 as a fresh open offer (new id) — the seller's
+// remainder keeps trading. A full take re-lists nothing.
+func TestConsumeLocalSellOfferForSeller_PartialReList(t *testing.T) {
+	env := newNegTestEnv(t)
+	owner := uint64(1)
+	listing := seedListing(t, env, owner, model.OTCDirectionSellInitiated, model.OTCOfferStatusOpen)
+	listing.Quantity = decimal.NewFromInt(50)
+	if err := env.offerRepo.Save(listing); err != nil {
+		t.Fatalf("set qty: %v", err)
+	}
+
+	if err := env.svc.ConsumeLocalSellOfferForSeller(model.OwnerClient, &owner, "AAPL", 30); err != nil {
+		t.Fatalf("consume+relist: %v", err)
+	}
+
+	orig, _ := env.offerRepo.GetByID(listing.ID)
+	if orig.Status != model.OTCOfferStatusConsumed {
+		t.Errorf("original listing status = %q, want consumed", orig.Status)
+	}
+	open, err := env.offerRepo.ListOpenForCache(100)
+	if err != nil {
+		t.Fatalf("list open: %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("want 1 fresh remainder listing, got %d", len(open))
+	}
+	if open[0].ID == listing.ID {
+		t.Errorf("remainder must be a NEW listing, not the consumed original (id %d)", listing.ID)
+	}
+	if !open[0].Quantity.Equal(decimal.NewFromInt(20)) {
+		t.Errorf("remainder quantity = %s, want 20", open[0].Quantity)
+	}
+
+	// A subsequent FULL take of the remainder re-lists nothing.
+	if err := env.svc.ConsumeLocalSellOfferForSeller(model.OwnerClient, &owner, "AAPL", 20); err != nil {
+		t.Fatalf("consume full: %v", err)
+	}
+	open2, _ := env.offerRepo.ListOpenForCache(100)
+	if len(open2) != 0 {
+		t.Fatalf("full take must re-list nothing, got %d", len(open2))
+	}
+}
