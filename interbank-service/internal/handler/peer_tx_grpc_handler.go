@@ -323,6 +323,14 @@ func (h *PeerTxGRPCHandler) HandleCommitTx(ctx context.Context, req *transaction
 	if rec.CommittedAt != nil {
 		return &transactionpb.SiTxAckResponse{}, nil
 	}
+	// COMMIT-after-ROLLBACK guard (symmetric with HandleRollbackTx's CommittedAt
+	// check): once this NEW_TX has been ROLLED BACK (our reservations released) a
+	// late/duplicate COMMIT must NOT re-run settlement. The settle calls below are
+	// NotFound-idempotent so money is safe either way, but committing a rolled-back
+	// tx is a protocol violation; treat it as an idempotent no-op.
+	if rec.RolledBackAt != nil {
+		return &transactionpb.SiTxAckResponse{}, nil
+	}
 	// All reservation keys are derived from the ORIGINAL NEW_TX key (L), which
 	// is rec.LocallyGeneratedKey — never from the COMMIT message's own key.
 	key := peerCode + ":" + rec.LocallyGeneratedKey

@@ -412,6 +412,17 @@ func (e *PostingExecutor) reserveIncomingCredit(ctx context.Context, accountID, 
 	return key, "", true
 }
 
+// isPositiveAmount reports whether s parses to a strictly-positive decimal. Used
+// to reject a missing / zero / negative / malformed FX conversion result before
+// it reserves a garbage amount and silently under-/over-settles a leg.
+func isPositiveAmount(s string) bool {
+	if s == "" {
+		return false
+	}
+	d, err := decimal.NewFromString(s)
+	return err == nil && d.IsPositive()
+}
+
 // fxReserveCredit reserves `amount legCurrency` into target, converting via
 // exchange-service when target's currency differs (so a cross-currency premium
 // /strike lands in the recipient's own account). The reservation key carries the
@@ -427,7 +438,10 @@ func (e *PostingExecutor) fxReserveCredit(ctx context.Context, target *accountpb
 		conv, cerr := e.exchange.Convert(ctx, &exchangepb.ConvertRequest{
 			FromCurrency: legCurrency, ToCurrency: reserveCurrency, Amount: amount,
 		})
-		if cerr != nil || conv == nil || conv.GetConvertedAmount() == "" {
+		if cerr != nil || conv == nil || !isPositiveAmount(conv.GetConvertedAmount()) {
+			// Reject a missing / non-positive / malformed conversion: a buggy or
+			// hostile exchange returning "", "0", or a negative would otherwise
+			// reserve a garbage amount and silently under-credit the recipient.
 			return "", contractsitx.NoVoteReasonNoSuchAsset, false
 		}
 		reserveAmount = conv.GetConvertedAmount()
@@ -512,7 +526,10 @@ func (e *PostingExecutor) fxReserveDebit(ctx context.Context, target *accountpb.
 		conv, cerr := e.exchange.Convert(ctx, &exchangepb.ConvertRequest{
 			FromCurrency: legCurrency, ToCurrency: debitCurrency, Amount: amount,
 		})
-		if cerr != nil || conv == nil || conv.GetConvertedAmount() == "" {
+		if cerr != nil || conv == nil || !isPositiveAmount(conv.GetConvertedAmount()) {
+			// Reject a missing / non-positive / malformed conversion (symmetric with
+			// the credit side): otherwise a "0"/garbage rate would under-charge the
+			// payer for the premium/strike.
 			return DebitedItem{}, contractsitx.NoVoteReasonNoSuchAsset, false
 		}
 		debitAmount = conv.GetConvertedAmount()

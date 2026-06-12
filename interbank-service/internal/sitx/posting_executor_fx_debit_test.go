@@ -57,3 +57,28 @@ func TestReserveOutgoingDebit_NoConverter_FailsClosed(t *testing.T) {
 		t.Fatalf("expected NO_SUCH_ACCOUNT, got %+v", res.Vote.NoVotes)
 	}
 }
+
+// TestFXReserve_RejectsNonPositiveConversion: a buggy/hostile exchange returning
+// a non-positive converted amount ("0") must vote NO rather than reserve a
+// garbage amount and silently under-settle the leg — both credit and debit sides.
+func TestFXReserve_RejectsNonPositiveConversion(t *testing.T) {
+	conv := &stubConverter{out: "0"}
+
+	exec := sitx.NewPostingExecutor(sellerEUROnly(), 111)
+	exec.SetConverter(conv)
+	resC := exec.Reserve(context.Background(), []contractsitx.InternalPosting{
+		money(111, "client-1", "CHF", 40, contractsitx.DirectionCredit),
+	}, "222", "idem-zero-credit")
+	if resC.Vote.Type != contractsitx.VoteNo {
+		t.Fatalf("zero conversion (credit) must vote NO, got %+v", resC.Vote)
+	}
+
+	exec2 := sitx.NewPostingExecutor(sellerEUROnly(), 111)
+	exec2.SetConverter(conv)
+	resD := exec2.Reserve(context.Background(), []contractsitx.InternalPosting{
+		money(111, "client-1", "CHF", 40, contractsitx.DirectionDebit),
+	}, "222", "idem-zero-debit")
+	if resD.Vote.Type != contractsitx.VoteNo {
+		t.Fatalf("zero conversion (debit) must vote NO, got %+v", resD.Vote)
+	}
+}
