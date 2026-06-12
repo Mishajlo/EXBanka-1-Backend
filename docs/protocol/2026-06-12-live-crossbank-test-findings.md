@@ -271,14 +271,24 @@ in `stock-service/cmd/main.go` (embeds the IANA db into the binary), handle `"UT
 working, the exchanges' local hours give ≥2-always-open coverage across UTC. Regression tests in
 `exchange_hours_test.go`. (Verify post-redeploy: `GET /api/v3/stock-exchanges` should show ≥2 open.)
 
-### Non-bug clarified — "accounts exist but owner doesn't"
-The "ownerless" accounts are **system sentinel accounts by design**, not orphans: bank-owned
-accounts use `owner_id = 1_000_000_000` (fee collection / loan credits), and there is a
-market/settlement sentinel account (`owner_id = 2_000_000_000`, account number `…0099`). Neither
-maps to a client, so a UI resolving owner_id→client shows "no owner" for them. Client-owned
-accounts correctly reference real clients. Also note: the account model has **no `owner_type`
-field** at all (accounts are owned by `owner_id` only), so the empty `owner_type` in API responses
-is vestigial, not a missing owner.
+### Bug C — client accounts stored with an EMPTY `owner_name` (looked ownerless in the UI)
+`GET /api/v3/.../accounts` returns `owner_id` fine, but **`owner_name` was `""` for every
+client-owned account** (only bank accounts hardcode `"EX Banka"`). Root cause:
+`account-service` `CreateAccount` never populated `OwnerName` — the gateway doesn't pass a name and
+the service didn't resolve it — so accounts showed an id with no name (the "account has no owner"
+symptom). **Fix:** `CreateAccount` now denormalises the owner's display name from client-service via
+the existing `clientLookup` (replica-first, synchronous `GetClient` fallback, time-bounded,
+best-effort — a miss just leaves it empty as before; a caller-supplied name is never overwritten).
+Regression tests in `account_events_test.go`. NOTE: this is forward-looking — **accounts created
+BEFORE 4.4.6 keep their empty `owner_name`** until re-created or backfilled; create a fresh account
+post-deploy to see it populated.
+
+### Non-bug clarified — sentinel accounts + no owner_type column
+Separately, some genuinely have no client owner BY DESIGN: bank-owned accounts use
+`owner_id = 1_000_000_000` (fee collection / loan credits) and there is a market/settlement
+sentinel (`owner_id = 2_000_000_000`, account `…0099`). Neither maps to a client. Also the account
+model has **no `owner_type` field** (owned by `owner_id` only), so the empty `owner_type` in API
+responses is vestigial, not a missing owner.
 
 ## Net conclusion
 **Our bank is now correct on every cross-bank OTC path it owns** — buyer bid/withdraw/counter/
