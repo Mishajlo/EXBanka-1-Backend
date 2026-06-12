@@ -676,6 +676,29 @@ func (e *PostingExecutor) Reserve(ctx context.Context, postings []contractsitx.I
 		}
 	}
 
+	// Multi-credit collision guard (audit #4): every MONAS money-CREDIT leg on our
+	// routing reserves under the SHARED key "<peer>:<idem>" (reserveIncomingCredit)
+	// and is committed/released by that one key. Two money credits to THIS bank in
+	// a single TX would therefore collide — account-service treats the 2nd reserve
+	// as an idempotent duplicate of the 1st and silently skips it, so that recipient
+	// is never credited (money lost at COMMIT). No current flow has >1 money credit
+	// per bank, so reject the shape up front rather than silently dropping a credit.
+	// (Full per-posting-keyed multi-credit support is a documented follow-up — see
+	// docs/superpowers/plans/2026-06-12-saga-weak-spots-fixes.md #4.)
+	monasCredits, firstCreditIdx := 0, -1
+	for i := range postings {
+		p := postings[i]
+		if p.RoutingNumber == e.ownRouting && p.Direction == contractsitx.DirectionCredit && p.AssetType == contractsitx.AssetTypeMonas {
+			monasCredits++
+			if firstCreditIdx < 0 {
+				firstCreditIdx = i
+			}
+		}
+	}
+	if monasCredits > 1 {
+		return noVote(contractsitx.NoVoteReasonUnacceptableAsset, firstCreditIdx)
+	}
+
 	for i := range postings {
 		p := postings[i]
 

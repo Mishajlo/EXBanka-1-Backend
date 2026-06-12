@@ -82,3 +82,21 @@ func TestFXReserve_RejectsNonPositiveConversion(t *testing.T) {
 		t.Fatalf("zero conversion (debit) must vote NO, got %+v", resD.Vote)
 	}
 }
+
+// TestReserve_RejectsMultipleMonasCreditsSameBank: two money CREDITs to the same
+// bank in one TX would collide under the shared reservation key (the 2nd silently
+// skipped → money lost at commit). The audit #4 guard rejects the shape up front.
+func TestReserve_RejectsMultipleMonasCreditsSameBank(t *testing.T) {
+	exec := sitx.NewPostingExecutor(sellerEUROnly(), 111)
+	postings := []contractsitx.InternalPosting{
+		money(111, "client-1", "EUR", 40, contractsitx.DirectionCredit),
+		money(111, "client-2", "EUR", 50, contractsitx.DirectionCredit),
+	}
+	res := exec.Reserve(context.Background(), postings, "222", "idem-2credits")
+	if res.Vote.Type != contractsitx.VoteNo {
+		t.Fatalf("two money credits to the same bank must vote NO (shared-key collision), got %+v", res.Vote)
+	}
+	if len(res.Vote.NoVotes) != 1 || res.Vote.NoVotes[0].Reason != contractsitx.NoVoteReasonUnacceptableAsset {
+		t.Fatalf("expected UNACCEPTABLE_ASSET, got %+v", res.Vote.NoVotes)
+	}
+}
