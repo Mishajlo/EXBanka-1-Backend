@@ -246,50 +246,61 @@ func (h *PeerOTCGRPCHandler) WithNotifier(n PeerNotifier) *PeerOTCGRPCHandler {
 	return h
 }
 
-// localClientUserID resolves "client-N" → N when the row's matching
-// routing number is this bank's. Returns (0, false) when:
-//   - the row is for the other bank's user (no local notification)
-//   - the participant id isn't a plain "client-N" string (employee,
-//     bank, malformed)
-//
-// Used by the inbound peer handlers to determine whether to publish
-// a notification, and to whom.
-func (h *PeerOTCGRPCHandler) localClientUserID(routing int64, participantID string) (uint64, bool) {
+// localRecipient resolves a SI-TX participant id on THIS bank's routing to a
+// notification recipient: "client-N" → (N, "client"); "employee-N" → (N,
+// "employee"); "bank" → (0, "employee") — the shared bank inbox. Returns
+// ok=false when the party is on a peer bank (no local notification) or the id is
+// unrecognised/malformed. Used by the inbound peer handlers to decide whether to
+// notify and on which inbox (client-scoped vs the shared employee/bank inbox).
+func (h *PeerOTCGRPCHandler) localRecipient(routing int64, participantID string) (userID uint64, systemType string, ok bool) {
 	if routing != h.ownRouting {
-		return 0, false
+		return 0, "", false
 	}
-	const prefix = "client-"
-	if !strings.HasPrefix(participantID, prefix) {
-		return 0, false
+	if rest, found := strings.CutPrefix(participantID, "client-"); found {
+		id, err := strconv.ParseUint(rest, 10, 64)
+		if err != nil || id == 0 {
+			return 0, "", false
+		}
+		return id, "client", true
 	}
-	id, err := strconv.ParseUint(participantID[len(prefix):], 10, 64)
-	if err != nil || id == 0 {
-		return 0, false
+	if rest, found := strings.CutPrefix(participantID, "employee-"); found {
+		id, err := strconv.ParseUint(rest, 10, 64)
+		if err != nil || id == 0 {
+			return 0, "", false
+		}
+		return id, "employee", true
 	}
-	return id, true
+	if participantID == "bank" {
+		return 0, "employee", true
+	}
+	return 0, "", false
 }
 
-// publishPeerNotif is best-effort. Logs a warning on failure. Skips
-// when the notifier isn't wired or the recipient resolution failed.
+// publishPeerNotif is best-effort. Logs a warning on failure. Skips when the
+// notifier isn't wired or the recipient didn't resolve (systemType == ""). A
+// "client" notification is per-user (userID); an "employee" one lands on the
+// shared bank inbox (userID may be 0).
 func (h *PeerOTCGRPCHandler) publishPeerNotif(
 	ctx context.Context,
 	userID uint64,
+	systemType string,
 	notifType string,
 	data map[string]string,
 	refType string,
 	refID uint64,
 ) {
-	if h.notifier == nil || userID == 0 {
+	if h.notifier == nil || systemType == "" {
 		return
 	}
 	if err := h.notifier.PublishGeneralNotification(ctx, contractkafka.GeneralNotificationMessage{
-		UserID:  userID,
-		Type:    notifType,
-		Data:    data,
-		RefType: refType,
-		RefID:   refID,
+		UserID:     userID,
+		SystemType: systemType,
+		Type:       notifType,
+		Data:       data,
+		RefType:    refType,
+		RefID:      refID,
 	}); err != nil {
-		log.Printf("WARN: peer otc notif %s for user %d failed: %v", notifType, userID, err)
+		log.Printf("WARN: peer otc notif %s (user %d/%s) failed: %v", notifType, userID, systemType, err)
 	}
 }
 
@@ -562,8 +573,8 @@ func (h *PeerOTCGRPCHandler) CreateNegotiation(ctx context.Context, req *stockpb
 	}
 	// Inbound bid from a peer → notify our local seller (if the seller
 	// side is local). Best-effort, after-commit.
-	if uid, ok := h.localClientUserID(req.GetSellerId().GetRoutingNumber(), req.GetSellerId().GetId()); ok {
-		h.publishPeerNotif(ctx, uid, "OTC_OFFER_RECEIVED",
+	if uid, st, ok := h.localRecipient(req.GetSellerId().GetRoutingNumber(), req.GetSellerId().GetId()); ok {
+		h.publishPeerNotif(ctx, uid, st, "OTC_OFFER_RECEIVED",
 			notifDataFromOffer(offer),
 			"otc_negotiation", neg.ID,
 		)
@@ -654,22 +665,24 @@ func (h *PeerOTCGRPCHandler) UpdateNegotiation(ctx context.Context, req *stockpb
 			actorID := offer.LastModifiedBy.ID
 			buyerRouting, buyerID := remoteBuyer(row)
 			sellerRouting, sellerID := remoteSeller(row)
-			// Identify the local party that is NOT the actor.
+			// Identify the local party that is NOT the actor, and notify them on
+			// their inbox (client-scoped, or the shared employee/bank inbox).
 			var localUID uint64
+			var localST string
 			if buyerRouting == h.ownRouting &&
 				!(buyerRouting == actorRouting && buyerID == actorID) {
-				if uid, ok := h.localClientUserID(buyerRouting, buyerID); ok {
-					localUID = uid
+				if uid, st, ok := h.localRecipient(buyerRouting, buyerID); ok {
+					localUID, localST = uid, st
 				}
 			}
-			if localUID == 0 && sellerRouting == h.ownRouting &&
+			if localST == "" && sellerRouting == h.ownRouting &&
 				!(sellerRouting == actorRouting && sellerID == actorID) {
-				if uid, ok := h.localClientUserID(sellerRouting, sellerID); ok {
-					localUID = uid
+				if uid, st, ok := h.localRecipient(sellerRouting, sellerID); ok {
+					localUID, localST = uid, st
 				}
 			}
-			if localUID != 0 {
-				h.publishPeerNotif(ctx, localUID, "OTC_OFFER_COUNTERED",
+			if localST != "" {
+				h.publishPeerNotif(ctx, localUID, localST, "OTC_OFFER_COUNTERED",
 					notifDataFromOffer(offer),
 					"otc_negotiation", row.ID,
 				)
@@ -762,10 +775,10 @@ func (h *PeerOTCGRPCHandler) DeleteNegotiation(ctx context.Context, req *stockpb
 		// other bank's user, so the local party is the recipient.
 		buyerRouting, buyerID := remoteBuyer(row)
 		sellerRouting, sellerID := remoteSeller(row)
-		if uid, ok := h.localClientUserID(buyerRouting, buyerID); ok {
-			h.publishPeerNotif(ctx, uid, notifType, data, "otc_negotiation", row.ID)
-		} else if uid, ok := h.localClientUserID(sellerRouting, sellerID); ok {
-			h.publishPeerNotif(ctx, uid, notifType, data, "otc_negotiation", row.ID)
+		if uid, st, ok := h.localRecipient(buyerRouting, buyerID); ok {
+			h.publishPeerNotif(ctx, uid, st, notifType, data, "otc_negotiation", row.ID)
+		} else if uid, st, ok := h.localRecipient(sellerRouting, sellerID); ok {
+			h.publishPeerNotif(ctx, uid, st, notifType, data, "otc_negotiation", row.ID)
 		}
 	}
 	return &stockpb.DeleteNegotiationResponse{}, nil
@@ -1033,11 +1046,11 @@ func (h *PeerOTCGRPCHandler) AcceptNegotiation(ctx context.Context, req *stockpb
 		"strike_price": offer.PricePerStock.String(),
 		"premium_paid": offer.Premium.String(),
 	}
-	if uid, ok := h.localClientUserID(sellerRouting, sellerID); ok {
-		h.publishPeerNotif(ctx, uid, "OTC_CONTRACT_CREATED", ccData, "otc_negotiation", row.ID)
+	if uid, st, ok := h.localRecipient(sellerRouting, sellerID); ok {
+		h.publishPeerNotif(ctx, uid, st, "OTC_CONTRACT_CREATED", ccData, "otc_negotiation", row.ID)
 	}
-	if uid, ok := h.localClientUserID(buyerRouting, buyerID); ok {
-		h.publishPeerNotif(ctx, uid, "OTC_CONTRACT_CREATED", ccData, "otc_negotiation", row.ID)
+	if uid, st, ok := h.localRecipient(buyerRouting, buyerID); ok {
+		h.publishPeerNotif(ctx, uid, st, "OTC_CONTRACT_CREATED", ccData, "otc_negotiation", row.ID)
 	}
 
 	return &stockpb.AcceptNegotiationResponse{

@@ -192,10 +192,11 @@ func (s *OTCNegotiationService) WithNotifier(n OTCNotifier) *OTCNegotiationServi
 	return &cp
 }
 
-// publishNotif is a best-effort notification publisher. Skips bank
-// recipients (no per-bank inbox) and nil-id rows defensively. Always
-// returns nil-equivalent — a failed publish must NEVER fail the
-// business action (CLAUDE.md Kafka rule).
+// publishNotif is a best-effort notification publisher. A CLIENT recipient gets
+// a per-user "client"-scoped notification; a BANK recipient gets one on the
+// shared "employee" inbox (every bank employee sees it). Always returns
+// nil-equivalent — a failed publish must NEVER fail the business action
+// (CLAUDE.md Kafka rule).
 func (s *OTCNegotiationService) publishNotif(
 	ctx context.Context,
 	recipientType model.OwnerType,
@@ -208,17 +209,32 @@ func (s *OTCNegotiationService) publishNotif(
 	if s.notifier == nil {
 		return
 	}
-	if recipientType != model.OwnerClient || recipientID == nil {
-		return
-	}
-	if err := s.notifier.PublishGeneralNotification(ctx, contractkafka.GeneralNotificationMessage{
-		UserID:  *recipientID,
+	msg := contractkafka.GeneralNotificationMessage{
 		Type:    notifType,
 		Data:    data,
 		RefType: refType,
 		RefID:   refID,
-	}); err != nil {
-		log.Printf("WARN: otc notif %s for user %d failed: %v", notifType, *recipientID, err)
+	}
+	switch recipientType {
+	case model.OwnerClient:
+		if recipientID == nil {
+			return
+		}
+		msg.UserID = *recipientID
+		msg.SystemType = "client"
+	case model.OwnerBank:
+		// Bank-owned OTC resource → the shared employee/bank inbox. Read scoping
+		// ignores user_id for employees, so a nil owner id is fine; carry it when
+		// present for a forward-compatible per-employee model.
+		if recipientID != nil {
+			msg.UserID = *recipientID
+		}
+		msg.SystemType = "employee"
+	default:
+		return
+	}
+	if err := s.notifier.PublishGeneralNotification(ctx, msg); err != nil {
+		log.Printf("WARN: otc notif %s (%s) failed: %v", notifType, recipientType, err)
 	}
 }
 
