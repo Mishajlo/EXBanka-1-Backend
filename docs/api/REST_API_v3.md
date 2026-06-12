@@ -7160,7 +7160,7 @@ Register a new peer bank.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `bank_code` | string | Yes | 3-digit prefix (e.g. "222") |
-| `routing_number` | int64 | Yes | Numeric form of bank_code |
+| `routing_number` | int64 | Yes | The peer's routing number. MUST equal the numeric value of `bank_code` (e.g. `bank_code` `"222"` ⇒ `routing_number` `222`); a non-numeric `bank_code` or a mismatch is rejected (see the invariant note below). |
 | `base_url` | string | Yes | Peer's `/api/v3` base URL |
 | `api_token` | string | Yes | Plaintext API token issued by peer; bcrypt-hashed before persist |
 | `hmac_inbound_key` | string | No | HMAC key to verify inbound HMAC-mode requests from this peer |
@@ -7179,9 +7179,11 @@ Register a new peer bank.
 ```
 
 **Response 201:** Peer bank object (`api_token_preview` returned, never the full token).
-**Response 400:** Validation error (missing required field, OR `bank_code`/`routing_number` equals this bank's own — peer-collision rejected; SP-2a).
+**Response 400:** Validation error — a missing required field; OR `bank_code`/`routing_number` equals this bank's own (peer-collision rejected, SP-2a); OR `bank_code` is not the numeric `routing_number` (non-numeric, or numerically different — routing-invariant, 4.4.7).
 
-> **Peer-collision guard (SP-2a):** `POST /api/v3/peer-banks` returns `400 validation_error` when `bank_code` or `routing_number` matches this bank's own configuration. This is enforced at the gRPC service layer (transaction-service `CreatePeerBank` returns `InvalidArgument` → gateway maps to 400). The invariant ensures `routing_number == OwnRouting()` reliably distinguishes local rows from remote (folded-in) rows in the unified OTC tables.
+> **Peer-collision guard (SP-2a):** `POST /api/v3/peer-banks` returns `400 validation_error` when `bank_code` or `routing_number` matches this bank's own configuration. This is enforced at the gRPC service layer (interbank-service `CreatePeerBank` returns `InvalidArgument` → gateway maps to 400). The invariant ensures `routing_number == OwnRouting()` reliably distinguishes local rows from remote (folded-in) rows in the unified OTC tables.
+
+> **bank_code = routing_number invariant (4.4.7):** `CreatePeerBank` also returns `400 validation_error` when `bank_code` is not numeric or does not numerically equal `routing_number`. Inbound peer authentication resolves a caller to its `bank_code`, and the cross-bank OTC paths derive the caller's routing from it (`peerRoutingForCode`); the two MUST agree, or the peer could authenticate yet its derived routing would never match the routing stored on a negotiation/contract mirror — every inbound `GET`/`PUT`/`accept` for it would `404`. Enforcing the invariant at registration makes the derivation provably exact for every registered peer.
 
 ---
 
