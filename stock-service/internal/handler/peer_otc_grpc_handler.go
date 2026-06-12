@@ -1586,19 +1586,37 @@ func (h *PeerOTCGRPCHandler) RecordOptionContract(ctx context.Context, req *stoc
 		// shares were held). The existing consume/release-by-contract-id paths
 		// then operate unchanged.
 		attached := false
-		if cbTx := req.GetCrossbankTxId(); cbTx != "" {
+		cbTx := req.GetCrossbankTxId()
+		if cbTx != "" {
 			err := h.holdingReserver.AttachCrossBankReservationToContract(ctx, cbTx, row.ID)
 			if err == nil {
 				attached = true
 			} else if status.Code(err) != codes.NotFound {
 				return nil, status.Errorf(codes.Internal,
 					"peer-option contract %d: attach vote-time share hold (tx %s): %v", row.ID, cbTx, err)
+			} else {
+				// NotFound: no vote-time hold is keyed to THIS crossbank_tx_id. For a
+				// conformant peer that reserved the shares at NEW_TX this must never
+				// happen — it signals a vote↔COMMIT crossbank_tx_id MISMATCH. Log it
+				// loudly (it was previously silent) so the divergence is diagnosable
+				// instead of surfacing later as a phantom INSUFFICIENT. Falls through
+				// to the legacy reserve-at-commit (a genuinely older peer that never
+				// reserved at vote has no hold and is handled there).
+				log.Printf("ERROR: peer-option contract %d: no vote-time share hold for crossbank_tx_id %q at COMMIT (attach missed) — using reserve-at-commit; verify NEW_TX and COMMIT carry the SAME crossbank_tx_id", row.ID, cbTx)
 			}
-			// NotFound → no vote-time hold (older NEW_TX before this change, or a
-			// transaction-service that didn't reserve) → fall through to the
-			// legacy reserve-at-commit below for backward compatibility.
 		}
 		if !attached {
+			// Before reserving fresh, defensively RELEASE any orphaned vote-time hold
+			// for this crossbank_tx_id so a key mismatch / transient attach miss can
+			// NEVER leave TWO active holds on the same shares — the double-reserve that
+			// over-reserves the seller and causes a phantom INSUFFICIENT on a later
+			// order/exercise. Best-effort: a missing hold is a no-op (release is
+			// idempotent + status-guarded).
+			if cbTx != "" {
+				if _, rerr := h.holdingReserver.ReleaseForCrossBankNewTx(ctx, cbTx); rerr != nil {
+					log.Printf("WARN: peer-option contract %d: release orphaned vote-time hold (tx %s) before fallback reserve: %v", row.ID, cbTx, rerr)
+				}
+			}
 			if _, err := h.holdingReserver.ReserveForPeerOptionContract(
 				ctx, ownerType, ownerID, "stock", row.Ticker, row.ID, rowQuantity,
 			); err != nil {
